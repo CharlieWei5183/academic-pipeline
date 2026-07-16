@@ -1,0 +1,11 @@
+{
+  "name": "charlie-plugins",
+  "owner": { "name": "Charlie" },
+  "plugins": [
+    {
+      "name": "academic-pipeline",
+      "source": "./",
+      "description": "可稽核的學術研究與論文全流程 pipeline：方法學路由、研究 protocol、資料稽核、clean-room 重跑、結果驗證、證據綜整、主張審查、中英文稿撰寫、一致性 gate、虛擬同儕審查、投稿打包與排版。"
+    }
+  ]
+}
