@@ -37,7 +37,7 @@ metadata:
 
 4. fact-checker 做跨語意回查（**每節抽 2–3 句回譯成中文與原文比對語意**；標記保全已由腳本把關，不必人工重查）；reviewer-language 查英文正確性與術語一致。
 5. 套用語言修正；任何涉及 claim 強度、數字解讀、方法或限制的修改回原 source artifact，不由 translator 自行裁定。
-6. **英文潤稿站（選用外部掛點）**：偵測外部 user skill `academic-english-editing`。已安裝時可先做句構重寫、精煉與學術慣例校準；未安裝自動略過。只可動語言呈現，不得改數字、`<!-- -->` markers、`[@citekey]`、claim strength、validation boundary、方法或限制語意。潤稿產生新英文版本後，重跑 `check_markers.py`、跨語意回查與 reviewer-language；之後仍須人工英文確認及 full `check-consistency(en)`。
+6. **英文潤稿站（本 plugin 內建，選用）**：呼叫內建 skill `academic-english-editing`（0.8.0 起隨附；可略過但不可取代人工確認）。可先做句構重寫、精煉、學術慣例校準，並清除 AI 生成痕跡（AI tells）與對齊語域。只可動語言呈現，不得改數字、`<!-- -->` markers、`[@citekey]`、claim strength、validation boundary、方法或限制語意；發現 over-claim 只標記回 claim-audit，不在本站改寫。潤稿產生新英文版本後，重跑 `check_markers.py`、跨語意回查與 reviewer-language；之後仍須人工英文確認及 full `check-consistency(en)`。
 7. **人工英文確認**：使用者確認後更新：
 
    ```yaml

@@ -187,8 +187,11 @@ def test_snapshot_covers_appendix_and_reads_legacy() -> None:
 
 
 def test_version_bump() -> None:
+    # 單調斷言：v0.7.3 的契約存在於 >= 0.7.3 的任何版本；後續升版不應弄壞本測試
+    # （當期精確版號由最新一支回歸測試 pin，見 run_v080_regressions.py）。
     meta = json.loads(text(".claude-plugin/plugin.json"))
-    assert meta["version"] == "0.7.3", meta["version"]
+    parts = tuple(int(x) for x in meta["version"].split("."))
+    assert parts >= (0, 7, 3), meta["version"]
 
 
 def main() -> int:

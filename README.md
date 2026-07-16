@@ -1,4 +1,4 @@
-# academic-pipeline v0.7.3
+# academic-pipeline v0.8.0
 
 `academic-pipeline` 是一套以 artifacts、獨立角色與確定性檢核構成的研究—論文 pipeline。v0.7 將原本以「資料已取得後的定量論文生產」為中心的流程，擴充為可處理一般研究的治理與驗證架構。
 
@@ -26,7 +26,7 @@ project-init
 → 中文潤稿（chinese-deai-editing，選用外部掛點）
 → 中文人工定稿
 → translate-en
-→ 英文潤稿（academic-english-editing，選用外部掛點）
+→ 英文潤稿（academic-english-editing，內建·選用）
 → 英文人工確認
 → check-consistency (en，完整重跑)
 → submission-prep
@@ -36,6 +36,16 @@ project-init
 ```
 
 `project.yaml` 的 `state` 是快取；protocol、plans、results、validation、claims、audit reports 等 artifacts 才是狀態真相。任何承重來源變動，都必須使下游 pass 狀態失效。
+
+## v0.8.0 內建英文潤稿站；提案模式另出獨立 skill
+
+英文潤稿站從「選用外部 user skill」升為**本 plugin 內建 skill**：新增 `skills/academic-english-editing`，pipeline 的英文潤稿掛點（translate-en 第 6 步、status）不再依賴外部安裝。skills 由 23 增為 **24**；agents（18）與管線階段不變。
+
+- **內容來源**：新 skill 的 Layer 1／2／3／5、核心原則與流程源自 user skill `academic-humanizer` v0.3.3（MIT），逐節以〔來源：…〕標註；掛點合約（只改語言呈現、不得動數字／markers／citekey／claim strength／validation boundary／方法語意、潤稿後重跑 `check_markers.py`＋跨語意回查＋reviewer-language＋full `check-consistency(en)`）為 academic-pipeline 專屬新增，同樣標註來源。
+- **刻意不納入 Layer 4**：`academic-humanizer` 的 claim-evidence discipline（降級動詞、softening 過度主張）會**改變 claim strength**，違反潤稿站「只改呈現」合約；其職責在 pipeline 內本就由 `claim-audit`／`interpret-results`／`check_numbers.py` 承擔。本站發現 over-claim 只**標記回 claim-audit**、不自行改稿。
+- **提案模式抽出**：`academic-humanizer` 的 Layer 6（NSF／NIH 提案模式，含 6.1–6.5 claim↔feasibility）與線性研究→投稿流程正交，抽為**獨立 skill `grant-proposal-editing`**，不隨本 plugin 隨附。
+- **中文側不變**：`chinese-deai-editing` 仍為外部選用 user skill（英文導向的 `academic-english-editing` 不取代它）。
+- **相容性**：既有專案無需遷移；英文潤稿本就是選用步驟，內建化只是把插頭補上、掛點合約與後續 gate 完全不變。新增回歸測試 `tests/run_v080_regressions.py`；`run_v073_regressions.py::test_version_bump` 由精確 pin 改為單調 `>=`，當期精確版號改由 `run_v080` pin。
 
 ## v0.7.3 主問題與附錄問題分離
 
@@ -150,9 +160,11 @@ confirmed plan 以 content hash 封存；修改須建立新版本、標示 `supe
 
 ## 元件
 
-### Skills（23）
+### Skills（24）
 
-`project-init`、`methodology-router`、`integrity-check`、`study-design`、`data-audit`、`analyze-data`、`validate-results`、`lit-review`、`evidence-synthesis`、`evaluate`、`interpret-results`、`claim-audit`、`figure-design`、`write-manuscript`、`write-supplementary`、`check-consistency`、`peer-review`、`revise`、`translate-en`、`submission-prep`、`journal-match`、`status`、`typeset`。
+`project-init`、`methodology-router`、`integrity-check`、`study-design`、`data-audit`、`analyze-data`、`validate-results`、`lit-review`、`evidence-synthesis`、`evaluate`、`interpret-results`、`claim-audit`、`figure-design`、`write-manuscript`、`write-supplementary`、`check-consistency`、`peer-review`、`revise`、`translate-en`、`academic-english-editing`、`submission-prep`、`journal-match`、`status`、`typeset`。
+
+`academic-english-editing` 為 0.8.0 新增的內建英文潤稿站（源自 `academic-humanizer` v0.3.3 的 Layer 1／2／3／5，逐節標註來源；不含改動 claim strength 的 Layer 4）。
 
 ### Agents（18）
 
@@ -184,7 +196,7 @@ python3 skills/revise/scripts/record_review_score.py \
 
 minor re-check 不建立新 score；下一個完整 panel 輪才新增。寫入後再跑 `check_ledger.py`，保證邊際遞減不是名義上存在、實際上永遠無資料。
 
-中文與英文潤稿站皆為選用的外部 user skills，不是本 plugin 內建目錄：`chinese-deai-editing`、`academic-english-editing`。未安裝不報錯；潤稿後必須建立新版本並重跑相應語言的 full consistency。
+英文潤稿站 `academic-english-editing` 自 0.8.0 起為本 plugin 內建 skill；中文潤稿站 `chinese-deai-editing` 仍為選用的外部 user skill，未安裝不報錯。兩者都只能改語言呈現，不得動數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後必須建立新版本並重跑相應語言的 full consistency。
 
 ## 主要事實與治理 artifacts
 
@@ -219,7 +231,11 @@ python3 -m compileall -q agents skills tests
 python3 tests/run_v07_smoke.py
 python3 tests/run_v071_regressions.py
 python3 tests/run_v072_regressions.py
+python3 tests/run_v073_regressions.py
+python3 tests/run_v080_regressions.py
 ```
+
+`run_v080_regressions.py` 驗證內建 `academic-english-editing` 存在、掛點合約與 provenance 標註、Layer 4 排除、translate-en／status 已改為「內建」措辭、中文潤稿站仍為外部，以及 `plugin.json` 版本為 `0.8.0`。
 
 `tests/mini-project` 保留 v0.6 黃金答案；`run_v071_regressions.py` 另驗證 legacy populated consistency、strict opt-in、review score 寫入／邊際遞減、中文潤稿掛點與 editor 分數帶不再消失。`run_v072_regressions.py` 以跨檔案錨點驗證回填的規則條款（agent 紅線、短路規則、決策日誌、數字豁免、模板註解），並實測 `check_coverage.py --evidence` 的四種情境。`run_v07_smoke.py` 動態建立 v0.7 專案，驗證七種 adapter 的 plan contract、adapter 專屬 data/validation checks、clean-room 重跑、資料稽核、results schema、validation、evidence source fingerprint、claim-audit、integrity 與中英文 consistency source-staleness gate。
 

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.8.0（2026-07-16）
+
+英文潤稿站由「選用外部 user skill」升為**本 plugin 內建 skill**。skills（23→**24**）；agents（18）與管線階段不變。無破壞性變更，故為 MINOR bump。
+
+1. **新增 `skills/academic-english-editing`**：內建英文學術潤稿站，清除 AI 生成痕跡（AI tells）、對齊學術慣例與期刊語域、貼合作者語氣。內容來源逐節標註：Layer 1／2／3／5、核心原則與流程源自 user skill `academic-humanizer` v0.3.3（MIT），以〔來源：academic-humanizer v0.3.3 · …〕標示；掛點合約與「不含 Layer 4」兩節為 academic-pipeline 專屬新增，標為〔來源：academic-pipeline 潤稿站合約〕。
+2. **刻意不納入 Layer 4（claim-evidence discipline）**：原 Layer 4 會降級動詞、softening 過度主張，**改變 claim strength**，違反潤稿站「只改語言呈現」合約；其職責在 pipeline 內本就由 `claim-audit`／`interpret-results`／`check_numbers.py` 承擔。本站發現 over-claim 只標記回 claim-audit，不自行改稿。
+3. **掛點內建化**：`translate-en` 第 6 步與 `status` 的潤稿站敘述由「外部 user skill、未安裝自動略過」改為「本 plugin 內建、選用」；掛點合約（不得改數字／`<!-- -->` markers／`[@citekey]`／claim strength／validation boundary／方法語意；潤稿後重跑 `check_markers.py`＋跨語意回查＋reviewer-language＋人工英文確認＋full `check-consistency(en)`）與後續 gate 完全不變。中文潤稿站 `chinese-deai-editing` 維持外部選用，未動。
+4. **提案模式抽出、不隨 plugin**：`academic-humanizer` 的 Layer 6（NSF／NIH 提案模式，含 6.1–6.5 claim↔feasibility）與線性研究→投稿流程正交，抽為獨立 skill `grant-proposal-editing` 單獨交付。
+5. **測試**：新增 `tests/run_v080_regressions.py`——驗內建 skill 存在、掛點合約與 provenance 標註、Layer 4 排除、translate-en／status 措辭改為內建、中文潤稿站仍為外部、`plugin.json` 版本精確為 `0.8.0`。`run_v073_regressions.py::test_version_bump` 由精確 `== "0.7.3"` 改為單調 `>= (0,7,3)`，當期精確版號改由 `run_v080` pin；既有四支回歸測試全部通過。
+
 ## 0.7.3（2026-07-15）
 
 主問題與附錄問題（穩健性／敏感度／跨方法）在 `goals` 中結構分離、不混列。skills（23）與 agents（18）數量不變，無新增管線階段。
