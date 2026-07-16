@@ -1,0 +1,95 @@
+cases:
+- utterance: 我要開始一篇新論文
+  expect: project-init
+- utterance: 幫我初始化專案
+  expect: project-init
+- utterance: 這個研究應該走質性、混合方法還是定量流程？
+  expect: methodology-router
+- utterance: 把 SQ1 的分析計畫正式版本化並封存
+  expect: study-design
+- utterance: 正式分析前先查重複個體、缺失與資料洩漏
+  expect: data-audit
+- utterance: 獨立重算並檢查模型診斷與敏感度分析
+  expect: validate-results
+- utterance: 逐條攻擊這些結論，看主張是否過度
+  expect: claim-audit
+- utterance: 把搜尋式、納排、偏誤風險與矛盾文獻做成可重現證據綜整
+  expect: evidence-synthesis
+- utterance: 投稿前檢查作者資格、COI、AI disclosure 與資料權限
+  expect: integrity-check
+- utterance: 資料放好了，跑統計吧
+  expect: analyze-data
+- utterance: 分析一下 data 資料夾的實驗數據
+  expect: analyze-data
+- utterance: 幫我整理這個主題的文獻
+  expect: lit-review
+- utterance: 找一下相關研究
+  expect: lit-review
+- utterance: 開始寫中文稿
+  expect: write-manuscript
+- utterance: 幫我把論文初稿寫出來
+  expect: write-manuscript
+- utterance: 檢查稿子裡的數字對不對
+  expect: check-consistency
+- utterance: 送審看看
+  expect: peer-review
+- utterance: 讓虛擬審稿人評一下 v2
+  expect: peer-review
+- utterance: 回覆審稿意見
+  expect: revise
+- utterance: 期刊審稿意見回來了，幫我處理
+  expect: revise
+- utterance: 中文定稿了，翻成英文
+  expect: translate-en
+- utterance: 準備投稿資料
+  expect: submission-prep
+- utterance: 幫我寫 cover letter
+  expect: submission-prep
+- utterance: 論文進度到哪了？
+  expect: status
+- utterance: 接下來該做什麼
+  expect: status
+- utterance: 幫我從數據一路做到投稿
+  expect: status
+- utterance: 幫我訂週五的會議室
+  expect: none
+- utterance: 翻譯這封 email
+  expect: none
+- utterance: 評估一下研究做夠了嗎
+  expect: evaluate
+- utterance: SQ2 的分析有回答子問題嗎
+  expect: evaluate
+- utterance: 整體評估目前的進度
+  expect: evaluate
+- utterance: 檢查引用格式對不對
+  expect: check-consistency
+- utterance: 幫我判讀這些分析結果
+  expect: interpret-results
+- utterance: 這些結果代表什麼？整理成能寫進討論的主張
+  expect: interpret-results
+- utterance: 把圖弄成出版級品質
+  expect: figure-design
+- utterance: 動筆前先排一下 figure story
+  expect: figure-design
+- utterance: Table 1 幫我照期刊規格排
+  expect: figure-design
+- utterance: 這篇該投哪本期刊
+  expect: journal-match
+- utterance: 被拒了，幫我轉投下一家
+  expect: journal-match
+- utterance: 把補充材料組起來
+  expect: write-supplementary
+- utterance: 敏感度分析要放 SI，幫我整理
+  expect: write-supplementary
+- utterance: reviewer 跟期刊要 code，幫我打包重現性程式包
+  expect: submission-prep
+- utterance: 幫我把稿件轉成投稿用的 docx
+  expect: typeset
+- utterance: 產生雙匿名版和行號版
+  expect: typeset
+- utterance: 排版輸出 LaTeX 投稿檔
+  expect: typeset
+- utterance: 先看看資料長什麼樣，再決定要驗什麼
+  expect: analyze-data
+- utterance: 審一下我的子問題拆解合不合理
+  expect: evaluate

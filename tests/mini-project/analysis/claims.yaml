@@ -1,0 +1,40 @@
+# 測試用主張登記表（含故意錯誤，黃金答案見 tests/README.md）
+version: 1
+confirmed: false
+claims:
+  - id: C1            # 合法——不得誤報
+    sq: SQ1
+    claim: "在本測試條件下，A、B 兩組平均變形量存在統計上可辨識的差異"
+    strength: associative
+    evidence: ["results:ttest_ab_p", "results:mean_A", "cite:smith2023effect"]
+    practical: "組間差約 0.45 mm，約為量測不確定度的三倍"
+    alternatives: "批次效應已由同批次取樣排除"
+    exploratory: false
+    basis: "兩組獨立樣本比較，觀察性設計，分級上限 associative"
+  - id: C2            # 錯誤: evidence 引用不存在的 results 鍵
+    sq: SQ1
+    claim: "效應量屬中等偏大"
+    strength: descriptive
+    evidence: ["results:effect_size"]
+    practical: ""
+    alternatives: ""
+    exploratory: false
+    basis: ""
+  - id: C3            # 錯誤: sq 不存在 + strength 不在詞彙表
+    sq: SQ9
+    claim: "載荷率放大了組間差異"
+    strength: proven
+    evidence: ["results:mean_A"]
+    practical: ""
+    alternatives: ""
+    exploratory: true
+    basis: ""
+  - id: C4            # 錯誤: causal 級但 basis 為空
+    sq: SQ1
+    claim: "材料處理導致變形量上升"
+    strength: causal
+    evidence: ["results:ttest_ab_p"]
+    practical: ""
+    alternatives: ""
+    exploratory: false
+    basis: ""

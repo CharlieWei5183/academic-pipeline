@@ -1,0 +1,18 @@
+id: quantitative-inference
+label: 定量估計與統計推論
+purpose: 估計效應、關聯、差異或機制參數及其不確定度
+required_gates: [study-design, integrity-check:prestudy, data-audit, analyze-data, validate-results, evidence-synthesis, claim-audit, integrity-check:presubmission]
+required_artifacts:
+  - protocol/study-protocol.yaml
+  - analysis/plans/index.yaml
+  - analysis/data-audit.yaml
+  - analysis/results.json
+  - analysis/validation.yaml
+plan_requirements: [estimand, analysis_unit, inclusion_exclusion, missing_data, primary_model, multiplicity, robustness, outputs]
+data_audit_checks: [sampling_unit, duplicated_subjects, temporal_integrity, missingness, measurement_error, batch_effects, units]
+validation_checks: [assumptions, influence, alternative_model, missing_data, multiplicity, sensitivity, independent_recalculation]
+interpretation_limits:
+  observational: associative
+  randomized_controlled: causal_candidate
+results_contract: structured-scalar-or-table-with-plan-and-data-fingerprint
+suggested_reporting_guidelines: [STROBE, CONSORT]

@@ -1,0 +1,12 @@
+id: theoretical-mathematical
+label: 理論、形式推導與數學研究
+purpose: 建立定義、定理、模型或形式論證
+required_gates: [study-design, evidence-synthesis, validate-results, claim-audit, integrity-check:presubmission]
+required_artifacts: [protocol/study-protocol.yaml, analysis/plans/index.yaml, analysis/proof-audit.yaml]
+plan_requirements: [definitions, assumptions, target_results, proof_strategy, dependency_map, computational_checks, counterexample_search]
+data_audit_checks: [symbol_sources, computational_input_provenance, benchmark_examples]
+validation_checks: [assumption_trace, stepwise_derivation, edge_cases, counterexample_search, symbolic_or_numeric_check, independent_proof_review]
+interpretation_limits:
+  default: claims_are_conditional_on_explicit_assumptions_and_domains
+results_contract: theorem-lemma-proof-dependency-and-check-artifacts
+suggested_reporting_guidelines: [journal-specific-mathematical-style]

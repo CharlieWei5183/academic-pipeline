@@ -1,0 +1,36 @@
+# 迷你測試專案（供腳本與 status 測試用）
+project:
+  title_zh: "測試專案"
+  research_question: "A、B 兩組變形量是否有差異、差異是否隨載荷率變化"
+  field: "材料測試"
+goals:
+  sub_questions:
+    - id: SQ1
+      question: "A、B 兩組平均變形量是否有差異"
+      why: "量化"
+      evidence: [analysis]
+      success_criteria: "以適當檢定估出組間差異與不確定度"
+      status: addressed
+      status_reason: ""
+      links: ["results:mean_A", "results:ttest_ab_p", "cite:smith2023effect"]
+    - id: SQ2
+      question: "差異是否隨載荷率變化"
+      why: "邊界"
+      evidence: [analysis]
+      success_criteria: "以適當方法估出載荷率的調節效果與不確定度"
+      status: open
+      status_reason: ""
+      links: ["results:loading_rate_effect"]
+analysis:
+  alpha: 0.05
+  software: python
+  rounding: 3
+review:
+  strictness: normal
+state:
+  zh_latest: "v1"
+  last_consistency: {version: "", result: ""}
+  last_full_evaluation: {id: "", result: ""}
+  review: {round: 0, decision: ""}
+  zh_final: ""
+  en_final: {version: "", source: ""}

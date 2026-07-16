@@ -1,0 +1,49 @@
+id: systematic-review-meta-analysis
+label: 系統性回顧、範疇回顧與統合分析
+purpose: 系統蒐集、評估並綜整既有研究
+required_gates:
+- study-design
+- integrity-check:prestudy
+- data-audit
+- evidence-synthesis
+- validate-results
+- claim-audit
+- integrity-check:presubmission
+required_artifacts:
+- protocol/study-protocol.yaml
+- analysis/data-audit.yaml
+- literature/evidence-protocol.yaml
+- literature/screening.yaml
+- literature/evidence-synthesis.yaml
+- analysis/review-validation.yaml
+plan_requirements:
+- review_question_framework
+- databases
+- full_search_strings
+- eligibility
+- screening
+- extraction
+- risk_of_bias
+- synthesis_method
+- heterogeneity
+- publication_bias
+data_audit_checks:
+- duplicate_reports
+- overlapping_cohorts
+- extraction_consistency
+- outcome_definition
+- unit_conversion
+validation_checks:
+- dual_screening_or_audit
+- risk_of_bias
+- heterogeneity
+- influence
+- publication_bias
+- certainty_of_evidence
+- reproducible_search
+interpretation_limits:
+  default: certainty_and_applicability_bound_claim_strength
+results_contract: flow-study-table-risk-of-bias-and-synthesis-estimates
+suggested_reporting_guidelines:
+- PRISMA-2020
+- MOOSE

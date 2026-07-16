@@ -1,0 +1,28 @@
+schema_version: 1
+mode: focused
+protocol_fingerprint: ""
+source_artifacts: []         # notes/matrix/screening 等實際綜整來源；references.bib 固定納入
+source_fingerprint: ""      # 由 check_evidence.py --source-fingerprint-only 產生
+status: fail                  # pass / qualified / fail
+completed: false
+completed_at: ""
+report: reviews/evidence-audit-1.md
+studies:
+  - citekey: ""
+    design: ""
+    sample_or_material: ""
+    findings: ""
+    limitations: ""
+    relevance: ""
+    risk_of_bias: {rating: unclear, basis: ""}
+synthesis:
+  consistent_evidence: []
+  conflicting_evidence: []
+  gaps: []
+  certainty: {rating: low, basis: ""}
+citation_audit:
+  - id: EA1
+    statement: ""
+    citekeys: []
+    verdict: not-assessable   # supports / partial / fails / not-assessable
+    note: ""

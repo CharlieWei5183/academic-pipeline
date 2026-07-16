@@ -1,0 +1,123 @@
+---
+name: status
+description: >
+  This skill should be used when the user asks 「論文寫到哪了」、「進度如何」、「現在到哪個階段」、
+  「接下來要做什麼」、「幫我從數據一路做到投稿」、"status"、"what's next"，or wants an
+  overview, migration audit, or routing across academic-pipeline stages.
+metadata:
+  version: "0.7.1"
+---
+
+# 進度總覽與導航
+
+`project.yaml.state` 是快取，artifacts 才是狀態真相。掃描實際檔案、重算必要 fingerprints，再指出第一個未通過或已過期的 gate。不得只看 state 字串就宣稱完成。
+
+## 掃描範圍
+
+除既有 results、manuscript、reviews、evaluations、decisions、exploration、manifest 外，必查：
+
+- `methodology/route.yaml`
+- `protocol/study-protocol.yaml`
+- `analysis/plans/index.yaml` 與 active plans
+- `integrity/register.yaml` 的 prestudy／presubmission
+- `analysis/data-profile.json`、`analysis/data-audit.yaml`
+- `literature/evidence-protocol.yaml`、`screening.yaml`、`evidence-synthesis.yaml`
+- rerun JSON、code-review、`analysis/validation.yaml` 或 adapter validation artifact
+- `analysis/claims.yaml`、`analysis/claim-audit.yaml`
+- `reviews/issue-ledger.yaml`
+- `state.review.scores` 與 `check_ledger.py` 的趨勢／保險閥輸出
+- `state.last_consistency` 的 version、result、gate_fingerprint、report
+- 中英文最新／定稿版本及 optional editing hook 狀態
+
+對 v0.7.x 專案執行適用 checker；state 與 artifact 衝突時以 checker 為準並修復快取。決策日誌 warning 不擋路，但 gate blocker 不能跳過。
+
+## v0.7.1 主流程
+
+```text
+project-init
+→ methodology-router
+→ integrity-check(prestudy)
+→ study-design（protocol＋versioned plans＋design-review＋seal）
+→ data-audit
+→ [analyze-data ∥ lit-review]
+   analyze-data: execute → schema/manifest → clean rerun → code-review
+                 → validate-results → result-fit＋人工確認
+   lit-review → evidence-synthesis
+→ evaluate(full)
+→ interpret-results → claim-audit → 人工確認 claims
+→ figure-design → write-manuscript → write-supplementary → check-consistency(zh)
+→ peer-review ⇄ revise
+   每個完整 panel 輪：editor score → record_review_score.py → check_ledger 保險閥
+   minor：editor 單人 re-check，不增加 round、不新增 score
+   accept／minor 覆核通過：converged
+→ 中文潤稿（chinese-deai-editing，選用外部 user skill）
+→ ★中文人工定稿
+→ translate-en
+→ 英文潤稿（academic-english-editing，選用外部 user skill）
+→ ★英文人工確認
+→ check-consistency(en，全量)
+→ submission-prep（題目／摘要改動則新版本＋重跑全量 consistency）
+→ integrity-check(presubmission)
+→ 最終 gate → typeset
+```
+
+route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit、systematic-review synthesis 或 mixed-method integration；required gates 仍由 route 機械檢查。
+
+## 路由判斷
+
+依第一個未通過／過期項導向：
+
+- 無 route／未確認 → methodology-router；
+- prestudy 未過 → integrity-check；
+- protocol/plans 缺或 hash 不符 → study-design；
+- data profile/audit 缺或 raw fingerprint 改變 → data-audit；
+- results／findings 變動、rerun 過期 → analyze-data → clean rerun → code-review → validate-results；
+- validation fail／過期 → validate-results 或 plan amendment；
+- evidence synthesis 缺／過期 → evidence-synthesis；
+- claims 未 audit／fingerprint 不符 → claim-audit；
+- claims 未由使用者確認 → interpret-results 人工確認點；
+- 中文稿 consistency 未過 → check-consistency(zh)；
+- 尚未 peer-review 或 decision=major → peer-review／revise；
+- decision=minor → revise 快速通道；
+- `state.review.scores` 缺本輪而存在 editor decision → `record_review_score.py` 回填後再跑 check_ledger；
+- 保險閥觸發 → 人工裁決並記 D#，不得自動續輪；
+- decision=reject → journal-match；
+- `state.review.converged=true` 且中文未定稿 → `chinese-deai-editing`（若已安裝）或直接中文人工定稿；
+- 中文已定稿但英文未確認 → translate-en；翻譯後可選 `academic-english-editing`；
+- 英文已確認但 full consistency 未過 → check-consistency(en)，**不是 submission-prep**；
+- submission 修改稿件使 fingerprint 改變 → 新版本＋check-consistency(en)；
+- presubmission integrity 未過 → integrity-check；
+- prep 與最終 gate 通過 → typeset。
+
+## 回溯相容
+
+未有 `pipeline.version` 或版本低於 0.7 的專案先只讀盤點，不自動升版。`check_gate.py` 的預設相容模式按 v0.6 契約處理：
+
+- 完全沒有 `last_consistency`：INFO，不因新 checker 阻擋；
+- 已有 `{result, version}`：只驗這兩個舊欄位；
+- 不要求 v0.7 才新增的 `gate_fingerprint`、`report`、`language` 或 `en_final.confirmed_at`；
+- 只有明確 `--strict` 或 `pipeline.version >= 0.7` 才啟用完整 gate。
+
+遷移時先備份，再補 route、protocol/plans、audits、validation、evidence、claim-audit 與 consistency fingerprint；升版後不得再以舊專案跳過硬關卡。
+
+## review scores 與保險閥
+
+狀態報告必列：
+
+- round、decision、converged；
+- `state.review.scores` 筆數與最新七維／total／must_fix_open／model；
+- 相鄰可比輪的 total 差；
+- 跨模型或 `panel_changed` 跳過原因；
+- max_rounds 與邊際遞減是否觸發。
+
+`check_ledger.py` 仍在讀 scores；若沒有任何寫入者，視為 pipeline contract broken，不得把「無資料」誤報成「未觸發」。
+
+## 選用潤稿站
+
+`chinese-deai-editing` 與 `academic-english-editing` 都是外部 user skill：已安裝才掛入流程，未安裝自動略過。兩者只能改語言呈現，不得改數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後須重跑對應語言的完整 consistency。
+
+## 人工確認點
+
+SQ/goals、route、protocol/plans、data-audit 處置、分析結果、claims、persona、保險閥裁決、中文定稿、英文確認、integrity evidence 與 typeset 產物均不得自動跨越。
+
+本 skill 原則上只讀；若只依 artifacts 修復快取，逐欄申報。否則固定申報：「無狀態變更」。

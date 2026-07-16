@@ -1,0 +1,18 @@
+schema_version: 1
+primary: quantitative-inference
+secondary: []
+rationale: ""
+excluded_alternatives: []
+required_gates:
+  - study-design
+  - integrity-check:prestudy
+  - data-audit
+  - validate-results
+  - evidence-synthesis
+  - claim-audit
+  - integrity-check:presubmission
+reporting_guidelines: []
+confidence: medium          # low / medium / high
+confirmed: false
+confirmed_at: ""
+confirmed_by: ""

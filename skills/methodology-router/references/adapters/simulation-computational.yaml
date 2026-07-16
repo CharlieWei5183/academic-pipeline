@@ -1,0 +1,12 @@
+id: simulation-computational
+label: 模擬、數值與計算研究
+purpose: 以數值模型、模擬或演算法研究系統行為
+required_gates: [study-design, integrity-check:prestudy, data-audit, analyze-data, validate-results, evidence-synthesis, claim-audit, integrity-check:presubmission]
+required_artifacts: [protocol/study-protocol.yaml, analysis/plans/index.yaml, analysis/data-audit.yaml, analysis/results.json, analysis/validation.yaml]
+plan_requirements: [governing_model, assumptions, boundary_initial_conditions, parameter_sources, verification, validation, convergence, uncertainty_propagation]
+data_audit_checks: [parameter_provenance, benchmark_data, units, mesh_or_grid_definition, initial_conditions, code_version]
+validation_checks: [code_verification, benchmark, mesh_time_step_convergence, parameter_sensitivity, uncertainty_propagation, empirical_validation, independent_implementation]
+interpretation_limits:
+  default: conclusions_apply_within_model_assumptions_and_validated_parameter_domain
+results_contract: quantities-with-units-convergence-and-uncertainty-metadata
+suggested_reporting_guidelines: [ASME-VV40, domain-specific-V-and-V]

@@ -1,0 +1,14 @@
+# 探索紀錄（exploration-log）——第八個單一事實來源，只在 analyze-data 探索模式寫入。
+# 分艙原則：探索產物全部落在 analysis/exploration/——不寫 results.json、
+# 不進 figures/manifest.json、不得被稿件引用；要見刊唯一路徑是轉正（promoted）。
+
+explorations:
+  - id: E1                       # E+序號
+    date: 2026-07-08
+    trigger: "資料品質檢查時注意到夏季日流量呈雙峰"   # 什麼引發這次探索
+    scope: "2019–2024 六至九月日流量；分年密度圖與 CUSUM"
+    finding: "雙峰僅見於 2022 之後，與上游調度規則變更同期"
+    artifacts: [analysis/exploration/E1-density.png, analysis/exploration/E1.ipynb]
+    disposition: promoted        # promoted（轉正為新 SQ）/ noted（討論素材）/ dropped（防重走死路）
+    sq: SQ7                      # promoted 必填；該 SQ 增 origin: E1
+    note: ""                     # 事後補記（訪談追認）時註明

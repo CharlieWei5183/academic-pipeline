@@ -1,0 +1,16 @@
+schema_version: 1
+adapter: qualitative
+source_artifacts: []
+source_fingerprint: ""
+status: fail                    # pass / qualified / fail
+completed: false
+completed_at: ""
+limitations: ""
+report: reviews/adapter-validation-1.md
+checks:
+  - id: AV1
+    name: audit_trail
+    status: fail                # pass / qualified / fail / not-applicable
+    evidence: []
+    rationale: ""
+    finding: ""
