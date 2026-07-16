@@ -1,0 +1,25 @@
+{
+  "mean_A": {
+    "value": 3.4215,
+    "unit": "mm",
+    "uncertainty": 0.15,
+    "method": "arithmetic mean",
+    "script": "scripts/summary.py",
+    "description": "A 組平均變形量"
+  },
+  "ttest_ab_p": {
+    "value": 0.0321,
+    "unit": null,
+    "uncertainty": null,
+    "method": "Welch t-test",
+    "script": "scripts/ttest.py",
+    "description": "A vs B 差異檢定 p 值"
+  },
+  "table_summary": {
+    "type": "table",
+    "columns": ["group", "n", "mean", "sd"],
+    "rows": [["A", 12, 3.42, 0.15], ["B", 12, 3.87, 0.21]],
+    "script": "scripts/summary.py",
+    "description": "分組描述統計"
+  }
+}

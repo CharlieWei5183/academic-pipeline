@@ -1,0 +1,184 @@
+# academic-pipeline v0.7.3 專案設定檔
+# 換專案只需修改本檔，skills 與 agents 不含任何專案資訊。
+# 專案內所有路徑引用一律相對於專案根目錄。
+
+pipeline:
+  version: "0.7.3"        # 管線契約版本；決定哪些硬關卡生效（舊專案不自動升版，
+                          # 遷移請先備份，由 status 盤點缺失 artifacts 後再改此欄）
+
+project:
+  title_zh: ""            # 暫定題目（中文）
+  title_en: ""            # 暫定題目（英文，可後補）
+  research_question: ""   # 主研究問題，一句話
+  field: ""               # 子領域，例：材料科學 / 計算流體力學 / 環境工程
+
+methodology:              # 研究方法類型；由 methodology-router 寫入，決定 route 與各站的 adapter
+  primary: ""             # 主方法，例：estimation-causal / predictive-ml / qualitative /
+                          # systematic-review / simulation / theory / mixed
+  secondary: []           # 次方法（混合設計時列出）
+  rationale: ""           # 為何是這個 route：知識任務與可得材料的對應理由
+  confirmed: false        # 經使用者確認後才為 true；未確認不得進 study-design 後的硬關卡
+  routed_at: ""           # ISO 日期；route 重跑會使下游 plan/validation 過期
+
+goals:                    # 目標分解——研究問題的單一事實來源
+  # 硬規則一：success_criteria 必須結果中立——寫「以適當方法估出效應量與不確定度」，
+  #           不寫「證明 X 提升 Y」，否則評估制度會變成 p-hacking 的幫兇。
+  # 硬規則二：任何修改須經使用者確認；evaluate 會用快照比對
+  #           （evaluations/goals-snapshot.json）揪出未經確認的改動。
+  sub_questions:
+    - id: SQ1
+      question: ""          # 子問題，一句話
+      why: ""               # 在回答主問題中的角色：前提／機制／量化／邊界
+      evidence: [analysis]  # analysis / literature / both / qualitative / proof
+      success_criteria: ""  # 什麼證據算「已回答」——與結果方向無關
+      role: primary         # primary（承重，主結論繫於其上）/ secondary / exploratory
+                            # primary 會觸發 evaluate 升檔、強制敏感度分析與 code-review
+      origin: ""            # 選填：E#（探索發現轉正而來的 SQ；設計審必查資料雙重使用）
+      status: open          # open / addressed / blocked / dropped
+      status_reason: ""     # blocked/dropped 必填理由
+      links: []             # 證據鏈："results:<鍵名>"、"cite:<citekey>"、"claim:C#"、
+                            # "V#"（validation）、"ms:<節次>"
+  # 附錄問題（穩健性／敏感度／跨方法）——與 sub_questions 刻意分離、不混列（v0.7.3）。
+  # 判準：問的是「現象」還是「分析本身」——
+  #   問現象（X 與 Y 是否關聯、機制為何、邊界在哪）→ sub_questions；
+  #   問分析本身（主結果在換方法／換設定下是否維持、跨方法收斂或分歧）→ appendix_questions。
+  # 附錄問題是「defend 主答案」而非「產生新答案」，報在附錄／SI，不進正文主結果。
+  # 制度差異：decomposition-review 只評 sub_questions，附錄問題不計入主問題的覆蓋與拆解；
+  #   但仍受 check_coverage.py 的逐項 integrity 檢查（終態、links 有效、addressed 須有 links）——
+  #   證據鏈斷不斷不因層級而豁免。無附錄問題時留 [] 為合法（多數專案如此）。
+  appendix_questions: []
+    # - id: AQ1
+    #   question: ""          # 穩健性／敏感度／跨方法問題，一句話
+    #   why: ""               # 守護哪個主結論、擋掉哪種「這是不是方法造成的」質疑
+    #   evidence: [analysis]  # analysis / literature / both
+    #   success_criteria: ""  # 什麼算「已誠實呈現」——收斂或分歧都並陳、不藏（結果中立）
+    #   status: open          # open / addressed / blocked / dropped
+    #   status_reason: ""     # blocked/dropped 必填理由
+    #   links: []             # 同 sub_questions：results:/cite:/ms:
+
+data:
+  files: []                 # 每筆：{path, description, columns}
+  design: ""                # 實驗設計 / 模擬設定 / 取樣或納排摘要
+  units: ""                 # 主要物理量與單位慣例
+  governance_notes: ""      # 資料權利、隱私、同意範圍、去識別與使用限制；
+                            # integrity-check 與 data-audit 讀此欄，探索模式亦不得略過
+
+analysis:
+  methods: []               # 指定分析方法；留空由 study-design / data-analyst 提案
+  alpha: 0.05               # 顯著水準
+  software: python          # python / R / mixed / not-applicable
+  rounding: 3               # 預設「有效位數」(significant figures)；
+                            # 個別結果需特殊顯示時，在 results.json 該筆加 "display" 欄位覆寫，
+                            # check_numbers.py 會強制稿件數字與 display 完全一致
+  rerun: full               # 重跑驗證檔位：full（收尾必重跑全部 script）/
+                            # spot（只重跑承重 SQ 主鍵所繫的 script 鏈）/
+                            # off（長時運算的出口；需理由並記決策日誌 D#，防悄悄關閉）
+  environment_lock: ""      # 環境鎖檔路徑：requirements.lock / renv.lock / environment.yml 等；
+                            # 納入 rerun fingerprint，變更會使 rerun 與 validation 過期
+
+target:
+  journal: ""               # 目標期刊（未定可留空，由 journal-match 比對選刊）
+  article_type: ""          # full paper / letter / review
+  word_limit:               # 正文字數上限（依期刊）
+  abstract_limit:           # 摘要字數上限
+  citation_style: ""        # numeric / author-year，或期刊名稱
+  structure: IMRaD          # IMRaD 或自訂章節列表
+  cascade: []               # 後備期刊清單（journal-match 維護；reject 轉投時依序取用）
+  reporting_guideline: ""   # 選配：STROBE / CONSORT / PRISMA 等；設定後 check-consistency 對照其 checklist
+  csl: ""                   # 目標期刊官方 CSL 檔路徑（journal-match 自 Zotero style repository 取得，
+                            # 存 submission/csl/<journal>.csl；typeset 引用格式化的依據）
+  submission_format:        # 投稿格式需求（journal-match 選定期刊時寫入；缺項由 typeset 執行中逐項問）
+    format: ""              # docx / latex
+    line_numbers: false     # 是否需行號版
+    anonymous: false        # 是否需雙匿名版
+    figures: ""             # embedded（圖表隨文）/ separate（圖表分離）
+
+glossary:                   # 術語中英對照表；翻譯一致性的唯一依據，隨專案累積
+  - zh: ""
+    en: ""
+
+review:
+  strictness: normal        # normal（一般期刊水準）/ harsh（頂刊水準；harsh 會使 evaluate 升檔）
+  emphasis: []              # 本專案加重審查項目，例：重現性、不確定度分析
+  max_rounds: 3             # major 全審輪次上限（保險閥之一；達上限交人工裁決）
+  panel: []                 # 審稿席位（選用）；未列或未列滿時以內建通用三席補滿
+                            # （methods-rigorist / field-positioner / argument-critic）。
+                            # 每席：{seat: S1..S4, persona_id, display_name,
+                            #        grounding: {citekeys: [...], profile: literature/personas/<id>.md}}
+                            # seat 只接受 S1–S4（S4 為選用加席）；同一 seat 重複設定時報錯。
+                            # 指定學者席的 profile 由其著作萃取、經使用者核可才啟用（記 D#）。
+
+state:                      # 管線狀態；由各 skill 在關卡通過時更新，請勿手動修改
+                            # （state 是快取不是真相；status 以 artifacts 為準重建）
+  methodology:
+    result: ""              # methodology-router 收尾寫入
+    route: ""               # 選定的 route 名（決定後續硬關卡與 adapter）
+    at: ""
+  integrity:
+    prestudy: {}            # integrity-check 前置階段：{result, report, at}
+    presubmission: {}       # integrity-check 投稿前階段：{result, report, at}
+  study_design:
+    result: ""              # study-design 收尾寫入
+    protocol: ""            # 封存的 protocol 路徑
+    active_plans: []        # 現行 plan id 清單（analyze-data 只能執行已封存確認的 plan）
+    at: ""
+  data_audit:
+    result: ""              # pass / conditional（有未解 blocker 不得進正式分析）
+    profile_fingerprint: "" # data-profile.json 指紋；改變會使 plan review、rerun、validation 過期
+    report: ""
+    at: ""
+  literature:
+    updated_at: ""          # lit-review 收尾寫入（全模式與增補模式皆寫）
+    mode: ""                # 全 / 增補——peer-review 的 matrix 新鮮度檢查讀此欄
+  evidence_synthesis:
+    result: ""              # evidence-synthesis 收尾寫入（文獻型 SQ 的證據來源）
+    mode: ""
+    protocol_fingerprint: ""
+    source_fingerprint: ""
+    report: ""
+    at: ""
+  analysis:
+    rerun: {}               # clean rerun 通過後寫入：{result, mode, fingerprint,
+                            # input_fingerprint, results_fingerprint, report, at}
+    validation: {}          # validate-results 寫入：{result（pass/qualified/fail）,
+                            # results_fingerprint, source_fingerprint, report, at}
+  submission:
+    build: {}               # typeset 收尾寫入：{at, format, files}
+    prep: {}                # submission-prep 收尾寫入
+  zh_latest: ""             # 最新中文稿版本，例 v3（write-manuscript / revise 寫入）
+  si_latest: ""             # 最新中文 SI 版本，例 si-v1（write-supplementary 寫入；無 SI 素材留空）
+  last_consistency:
+    version: ""             # 最近一次檢核的稿件（例 v3）
+    language: ""            # zh / en
+    si: ""                  # 併檢的 SI 版本（例 si-v1；無 SI 留空）
+    result: ""              # pass / fail
+    gate_fingerprint: ""    # 上游關卡指紋；上游一變即失效，需重檢
+    report: ""
+    at: ""
+  last_full_evaluation:
+    id: ""                  # 例 full-2（evaluate 完整模式通過時寫入）
+    result: ""              # pass / fail
+  claims:
+    version: 0              # analysis/claims.yaml 判讀輪次（interpret-results 寫入）
+    confirmed: false        # 使用者逐條確認後為 true（write-manuscript 開寫關卡之一）
+  claim_audit:
+    result: ""              # claim-audit 寫入：主張強度是否被證據支撐
+    claims_fingerprint: ""
+    source_fingerprint: ""
+    report: ""
+    at: ""
+  review:
+    round: 0                # 已完成的審稿輪次
+    decision: ""            # 最近一次編輯裁決（accept/minor/major/reject）
+    converged: false        # 正常出迴圈（accept 或 minor 覆核通過）時為 true——
+                            # 收斂是虛擬審稿的停止訊號，不等於真實期刊會 accept
+    scores: []              # 每個完整 panel 輪由 record_review_score.py 寫入；minor re-check 不新增。
+                            # 條目：{round, method, argument, goal_fit, contribution,
+                            #        reporting, writing, figures, total, must_fix_open,
+                            #        model, panel_changed(選)}——跨模型/跨制的相鄰輪
+                            # 分數差不納入邊際遞減保險閥判定
+  zh_final: ""              # 使用者確認的中文定稿版本（translate-en 前置寫入）
+  en_final:
+    version: ""             # 英文定稿版本，例 v2
+    source: ""              # 對應的中文源版本，例 zh/v4
+    confirmed_at: ""        # 使用者確認英文定稿的時間

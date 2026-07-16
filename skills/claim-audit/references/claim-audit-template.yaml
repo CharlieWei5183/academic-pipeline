@@ -1,0 +1,22 @@
+schema_version: 1
+claims_version: 1
+claims_fingerprint: ""
+source_fingerprint: ""       # claims 上游 results/validation/evidence/plans fingerprint
+status: fail                    # pass / fail
+completed: false
+completed_at: ""
+report: reviews/claim-audit-v1.md
+items:
+  - id: CA1
+    claim_id: C1
+    verdict: reject             # pass / qualify / reject
+    entailment: ""
+    strongest_counterargument: ""
+    boundary: ""
+    selective_reporting: not-assessable
+    counterevidence: []
+    unresolved:
+      - {severity: blocker, issue: "", status: open}
+    required_changes: []
+    resolved: false
+    resolution: ""

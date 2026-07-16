@@ -1,0 +1,33 @@
+schema_version: 1
+protocol_id: EP1-v1
+mode: focused                 # focused / systematic / scoping / meta-analysis
+status: draft                 # draft / confirmed
+question: ""
+framework: ""                 # PICO / PECO / SPIDER / 自訂
+eligibility:
+  inclusion: []
+  exclusion: []
+search:
+  databases: []
+  strings: []                  # 完整可重跑搜尋式
+  language_limits: []
+  date_limits: ""
+  last_run: ""
+  grey_literature: ""
+screening:
+  reviewers: 1
+  dual_screening: false
+  conflict_resolution: ""
+extraction:
+  fields: []
+  duplicate_check: ""
+risk_of_bias:
+  tool: ""
+synthesis_plan:
+  method: narrative
+  heterogeneity: ""
+  publication_bias: ""
+confirmed: false
+confirmed_at: ""
+confirmed_by: ""
+content_hash: ""

@@ -1,0 +1,33 @@
+schema_version: 1
+stages:
+  prestudy:
+    status: fail                # pass / conditional / fail
+    conditions: ""
+    completed: false
+    completed_at: ""
+    report: reviews/integrity-prestudy-1.md
+    items:
+      - {id: ethics_scope, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: consent_or_waiver, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: data_rights, applicability: required, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: privacy_security, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: registration, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+  presubmission:
+    status: fail
+    conditions: ""
+    completed: false
+    completed_at: ""
+    report: reviews/integrity-presubmission-1.md
+    items:
+      - {id: authorship_approval, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}
+      - {id: credit_contributions, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}
+      - {id: conflicts_of_interest, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}
+      - {id: originality, applicability: required, status: pending, evidence: "", rationale: "", owner: all-authors, due_action: ""}
+      - {id: duplicate_submission, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}
+      - {id: third_party_permissions, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: image_integrity, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: data_availability, applicability: required, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: code_availability, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: ai_disclosure, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}
+      - {id: reporting_guideline, applicability: unknown, status: pending, evidence: "", rationale: "", owner: author, due_action: ""}
+      - {id: plagiarism_external, applicability: required, status: pending, evidence: "", rationale: "", owner: corresponding-author, due_action: ""}

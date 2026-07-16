@@ -1,0 +1,25 @@
+# 資料清理溯源（data-manifest）——第九個單一事實來源，只在 analyze-data 寫入。
+# 補「原始 → 分析用」這半段鏈條；data/ 唯讀規則不變。
+# 最小形：資料無需清理時，sources 字典＋flow 單列（原始即進入分析），steps 留空。
+
+sources:                         # 資料字典（init_manifest.py 掃 data/ 生成骨架；
+  - file: data/siteA-daily-2019-2024.csv   #   origin/unit/known_issues 由使用者補）
+    origin: "水利署 XX 測站日流量，2019-01-01 至 2024-12-31"
+    fields:
+      - {name: date, type: date, unit: "", note: ""}
+      - {name: flow, type: float, unit: "m3/s", note: "儀器 2022-03 更換"}
+    known_issues: "2022-03 前後精度不同；2020-08-07 至 09 缺測"
+
+steps:                           # 清理與轉換紀錄——一律經 script，輸出存 analysis/derived/
+  - id: P1                       # P+序號
+    action: exclude              # exclude / impute / transform / merge / derive
+    rule: "flow < 0 視為誤讀，整筆剔除"
+    affected: 17                 # 影響筆數（exclude 時與 flow 表筆數守恆對帳）
+    script: analysis/scripts/clean_flow.py
+    output: analysis/derived/flow-clean.parquet
+    reason: D-003                # 選填：涉及取捨（剔除、插補）時連決策日誌 D#
+
+flow:                            # 樣本流向——每條主分析路徑一列，尾端掛 results_key
+  - {label: 原始, n: 2192}
+  - {label: 剔除負值後, n: 2175, step: P1}
+  - {label: 進入主分析, n: 2175, results_key: table_main}

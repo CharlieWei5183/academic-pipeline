@@ -1,0 +1,128 @@
+# 測試資產
+
+改動任何 skill / agent / script 後，用這裡的資產驗證沒有退步。
+
+## 1. trigger-evals.yaml
+
+觸發測試：每筆是「使用者語句 → 應觸發的 skill（或 none）」。人工或用 skill-creator 的 eval 方法跑：把語句丟給安裝了本 plugin 的新對話，檢查觸發是否符合 `expect`。
+
+## 2. mini-project/ — 迷你端到端測試專案
+
+一個縮小版專案，`manuscript/`、`goals` 與 `analysis/claims.yaml` 內**故意埋了已知錯誤**，用來驗證各檢核腳本。
+
+執行：
+
+```bash
+cd tests/mini-project
+python3 ../../skills/check-consistency/scripts/check_numbers.py manuscript/zh/v1.md analysis/results.json
+python3 ../../skills/check-consistency/scripts/check_citations.py manuscript/zh/v1.md literature/references.bib
+python3 ../../skills/translate-en/scripts/check_markers.py manuscript/zh/v1.md manuscript/en/v1.md
+python3 ../../skills/evaluate/scripts/check_coverage.py project.yaml analysis/results.json literature/references.bib
+python3 ../../skills/interpret-results/scripts/check_claims.py analysis/claims.yaml project.yaml analysis/results.json literature/references.bib
+python3 ../../skills/revise/scripts/diff_versions.py manuscript/zh/v1.md manuscript/zh/v1.md --sections
+```
+
+### 預期結果（黃金答案）
+
+**check_numbers**（exit 1，3 blockers）：
+
+- BLOCKER：`0.045 ≠ 0.0321 (results.ttest_ab_p)` — 標註數字與鍵值不符
+- BLOCKER：`鍵名不存在: results.effect_size`
+- BLOCKER：`資料型數字未標註溯源: 12.5%`
+- WARNING：`4.7`（同句有 citekey，引用他人數值）
+- 不得誤報：`2024`（年份）、`圖 1`（圖編號）、`3.42 <!-- results.mean_A -->`（正確標註）
+
+**check_citations**（exit 1，1 blocker）：
+
+- BLOCKER：`@wang2025missing` 不存在於 bib
+- 不得誤報：`@smith2023effect`
+
+**check_markers**（exit 1，2 差異）：
+
+- `results註解 "mean_A"`：zh x1 vs en x0
+- `citekey "wang2025missing"`：zh x1 vs en x0
+- 註：腳本同時比對 `<!-- claims.* -->` 標註；mini-project 兩版皆無主張標註，不得因此新增差異
+
+**check_coverage**（exit 1，2 blockers）：
+
+- BLOCKER：`SQ2: 狀態非終態 (open)`
+- BLOCKER：`SQ2: link 無效, results.json 無鍵 "loading_rate_effect"`
+- 不得誤報：SQ1（addressed、三條 links 皆有效）
+- 加 `--sq SQ1` 時（輕量模式）：0 blocker，exit 0
+
+**check_claims**（exit 1，4 blockers）：
+
+- BLOCKER：`C2: evidence 無效, results.json 無鍵 "effect_size"`
+- BLOCKER：`C3: sq 無效, goals 無 "SQ9"`
+- BLOCKER：`C3: strength 無效 "proven"`
+- BLOCKER：`C4: causal 級 basis 為空`
+- WARNING：`confirmed: false`（主張尚未經使用者確認）
+- 不得誤報：C1（sq、strength、三條 evidence 皆有效）
+- 加 `--manuscript manuscript/zh/v1.md` 時：blocker 數不變，另出現 4 條「主張未見於稿件」warning（稿件無 claims 標註）
+
+**diff_versions**（自我比對煙霧測試，exit 0）：
+
+- 同版比對 `--sections` 輸出 `無變更`；改動任一節後重跑須列出該節
+
+腳本輸出與上述不符＝退步。
+
+## 3. 新腳本（v0.6）煙霧測試——回溯相容驗收
+
+mini-project 沒有任何 v0.6 新帳本（issue-ledger、decisions、exploration-log、data-manifest、run-order）。對它跑下列腳本，**全部應列 INFO 提示可補建並 exit 0，不報錯**（總則驗收：無新產物時行為與現行版本相同）：
+
+```bash
+cd tests/mini-project
+python3 ../../skills/revise/scripts/check_ledger.py reviews/issue-ledger.yaml project.yaml
+python3 ../../skills/status/scripts/check_decisions.py decisions.yaml project.yaml
+python3 ../../skills/analyze-data/scripts/check_manifest.py analysis/data-manifest.yaml .
+python3 ../../skills/analyze-data/scripts/check_exploration.py analysis/exploration-log.yaml project.yaml .
+python3 ../../skills/evaluate/scripts/check_coverage.py project.yaml analysis/results.json literature/references.bib --history evaluations
+# 裁決史應全列「無史料」；check_coverage 黃金答案不變
+```
+
+typeset 建置（需 pandoc；舊版 pandoc 無 citeproc 時應優雅降級並警示）：
+
+```bash
+python3 ../../skills/typeset/scripts/build_docx.py manuscript/en/v1.md --bib literature/references.bib --reference-doc ../../skills/typeset/references/reference.docx --out /tmp/build
+python3 ../../skills/typeset/scripts/anonymize.py manuscript/en/v1.md --out /tmp/build/anonymous.md
+python3 ../../skills/typeset/scripts/check_build.py /tmp/build --project project.yaml --source manuscript/en/v1.md
+```
+
+check_claims 對 mini-project 的黃金答案（第 2 節）不變；新增兩行 INFO（無 origin 欄、無 lit_anchors 欄——探索性連結與文獻錨點檢查略過）。
+
+## 4. v0.7 端到端煙霧測試
+
+```bash
+python3 tests/run_v07_smoke.py
+```
+
+測試會在暫存目錄動態建立專案並驗證：
+
+- 七種 methodology adapter 均可建立、封存及檢核 route／protocol／plan；
+- qualitative adapter validation 的 source fingerprint 與必要 checks；
+- quantitative data profile、data-audit、manifest、results schema；
+- clean-room rerun 能通過正常案例，且 no-op script 無法靠既有 results.json 假通過；
+- independent validation（含完整 analysis-source fingerprint）、evidence protocol/synthesis（含實際 notes／bibliography source fingerprint）、claims 與 claim-audit；
+- prestudy／presubmission integrity；
+- 中文與英文 consistency gate、presubmission 非循環失效，以及稿件、validation evidence、declared analysis input 改動後的 stale fingerprint 阻擋。
+
+## 5. v0.7.1 語意回歸測試
+
+v0.7.0 的新功能 smoke test 沒有覆蓋四個跨檔案舊契約；0.7.1 新增：
+
+```bash
+python3 tests/run_v071_regressions.py
+```
+
+必須驗證：
+
+- v0.6 已有 `{last_consistency: {result: pass, version: vN}}` 時，`check_gate.py` 相容模式通過，不要求 `gate_fingerprint`／`report`；明確 `--strict` 或 0.7.x 專案仍阻擋缺欄。
+- editor 四段分數帶、新穎性／定位敘事子問題及 `REVIEW_SCORE` block 均存在。
+- 每個完整 panel 輪可由 `record_review_score.py` 寫入且依 round 去重；兩輪改善不足時 `check_ledger.py` 確實輸出邊際遞減保險閥。
+- README、status、peer-review、revise 都保留外部 `chinese-deai-editing` 掛點。
+
+## run_v072_regressions.py
+
+驗證 v0.7.2 回填的 v0.6 契約：agent 層紅線（code-review 風格限 suggestion、fact-checker 的 Bash 權限與 blocker 門檻、data-analyst 四條核心原則）、skill 層規則（evaluate 短路規則、decisions.yaml 三類記錄、write-manuscript 數字豁免清單）、project-template 的欄位註解密度，以及文獻型 SQ 的 `cite:` links producer——包含 `check_coverage.py --evidence` 的四種情境實測：不傳旗標（回溯相容）、citekey 已審查（通過）、citekey 未審查（BLOCKER）、evidence 檔不存在（略過）。
+
+檔案數與 frontmatter 檢查抓不到這類跨檔案語意退步，因此以錨點字串斷言。回填條款若被再次刪除，本測試會失敗。

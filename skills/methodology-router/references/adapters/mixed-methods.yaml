@@ -1,0 +1,45 @@
+id: mixed-methods
+label: 混合方法
+purpose: 以定量與質性證據互補回答同一研究問題
+required_gates:
+- study-design
+- integrity-check:prestudy
+- data-audit
+- analyze-data
+- validate-results
+- evidence-synthesis
+- claim-audit
+- integrity-check:presubmission
+required_artifacts:
+- protocol/study-protocol.yaml
+- methodology/route.yaml
+- analysis/plans/index.yaml
+- analysis/data-audit.yaml
+- analysis/integration/joint-display.yaml
+- analysis/validation.yaml
+plan_requirements:
+- design_type
+- priority
+- sequence
+- integration_points
+- sampling_relationship
+- discordance_resolution
+data_audit_checks:
+- cross_strand_linkage
+- consent_scope
+- unit_alignment
+- temporal_alignment
+- missingness
+- provenance
+validation_checks:
+- quantitative_validation
+- qualitative_trustworthiness
+- joint_display
+- convergence_divergence
+- meta_inference
+interpretation_limits:
+  default: integrated_claim_strength_is_limited_by_the_weakest_supporting_strand
+results_contract: strand-specific-artifacts-plus-joint-display
+suggested_reporting_guidelines:
+- GRAMMS
+- MMAT

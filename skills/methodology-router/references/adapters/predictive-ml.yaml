@@ -1,0 +1,12 @@
+id: predictive-ml
+label: 預測模型與機器學習
+purpose: 對未見資料進行預測、分類、排序或風險估計
+required_gates: [study-design, integrity-check:prestudy, data-audit, analyze-data, validate-results, evidence-synthesis, claim-audit, integrity-check:presubmission]
+required_artifacts: [protocol/study-protocol.yaml, analysis/plans/index.yaml, analysis/data-audit.yaml, analysis/results.json, analysis/validation.yaml]
+plan_requirements: [prediction_target, intended_use, unit_of_split, train_validation_test_separation, preprocessing_scope, tuning_protocol, metrics, calibration, external_validation]
+data_audit_checks: [target_leakage, duplicate_entities_across_splits, temporal_leakage, class_imbalance, label_quality, dataset_shift, protected_attributes]
+validation_checks: [nested_or_locked_validation, discrimination, calibration, decision_utility, subgroup_performance, external_or_temporal_validation, ablation, reproducible_pipeline]
+interpretation_limits:
+  default: predictive_not_causal
+results_contract: metrics-with-confidence-intervals-split-definition-and-model-id
+suggested_reporting_guidelines: [TRIPOD-AI, CONSORT-AI, SPIRIT-AI]

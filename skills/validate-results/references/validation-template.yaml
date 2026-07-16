@@ -1,0 +1,30 @@
+schema_version: 1
+results_fingerprint: ""
+source_fingerprint: ""       # rerun input+results combined fingerprint
+status: fail                    # pass / qualified / fail
+completed: false
+completed_at: ""
+report: reviews/validation-SQ1-1.md
+items:
+  - id: V1
+    sq: SQ1
+    plan_id: SQ1-v1
+    status: fail                # pass / qualified / fail
+    primary_results: []
+    # 名稱須覆蓋 active plan 的 validation.required；以下僅為定量常見例
+    diagnostics:
+      - {name: assumptions, status: warning, evidence: ""}
+      - {name: influence, status: warning, evidence: ""}
+      - {name: missing_data, status: warning, evidence: ""}
+      - {name: multiplicity, status: warning, evidence: ""}
+      - {name: sensitivity, status: warning, evidence: ""}
+    robustness:
+      - {name: alternative_model, status: qualified, result_keys: [], interpretation: ""}
+    independent_recalculation:
+      mode: second-implementation
+      result: fail              # pass / waived / fail / not-applicable
+      artifacts: []
+      reason: ""
+      decision: ""              # waiver 時必填 D#
+    null_assessment: {needed: false, method: "", conclusion: ""}
+    limitations: ""

@@ -1,0 +1,27 @@
+schema_version: 1
+profile_fingerprint: ""
+status: fail                    # pass / conditional / fail
+conditions: ""
+confirmed: false
+confirmed_at: ""
+report: reviews/data-audit-1.md
+# 除共通鍵外，必須加入 route adapter 的 data_audit_checks，名稱正規化為 snake_case。
+checks:
+  identity_and_duplicates: warning
+  temporal_integrity: warning
+  units_and_ranges: warning
+  missingness: warning
+  sampling_and_analysis_unit: warning
+  measurement_quality: warning
+  leakage: warning
+  provenance: warning
+findings:
+  - id: DA1
+    category: identity
+    severity: blocker           # blocker / warning / info
+    affected_files: []
+    evidence: ""
+    required_action: ""
+    status: open                # open / resolved / accepted-limitation / not-applicable
+    resolution: ""
+    links: []                   # D# / P# / SQ / plan

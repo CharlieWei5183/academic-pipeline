@@ -1,0 +1,6 @@
+schema_version: 1
+dual_screening: false
+quality_control: ""
+flow: {identified: 0, deduplicated: 0, screened: 0, full_text: 0, included: 0}
+full_text_exclusions:
+  - {citekey_or_id: "", reason: ""}

@@ -1,0 +1,45 @@
+id: qualitative
+label: 質性研究
+purpose: 理解經驗、意義、機制、實作過程與脈絡
+required_gates:
+- study-design
+- integrity-check:prestudy
+- data-audit
+- validate-results
+- evidence-synthesis
+- claim-audit
+- integrity-check:presubmission
+required_artifacts:
+- protocol/study-protocol.yaml
+- analysis/plans/index.yaml
+- analysis/data-audit.yaml
+- analysis/qualitative-audit-trail.yaml
+plan_requirements:
+- sampling_strategy
+- researcher_positioning
+- data_collection
+- coding_approach
+- codebook
+- saturation_or_information_power
+- negative_case_strategy
+data_audit_checks:
+- consent_scope
+- deidentification
+- transcript_completeness
+- provenance
+- translation_fidelity
+- sampling_coverage
+validation_checks:
+- audit_trail
+- reflexivity
+- coder_disagreement
+- negative_cases
+- triangulation
+- member_or_peer_checking
+- saturation_claim
+interpretation_limits:
+  default: analytic_transferability_not_statistical_generalization
+results_contract: themes-codes-excerpts-with-provenance-and-audit-trail
+suggested_reporting_guidelines:
+- COREQ
+- SRQR
