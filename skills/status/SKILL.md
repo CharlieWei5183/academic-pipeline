@@ -53,7 +53,7 @@ project-init
 → 中文潤稿（chinese-deai-editing，選用外部 user skill）
 → ★中文人工定稿
 → translate-en
-→ 英文潤稿（academic-english-editing，選用外部 user skill）
+→ 英文潤稿（academic-english-editing，內建·選用）
 → ★英文人工確認
 → check-consistency(en，全量)
 → submission-prep（題目／摘要改動則新版本＋重跑全量 consistency）
@@ -114,7 +114,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 
 ## 選用潤稿站
 
-`chinese-deai-editing` 與 `academic-english-editing` 都是外部 user skill：已安裝才掛入流程，未安裝自動略過。兩者只能改語言呈現，不得改數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後須重跑對應語言的完整 consistency。
+`academic-english-editing` 為本 plugin 內建 skill（0.8.0 起隨附）；`chinese-deai-editing` 仍為外部選用 user skill（已安裝才掛入、未安裝自動略過）。兩者都是選用潤稿站，只能改語言呈現，不得改數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後須重跑對應語言的完整 consistency。
 
 ## 人工確認點
 
