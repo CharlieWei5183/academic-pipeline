@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 虛擬環境 / 環境變數
+.venv/
+venv/
+.env
+.env.local
+
+# OS / 編輯器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code 本機設定
+.claude/settings.local.json
+.claude/worktrees/
