@@ -3,7 +3,7 @@ protocol_id: SP1-v1
 version: 1
 status: draft                 # draft / confirmed
 timing: retrospective         # prospective / retrospective
-created_at: 2026-07-14
+created_at: "2026-07-14"
 confirmed_at: ""
 confirmed_by: ""
 content_hash: ""              # seal_artifact.py 寫入

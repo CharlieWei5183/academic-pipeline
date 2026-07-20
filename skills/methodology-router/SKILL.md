@@ -29,8 +29,12 @@ metadata:
      secondary: []
      rationale: ""
      confirmed: true
-     routed_at: 2026-07-14
+     routed_at: "2026-07-14"
    ```
+
+   `routed_at` 必須加引號。YAML 會把裸的 `2026-07-14` 解析成 date 物件，下游 `rerun_all.py`
+   對 `project.yaml` 子集做 `json.dumps` 時無法序列化（v0.8.1 起腳本端以 `default=str` 兜底，
+   但寫入端仍以字串為準；同理適用 `confirmed_at`、`sealed_at` 等所有日期欄）。
 
 5. **確定性檢核**：
 
