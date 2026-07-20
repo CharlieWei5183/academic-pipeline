@@ -208,9 +208,10 @@ def main():
                                 f'{sid}.{f}: "{o.get(f)}" → "{n.get(f)}"')
         if '--update-snapshot' in sys.argv:
             os.makedirs(os.path.dirname(snap_path) or '.', exist_ok=True)
+            # default=str：goals 內的裸日期會被 YAML 解析成 date，不可序列化
             json.dump({'sub_questions': sqs, 'appendix_questions': aqs},
                       open(snap_path, 'w', encoding='utf-8'),
-                      ensure_ascii=False, indent=1)
+                      ensure_ascii=False, indent=1, default=str)
 
     # --- 裁決史摘要（--history）---
     hist_dir = get_arg('--history')
