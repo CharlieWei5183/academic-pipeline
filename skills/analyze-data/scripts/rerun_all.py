@@ -369,7 +369,18 @@ def collect_input_components(root: Path, order: list[RunEntry]) -> list[dict[str
             "analysis": project.get("analysis") or {},
             "methodology": project.get("methodology") or {},
         }
-        raw = json.dumps(project_subset, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        # default=str：YAML 會把沒加引號的 `2026-07-20` 解析成 datetime.date，而 date 不可
+        # JSON 序列化——沒有兜底時這裡是直接拋 TypeError 崩潰，而不是回報 blocker。範圍是整個
+        # project.yaml 子集（pipeline/project/goals/data/analysis/methodology）的任一裸日期，
+        # 不只 methodology.routed_at。str() 落地後，加引號與不加引號會產生相同 fingerprint，
+        # 所以事後補引號不會憑空使既有 fingerprint 失效。
+        raw = json.dumps(
+            project_subset,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
         components.append({
             "path": "project.yaml#analysis-subset",
             "sha256": hashlib.sha256(raw).hexdigest(),

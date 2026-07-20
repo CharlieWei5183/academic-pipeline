@@ -40,7 +40,12 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def canonical_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    # default=str：YAML 的裸日期（如 `routed_at: 2026-07-20`）會被 safe_load 解析成
+    # datetime.date，不可 JSON 序列化，沒有兜底時此處是直接崩潰而非回報 blocker。
+    # 對現行可序列化的輸入，default 永不觸發，既有 hash／fingerprint 完全不變。
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
 
 
 def short_hash(value: Any) -> str:
