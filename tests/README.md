@@ -126,3 +126,15 @@ python3 tests/run_v071_regressions.py
 驗證 v0.7.2 回填的 v0.6 契約：agent 層紅線（code-review 風格限 suggestion、fact-checker 的 Bash 權限與 blocker 門檻、data-analyst 四條核心原則）、skill 層規則（evaluate 短路規則、decisions.yaml 三類記錄、write-manuscript 數字豁免清單）、project-template 的欄位註解密度，以及文獻型 SQ 的 `cite:` links producer——包含 `check_coverage.py --evidence` 的四種情境實測：不傳旗標（回溯相容）、citekey 已審查（通過）、citekey 未審查（BLOCKER）、evidence 檔不存在（略過）。
 
 檔案數與 frontmatter 檢查抓不到這類跨檔案語意退步，因此以錨點字串斷言。回填條款若被再次刪除，本測試會失敗。
+
+## run_v081_regressions.py
+
+v0.8.1 的兩個確定性缺陷修補，以**實際執行腳本**斷言行為（錨點字串比對抓不到這類 bug）：
+
+- `check_results_schema.py`：superseded plan 不得宣告結果鍵——跨 SQ 撞鍵時不再從 active plan 手上搶走歸屬；v1 宣告、v2 未再宣告的鍵，blocker 須指向「未在 sealed active plan 預宣告」而非誣賴 result 的 `plan_id`；無 `status` 欄與無 `active` map 的舊 index 行為不變。
+- `rerun_all.py`、`check_gate.py`、`plan_common.content_hash`：`project.yaml`／plan 內的裸日期（`routed_at: 2026-07-20`、`created_at: 2026-07-14`）不得崩潰，且與有引號版本產生**相同** fingerprint／`content_hash`。
+- 全 repo 掃描：範本與文件不得再出現裸日期寫法（`*_at`／`date`／`*_on`）。
+- `methodology-router/SKILL.md` 範例已改為有引號寫法。
+- `plugin.json` 精確 pin `0.8.1`，且 `run_v080_regressions.py` 已改為單調斷言。
+
+注意 `run_v07_smoke.py` 寫入的 `routed_at` 是 Python 字串（序列化成有引號的 YAML），因此**不會**覆蓋無引號路徑；缺陷 2 能在全綠狀態下存活正是這個原因。測試若只走自己寫入的那條路徑，就守不住文件所教的那條。

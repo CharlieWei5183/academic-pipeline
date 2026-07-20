@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.8.1（2026-07-20）
+
+兩個確定性缺陷的修補。skills（24）、agents（18）與管線階段不變，無新功能、無破壞性變更，故為 PATCH bump。
+
+1. **`check_results_schema.py`：`output_contract` 排除被取代的 plan**。建 contract 時只走 `index.yaml` 的 `plans` 清單而未看 `status`／`active`（`active_ids` 有過濾、contract 沒有），被 `seal_artifact.py` 標為 `superseded` 的舊版仍能宣告結果鍵歸屬。因 `output_contract` 是 dict、後寫覆蓋前寫，而 index 是 append 累積，跨 SQ 撞鍵時較晚封存的 superseded 版本會把歸屬從 active plan 手上搶走，報出 `plan_id 應為 <舊版>` 這種指向錯方向的 blocker——殘留在 index，訊息卻在指控 result。新增 `plan_owns_keys()`：`status: superseded` 或不在 `active` map 內的 plan 一律不得宣告鍵；所有版本仍載入 `plan_docs`，讓「plan_id 非 active plan」保有精確診斷。舊 index 無 `status` 欄或無 `active` map 時兩條件皆不成立，回溯相容。
+   - 副作用值得記一筆：此 bug 當時的唯一解法是把鍵移出 `results.json`，而那等於把數字移出稽核範圍——`check_numbers.py` 不再對稿件比值、clean-room rerun 不再逐鍵比對、該鍵退出 `results_fingerprint`。一個要靠縮小稽核範圍才能轉綠的關卡，失敗方向是錯的那一邊。
+2. **YAML 裸日期序列化崩潰：所有吃 YAML 的雜湊點一律加 `default=str`**。`routed_at: 2026-07-20` 不加引號會被 `yaml.safe_load` 解析成 `datetime.date`，`json.dumps` 直接拋 TypeError 崩潰，而不是回報 blocker。這不是單點問題——追下去共有六支腳本的雜湊點暴露在 YAML 輸入上，其中三處實測會崩潰：
+   - `rerun_all.py`（`project.yaml#analysis-subset`，涵蓋 `pipeline`／`project`／`goals`／`data`／`analysis`／`methodology` 任一裸日期，不只 `routed_at`）；
+   - `check_gate.py`（`canonical_hash`／`add_semantic`，其 `project.yaml#consistency-subset` 同樣含 `methodology`——只修 rerun_all 等於只修好回報路徑的一半）；
+   - `plan_common.py::content_hash`（封存計畫的內容雜湊，而 `analysis-plan-template.yaml` 教的 `created_at` 正是裸日期）；
+   - 另同步加固 `check_claim_audit.py`、`check_evidence.py`／`seal_evidence_protocol.py`、`check_coverage.py --update-snapshot` 等 YAML 輸入路徑。
+
+   對現行可序列化的輸入 `default` 永不觸發，既有 hash／fingerprint 位元不變；而加引號與不加引號會產生相同結果，事後補引號不會使既有 fingerprint 或封存 `content_hash` 失效。
+3. **文件與範本不再教出會崩潰的寫法**。`methodology-router/SKILL.md` 的 `routed_at: 2026-07-14` 正是觸發缺陷 2 的寫法；`study-protocol-template.yaml`、`analysis-plan-template.yaml` 的 `created_at` 與 `exploration-log-template.yaml` 的 `date` 同樣是裸日期。全部改為字串並在 SKILL.md 說明原因（腳本端已兜底，但寫入端仍以字串為準）。
+4. **測試**：新增 `tests/run_v081_regressions.py`（10 項）——以**實際執行腳本**（非錨點字串）斷言：superseded plan 不再搶走跨 SQ 撞鍵的歸屬、未宣告鍵的 blocker 改為指向 plan、無 `status`／無 `active` map 的舊 index 回溯相容、裸日期不再讓 `rerun_all`／`check_gate`／`content_hash` 崩潰、有無引號產生相同 fingerprint 與相同 `content_hash`、全 repo 掃描無殘留的裸日期範本、SKILL.md 已改寫、`plugin.json` 精確為 `0.8.1`。所有新斷言均先對未修補版本執行確認會失敗（測試有牙），mini-project 黃金答案不變。`run_v080_regressions.py::test_docs_and_version` 由精確 `== "0.8.0"` 改為單調 `>= (0,8,0)`，當期精確版號改由 `run_v081` pin（沿用 0.7.3→0.8.0 的既有慣例）。既有五支測試全部通過。
+   - 為何既有測試沒擋下缺陷 2：`tests/run_v07_smoke.py` 寫入的是 `"routed_at": "2026-07-14"`（Python 字串，序列化成有引號的 YAML），跑的是有引號路徑；SKILL.md 教的卻是無引號路徑。測試與文件互相矛盾，全綠不代表文件所教的用法可行。
+
 ## 0.8.0（2026-07-16）
 
 英文潤稿站由「選用外部 user skill」升為**本 plugin 內建 skill**。skills（23→**24**）；agents（18）與管線階段不變。無破壞性變更，故為 MINOR bump。
