@@ -35,6 +35,20 @@ def numeric_or_none(value: Any) -> bool:
     return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
 
 
+def plan_owns_keys(entry: dict[str, Any], plan_id: str, active_ids: set[str]) -> bool:
+    """只有 active 版本的 plan 可以宣告結果鍵的歸屬。
+
+    index.yaml 的 `active` map 是權威來源；`status` 是 seal_artifact.py 併寫的冗餘標記，
+    兩者任一判為非 active 就排除。被取代的舊版若仍參與 output_contract，會在跨 SQ 撞鍵時
+    （因 output_contract 是 dict、後寫覆蓋前寫，而 index 是 append 累積）把歸屬從 active
+    plan 手上搶走，報出指向錯方向的 blocker——說 result 的 plan_id 錯，其實是 index 有殘留。
+    舊 index 沒有 status 欄或沒有 active map 時兩條件都不成立，維持回溯相容。
+    """
+    if str(entry.get("status") or "").strip().lower() == "superseded":
+        return False
+    return not (active_ids and plan_id not in active_ids)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -78,7 +92,11 @@ def main() -> int:
         if not path.is_file():
             continue
         plan = load_yaml(path)
+        # 所有版本都進 plan_docs，讓下方「plan_id 非 active plan」能報出精確訊息；
+        # 但只有 active 版本可以往 output_contract 宣告結果鍵。
         plan_docs[pid] = plan
+        if not plan_owns_keys(entry, pid, active_ids):
+            continue
         for item in plan.get("outputs") or []:
             if isinstance(item, dict) and item.get("key"):
                 output_contract[str(item["key"])] = {**item, "plan_id": pid}
