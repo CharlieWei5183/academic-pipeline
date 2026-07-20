@@ -6,36 +6,131 @@
 
 ## Pipeline 主流程
 
-```text
-project-init
-→ methodology-router
-→ integrity-check (prestudy)
-→ study-design
-→ data-audit
-→ [analyze-data ∥ lit-review / evidence-synthesis]
-→ clean-room rerun
-→ code-review
-→ validate-results
-→ evaluate
-→ interpret-results
-→ claim-audit
-→ 人工確認 claims
-→ figure-design
-→ write-manuscript
-→ write-supplementary
-→ check-consistency (zh)
-→ peer-review ⇄ revise
-→ 中文潤稿（chinese-deai-editing，選用外部掛點）
-→ 中文人工定稿
-→ translate-en
-→ 英文潤稿（academic-english-editing，內建·選用）
-→ 英文人工確認
-→ check-consistency (en，完整重跑)
-→ submission-prep
-→ integrity-check (presubmission)
-→ 最終 gate 檢查
-→ typeset
+橙色圓角＝人工確認關卡（不確認就不往下走）；青色＝確定性腳本 gate，由 checker 機械判定；
+灰色虛線＝選用站點，未安裝或略過不報錯；其餘為 skill 步驟。
+
+```mermaid
+flowchart TD
+    classDef step  fill:#f8fafc,stroke:#94a3b8,stroke-width:1.5px,color:#0f172a
+    classDef gate  fill:#fdf1e3,stroke:#c2703d,stroke-width:2.5px,color:#7c2d12
+    classDef mech  fill:#e8f3f2,stroke:#2b7a78,stroke-width:2px,color:#134e4a
+    classDef opt   fill:#f8fafc,stroke:#a8b3c1,stroke-width:1.5px,stroke-dasharray:6 4,color:#64748b
+    classDef phase fill:#ffffff,stroke:#e2e8f0,stroke-width:1px,color:#64748b
+
+    subgraph PH1["① 立案與設計"]
+        direction TB
+        A1["project-init<br/>建立專案 · 拆解 goals"]
+        A2["methodology-router<br/>選定方法 adapter"]
+        H1(["人工確認 route<br/>推翻建議記 D#"])
+        A3["integrity-check<br/>prestudy 倫理與資料治理"]
+        A4["study-design<br/>protocol ＋ 版本化 plans"]
+        H2(["人工逐項確認 → 封存<br/>sealed plan 不可原地改"])
+        A1 --> A2 --> H1 --> A3 --> A4 --> H2
+    end
+
+    subgraph PH2["② 資料與證據生產"]
+        direction TB
+        B1["data-audit<br/>缺失 · 重複 · 洩漏 · provenance"]
+        H3(["處置人工確認<br/>剔除／插補／切分記 D#"])
+        FORK{{"依 route adapter 分流"}}
+        B2["analyze-data<br/>執行封存的分析計畫"]
+        B3["clean-room rerun<br/>rerun_all.py"]
+        B4["code-review<br/>reviewer-methods"]
+        B5["validate-results<br/>穩健性 · 診斷 · 獨立重算"]
+        H4(["人工確認結果契合<br/>確認後 SQ 才轉 addressed"])
+        C1["lit-review<br/>literature-scout"]
+        C2["evidence-synthesis<br/>風險偏誤 · 引用 entailment"]
+        B1 --> H3 --> FORK
+        FORK --> B2 --> B3 --> B4 --> B5 --> H4
+        FORK --> C1 --> C2
+    end
+
+    subgraph PH3["③ 判讀與主張"]
+        direction TB
+        D1["evaluate（full）<br/>目標覆蓋裁決"]
+        D2["interpret-results<br/>interpreter 草擬 claims"]
+        D3["claim-audit<br/>claim-critic 反方審查"]
+        H5(["人工確認 claims<br/>claims.yaml confirmed: true"])
+        D1 --> D2 --> D3 --> H5
+    end
+
+    subgraph PH4["④ 撰稿"]
+        direction TB
+        E1["figure-design<br/>figure story · 出版級圖表"]
+        H6(["圖表驗收確認"])
+        E2["write-manuscript<br/>繁體中文稿"]
+        H7(["人工確認後才成稿"])
+        E3["write-supplementary<br/>SI 收尾"]
+        E4["check-consistency（zh）<br/>check_gate.py"]
+        E1 --> H6 --> E2 --> H7 --> E3 --> E4
+    end
+
+    subgraph PH5["⑤ 審查與潤稿"]
+        direction TB
+        F1["peer-review<br/>persona panel ＋ editor"]
+        F2["revise<br/>issue-ledger 逐點結案"]
+        F3["chinese-deai-editing<br/>中文潤稿 · 外部選用"]
+        H8(["★ 中文人工定稿<br/>state.zh_final"])
+        F4["translate-en<br/>translator ＋ reviewer-language"]
+        F5["academic-english-editing<br/>英文潤稿 · 內建選用"]
+        H9(["★ 英文人工確認"])
+        F6["check-consistency（en）<br/>全量重跑"]
+        F1 -->|"major／minor"| F2 -->|"未收斂"| F1
+        F2 -->|"accept／覆核通過"| F3 --> H8 --> F4 --> F5 --> H9 --> F6
+    end
+
+    subgraph PH6["⑥ 投稿"]
+        direction TB
+        G1["submission-prep<br/>cover letter · 重現性打包"]
+        H10(["【請人工補】區塊逐項確認"])
+        G2["integrity-check<br/>presubmission"]
+        G3["最終 gate 檢查"]
+        G4["typeset<br/>docx／LaTeX · 雙匿名 · 行號"]
+        H11(["收尾人工確認<br/>state.submission.build"])
+        G1 --> H10 --> G2 --> G3 --> G4 --> H11
+    end
+
+    JM["journal-match<br/>選刊 · cascade"]
+
+    H2 --> B1
+    H4 --> D1
+    C2 --> D1
+    H5 --> E1
+    E4 --> F1
+    F6 --> G1
+    F2 -->|"reject"| JM --> F1
+    H11 --> SUB(["投稿（使用者）"])
+
+    class A1,A2,A3,A4,B1,B2,B5,C1,C2,D1,D2,D3,E1,E2,E3,F1,F2,F4,G1,G2,G4,JM,FORK step
+    class B3,B4,E4,F6,G3 mech
+    class F3,F5 opt
+    class H1,H2,H3,H4,H5,H6,H7,H8,H9,H10,H11,SUB gate
+    class PH1,PH2,PH3,PH4,PH5,PH6 phase
+
+    linkStyle default stroke:#94a3b8,stroke-width:1.4px
 ```
+
+`status` 不在流程線上——任何時點都能呼叫它掃描 artifacts、重算 fingerprint，指出第一個未通過或已過期的 gate 並導向對應 skill。route adapter 可把定量 `analyze-data` 換成質性 audit trail、proof audit、systematic-review synthesis 或 mixed-method integration，required gates 仍由 route 機械檢查。
+
+### 人工確認關卡
+
+| # | 關卡 | 所屬 skill | 確認什麼 | 不確認的後果 |
+|---|---|---|---|---|
+| 1 | route 確認 | `methodology-router` | 方法 adapter、required gates、interpretation limits | 不得進入 study-design 之後的硬關卡 |
+| 2 | protocol／plan 封存 | `study-design` | 逐項確認後才 seal，取得 content hash | 無 sealed plan，results 無法宣告鍵歸屬 |
+| 3 | 資料處置 | `data-audit` | 剔除／插補／重編碼／切分／用途限制 | 方向性選擇未留紀錄，分析失去可稽核性 |
+| 4 | 結果契合 | `analyze-data` | validation 限制、report 與圖表 | SQ 不得轉 `addressed` |
+| 5 | claims 確認 | `interpret-results` → `claim-audit` | 逐條主張、最強反方、限定語、evidence | `claims.yaml` 不得設 `confirmed: true`，不能開始寫稿 |
+| 6 | 圖表驗收 | `figure-design` | 訊息單一、自足、解析度、色盲檢視、有效位數 | manifest 的 `spec` 未定，submission-prep 無依據 |
+| 7 | 中文成稿 | `write-manuscript` | 全稿內容與數字標註 | 不成稿 |
+| 8 | ★ 中文定稿 | `peer-review`／`revise` 收斂後 | 中文最終版本 | `state.zh_final` 不成立，不得翻譯 |
+| 9 | ★ 英文確認 | `translate-en` 之後 | 英文稿語意與術語 | 不得進 check-consistency(en) |
+| 10 | 投稿包補件 | `submission-prep` | README 的【請人工補】區塊 | 重現性包留空出包 |
+| 11 | 排版收尾 | `typeset` | 產物清單、check_build、自引清單 | `state.submission.build` 不寫入 |
+
+★ 兩處是語言定稿點：潤稿站（`chinese-deai-editing`／`academic-english-editing`）可以略過，但**不能取代**這兩個人工確認。潤稿只改語言呈現，不得動數字、markers、citekey、claim strength 或 validation boundary；潤稿後必須建立新版本並重跑該語言的完整 consistency。
+
+除上表外，多數 skill 另有取捨性質的確認（`lit-review` 的搜尋關鍵字、`evaluate` 的 SQ 狀態變更、`evidence-synthesis` 的 protocol 封存、`write-supplementary` 的素材取捨、`journal-match` 的 target 與 cascade）。上表只列不確認就無法往下走的硬關卡。
 
 ## 核心設計
 
@@ -115,6 +210,7 @@ python3 tests/run_v071_regressions.py
 python3 tests/run_v072_regressions.py
 python3 tests/run_v073_regressions.py
 python3 tests/run_v080_regressions.py
+python3 tests/run_v081_regressions.py
 ```
 
 `tests/mini-project` 保留黃金答案；smoke 測試動態建立 v0.7 專案，驗證七種 adapter 的 plan／validation 契約、clean-room 重跑、資料稽核、results schema、evidence fingerprint、claim-audit、integrity 與中英文 consistency 的 source-staleness gate。腳本需要 Python 3.10+ 與 PyYAML；排版另依 typeset 說明使用 pandoc／LaTeX。
