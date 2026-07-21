@@ -58,11 +58,11 @@ def test_hook_wording_builtin() -> None:
 
 
 def test_docs_and_version() -> None:
-    # README：skills 數為 24，且記載內建英文潤稿站。
+    # README：skills 數為 25，且記載內建英文潤稿站。
     # 版號錨點刻意不放這裡——README 自 f349a6e 起不再帶版本史（全交給 CHANGELOG），
     # 在 README 斷言版號等於測試一個已不存在的契約。版號由下一行的 CHANGELOG 與
     # 最新一支回歸測試的 plugin.json 精確 pin 負責。
-    need("README.md", "Skills（24）", "academic-english-editing")
+    need("README.md", "Skills（25）", "academic-english-editing")
     # CHANGELOG：有 0.8.0 段並標註 provenance 與 Layer 4 排除
     need("CHANGELOG.md", "0.8.0", "academic-humanizer", "Layer 4")
     # 單調斷言：v0.8.0 的契約存在於 >= 0.8.0 的任何版本；後續升版不應弄壞本測試
@@ -78,7 +78,7 @@ def main() -> int:
     test_hook_wording_builtin()
     print("[regression] translate-en/status 掛點改為內建、中文仍外部: pass")
     test_docs_and_version()
-    print("[regression] README/CHANGELOG 0.8.0 + skills 24 + 版本單調斷言: pass")
+    print("[regression] README/CHANGELOG 0.8.0 + skills 25 + 版本單調斷言: pass")
     print("PASS v0.8.0 regressions")
     return 0
 

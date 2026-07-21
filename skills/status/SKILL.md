@@ -72,6 +72,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 - protocol/plans 缺或 hash 不符 → study-design；
 - data profile/audit 缺或 raw fingerprint 改變 → data-audit；
 - results／findings 變動、rerun 過期 → analyze-data → clean rerun → code-review → validate-results；
+- 腳本 crash／clean-room rerun 非預期失敗／`source_fingerprint` 查不出漂移來源／跨階段筆數不守恆，且根因未知 → `debug-pipeline`（流程線外；根因定位後把失效 gate 交回本 skill 分診）；
 - validation fail／過期 → validate-results 或 plan amendment；
 - evidence synthesis 缺／過期 → evidence-synthesis；
 - claims 未 audit／fingerprint 不符 → claim-audit；
