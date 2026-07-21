@@ -93,3 +93,11 @@ cases:
   expect: analyze-data
 - utterance: 審一下我的子問題拆解合不合理
   expect: evaluate
+- utterance: 這支分析腳本一直報錯，幫我找原因
+  expect: debug-pipeline
+- utterance: clean-room rerun 重跑失敗，重建不出結果
+  expect: debug-pipeline
+- utterance: fingerprint 莫名其妙變了，查一下哪個輸入動到
+  expect: debug-pipeline
+- utterance: Python 算完傳到 R 那一步筆數少了，哪裡掉的
+  expect: debug-pipeline

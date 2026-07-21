@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.9.0（2026-07-20）
+
+新增執行期故障根因定位 skill `debug-pipeline`。skills（24→**25**）；agents（18）與管線階段不變，無破壞性變更，故為 MINOR bump。
+
+1. **新增 `skills/debug-pipeline`**：把「腳本壞了慢慢試」提升成可稽核的單一根因流程——讀完整錯誤 → 穩定最小復現 → 以 `source_fingerprint` 定位近期變更層 → 元件邊界（含 Python↔R 交接）取證對照 manifest 樣本流向守恆 → 單一假說最小修補 → 三振後停手升級。填補既有缺口：`validate-results` 假設結果已可重建、`status` 只做分診、`check-consistency` 只管文稿，均不負責「run 壞了、根因未知」的診斷。流程線外定位，由執行／rerun／checker 失敗反應式觸發，不進主流程圖。
+2. **參考 `superpowers` 的三個 skill、逐項標註來源**：診斷程序主體——四階段流程（讀錯誤／穩定復現／查近期變更／單一假說最小修補）、多元件邊界取證、「連三次修不好就停下來質疑架構」——改寫自 `superpowers` v6.1.1（MIT）的 `systematic-debugging`，於 SKILL.md「出處」段標註；其中 Phase 4 首步由原「先寫 failing test」改為統計 pipeline 對應的「最小復現腳本」。本 skill 的撰寫規範（frontmatter／description 紀律、trigger-eval 測試法）參考 `superpowers` 的 `writing-skills`；規格化過程（先判斷該不該拆、先推薦再列選項、分節逐段確認）參考 `superpowers` 的 `brainstorming`。
+3. **academic-pipeline 專屬新增（非來自 superpowers）**：以 `source_fingerprint`／`data_fingerprint` 分層定位漂移、對照 manifest 樣本流向（flow/steps）守恆、診斷程式隔離於 `analysis/validation/`、「不得以縮小稽核範圍換轉綠」（承 0.8.1 教訓）、三振升級接既有 `decisions.yaml` D#／`study-design` amendment、需第二意見時複用既有 `reviewer-methods`（不新增 agent），以及 `status` 路由與流程線外定位。
+4. **文件**：`README.md` 元件清單 24→25、補流程線外旁註、新增「出處與致謝」段（點名 superpowers 與 academic-humanizer 的使用範圍，其餘為作者自行開發）；`skills/status/SKILL.md` 路由段新增 debug-pipeline 導向。
+5. **測試**：新增 `tests/run_v090_regressions.py`——斷言 skill 存在、frontmatter name／version、description 觸發與排除錨點、三個 superpowers 來源標註、`plugin.json == 0.9.0`、README「Skills（25）」與 debug-pipeline、出處段點名 superpowers／academic-humanizer、status 路由、trigger-evals 四例、CHANGELOG 0.9.0 provenance。新斷言先對未加 skill 的樹執行確認會失敗（測試有牙）。`run_v080_regressions.py` 的 README skills 數斷言由「Skills（24）」改為「Skills（25）」；`run_v081_regressions.py::test_version_pin` 由精確 `== "0.8.1"` 改為單調 `>= (0, 8, 1)`，當期精確版號改由 `run_v090` pin（沿用 0.7.3→0.8.0→0.8.1 的既有慣例）。既有六支測試全部通過。
 ## 0.8.1（2026-07-20）
 
 兩個確定性缺陷的修補。skills（24）、agents（18）與管線階段不變，無新功能、無破壞性變更，故為 PATCH bump。
