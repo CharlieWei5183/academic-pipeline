@@ -257,7 +257,7 @@ def test_docs_teach_the_quoted_form() -> None:
 
 def test_version_pin() -> None:
     meta = json.loads(text(".claude-plugin/plugin.json"))
-    assert meta["version"] == "0.8.1", meta["version"]
+    assert tuple(int(x) for x in meta["version"].split(".")) >= (0, 8, 1), meta["version"]
     # 依既有慣例：當期精確版號只由最新一支回歸測試 pin，前一支改為單調斷言
     prev = text("tests/run_v080_regressions.py")
     assert '== "0.8.0"' not in prev, "run_v080 仍精確 pin 0.8.0，升版會誤紅"
@@ -284,7 +284,7 @@ def main() -> int:
     test_docs_teach_the_quoted_form()
     print("[regression] methodology-router 範例已改為有引號寫法: pass")
     test_version_pin()
-    print("[regression] plugin.json 精確 pin 0.8.1 + run_v080 改單調: pass")
+    print("[regression] plugin.json 版本單調 >= 0.8.1 + run_v080 改單調: pass")
     print("PASS v0.8.1 regressions")
     return 0
 
