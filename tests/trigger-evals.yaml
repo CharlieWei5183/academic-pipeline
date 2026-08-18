@@ -101,3 +101,11 @@ cases:
   expect: debug-pipeline
 - utterance: Python 算完傳到 R 那一步筆數少了，哪裡掉的
   expect: debug-pipeline
+- utterance: 中文稿讀起來太口語，幫我改成學術語氣
+  expect: chinese-academic-editing
+- utterance: 把中文稿的 AI 味清掉
+  expect: chinese-academic-editing
+- utterance: 中文定稿前先潤一次稿
+  expect: chinese-academic-editing
+- utterance: 結果那段寫得不夠學術，幫我改寫
+  expect: chinese-academic-editing

@@ -96,10 +96,11 @@ metadata:
 
 ## 中文潤稿站掛點
 
-收斂後、使用者確認中文定稿前，偵測外部 user skill `chinese-deai-editing`：
+收斂後、使用者確認中文定稿前，呼叫內建 skill `chinese-academic-editing`（0.10.0 起隨附；選用，可略過但**不可取代**★中文人工定稿）：
 
-- 已安裝：建議先執行深度中文潤飾與去機械感；只可動語言呈現，不得改數字、`<!-- -->` 標記、`[@citekey]`、claim strength、validation boundary 或方法語意。產生新中文版本後，重跑 marker／numbers／citations／claims 及 full `check-consistency(zh)`。
-- 未安裝：自動略過，直接進中文人工定稿。
+- 清除中文 AI tells、把語域拉回學術書面體，並依其 Layer 4 校準結果與討論的陳述句型（效果量與不確定度同時報、不以裸 p 值作主句、限制節不得改成正面語氣、摘要不得移除正文保留的核心限定）。
+- 只可動語言呈現，不得改數字、`<!-- -->` 標記、`[@citekey]`、claim strength、validation boundary 或方法語意；發現 over-claim 或 `results.json` 缺鍵只**標記**回 `claim-audit`／`analyze-data`，不在潤稿站裁定。
+- 產生新中文版本後，重跑 marker／numbers／citations／claims 及 full `check-consistency(zh)`，再進★中文人工定稿。
 
 此站是選用外部掛點，不是 plugin 內建 skill；不得因未安裝而報錯。
 

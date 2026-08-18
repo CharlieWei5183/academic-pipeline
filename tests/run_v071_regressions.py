@@ -69,7 +69,11 @@ def test_static_contracts() -> None:
     )
     for rel in hook_files:
         text = (PLUGIN / rel).read_text(encoding="utf-8")
-        assert "chinese-deai-editing" in text, f"Chinese editing hook missing from {rel}"
+        # 0.10.0 起中文潤稿站內建化並更名為 chinese-academic-editing；本測試守的契約是
+        # 「四處都有中文潤稿掛點」，不是特定 skill 名（當期名稱由 run_v0100 pin）。
+        assert "chinese-academic-editing" in text or "chinese-deai-editing" in text, (
+            f"Chinese editing hook missing from {rel}"
+        )
 
     for rel in ("skills/peer-review/SKILL.md", "skills/revise/SKILL.md"):
         text = (PLUGIN / rel).read_text(encoding="utf-8")

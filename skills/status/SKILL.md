@@ -50,7 +50,7 @@ project-init
    每個完整 panel 輪：editor score → record_review_score.py → check_ledger 保險閥
    minor：editor 單人 re-check，不增加 round、不新增 score
    accept／minor 覆核通過：converged
-→ 中文潤稿（chinese-deai-editing，選用外部 user skill）
+→ 中文潤稿（chinese-academic-editing，內建·選用）
 → ★中文人工定稿
 → translate-en
 → 英文潤稿（academic-english-editing，內建·選用）
@@ -83,7 +83,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 - `state.review.scores` 缺本輪而存在 editor decision → `record_review_score.py` 回填後再跑 check_ledger；
 - 保險閥觸發 → 人工裁決並記 D#，不得自動續輪；
 - decision=reject → journal-match；
-- `state.review.converged=true` 且中文未定稿 → `chinese-deai-editing`（若已安裝）或直接中文人工定稿；
+- `state.review.converged=true` 且中文未定稿 → `chinese-academic-editing`（內建·選用）或直接中文人工定稿；
 - 中文已定稿但英文未確認 → translate-en；翻譯後可選 `academic-english-editing`；
 - 英文已確認但 full consistency 未過 → check-consistency(en)，**不是 submission-prep**；
 - submission 修改稿件使 fingerprint 改變 → 新版本＋check-consistency(en)；
@@ -115,7 +115,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 
 ## 選用潤稿站
 
-`academic-english-editing` 為本 plugin 內建 skill（0.8.0 起隨附）；`chinese-deai-editing` 仍為外部選用 user skill（已安裝才掛入、未安裝自動略過）。兩者都是選用潤稿站，只能改語言呈現，不得改數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後須重跑對應語言的完整 consistency。
+`academic-english-editing`（0.8.0 起隨附）與 `chinese-academic-editing`（0.10.0 起隨附）皆為本 plugin 內建 skill。兩者都是選用潤稿站，只能改語言呈現，不得改數字、markers、citekeys、claim strength、validation boundary 或方法語意；潤稿後須重跑對應語言的完整 consistency，且都不能取代該語言的人工確認點。外部 user skill `chinese-deai-editing` 不再是 pipeline 的中文潤稿站（語域基準是「像人整理過」，與稿件層不符），仍可獨立用於非稿件的中文材料。
 
 ## 人工確認點
 

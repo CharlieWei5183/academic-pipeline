@@ -3,7 +3,8 @@
 
 v0.8.0 新增 `skills/academic-english-editing`（源自 academic-humanizer v0.3.3 的
 Layer 1/2/3/5，逐節標註來源；刻意不納入會改動 claim strength 的 Layer 4，其職責留在
-claim-audit）。掛點合約與後續 gate 不變；中文潤稿站 `chinese-deai-editing` 維持外部選用。
+claim-audit）。掛點合約與後續 gate 不變。（當期中文潤稿站的歸屬已於 0.10.0 改為內建
+`chinese-academic-editing`，該條契約移交 run_v0100_regressions.py。）
 下列斷言以跨檔案錨點驗證此契約。當期精確版號的 pin 已於 0.8.1 移交
 run_v081_regressions.py，本檔改為單調 `>=` 斷言。
 """
@@ -48,21 +49,26 @@ def test_skill_present_and_provenance() -> None:
 def test_hook_wording_builtin() -> None:
     # translate-en 第 6 步：改為「內建」措辭，仍保留 skill 名與掛點合約
     need("skills/translate-en/SKILL.md", "academic-english-editing", "內建", "check-consistency(en)")
-    # status：英文潤稿站標為內建；中文潤稿站仍為外部選用
+    # status：英文潤稿站標為內建
     st = text("skills/status/SKILL.md")
     assert "academic-english-editing" in st and "內建" in st, "status: english hook not marked built-in"
-    assert "chinese-deai-editing" in st and "外部" in st, "status: chinese hook must stay external"
-    # 中文潤稿掛點未被誤刪（run_v071 也守這條，這裡再確認一次）
+    # 0.8.0 當期契約是「中文站仍為外部」；0.10.0 已把中文站內建化並更名，該條移交
+    # run_v0100_regressions.py::test_hook_wording_builtin。本檔改守不隨版本改變的部分：
+    # 中文潤稿掛點存在，且英文站的內建化未被弄壞。
     for rel in ("skills/peer-review/SKILL.md", "skills/revise/SKILL.md"):
-        need(rel, "chinese-deai-editing")
+        body = text(rel)
+        assert "chinese-academic-editing" in body or "chinese-deai-editing" in body, (
+            f"{rel}: Chinese editing hook missing"
+        )
 
 
 def test_docs_and_version() -> None:
-    # README：skills 數為 25，且記載內建英文潤稿站。
+    # README：記載內建英文潤稿站。skills 數是會變的數字（0.10.0 起為 26），
     # 版號錨點刻意不放這裡——README 自 f349a6e 起不再帶版本史（全交給 CHANGELOG），
     # 在 README 斷言版號等於測試一個已不存在的契約。版號由下一行的 CHANGELOG 與
     # 最新一支回歸測試的 plugin.json 精確 pin 負責。
-    need("README.md", "Skills（25）", "academic-english-editing")
+    # 當期數字由最新一支回歸測試 pin；本檔守的 0.8.0 契約與計數無關。
+    need("README.md", "academic-english-editing")
     # CHANGELOG：有 0.8.0 段並標註 provenance 與 Layer 4 排除
     need("CHANGELOG.md", "0.8.0", "academic-humanizer", "Layer 4")
     # 單調斷言：v0.8.0 的契約存在於 >= 0.8.0 的任何版本；後續升版不應弄壞本測試
@@ -78,7 +84,7 @@ def main() -> int:
     test_hook_wording_builtin()
     print("[regression] translate-en/status 掛點改為內建、中文仍外部: pass")
     test_docs_and_version()
-    print("[regression] README/CHANGELOG 0.8.0 + skills 25 + 版本單調斷言: pass")
+    print("[regression] README/CHANGELOG 0.8.0 + 版本單調斷言: pass")
     print("PASS v0.8.0 regressions")
     return 0
 

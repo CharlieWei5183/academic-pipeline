@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.10.0（2026-08-18）
+
+中文潤稿站由「選用外部 user skill」升為**本 plugin 內建 skill**，並補上結果／討論的呈現層陳述規格。
+skills（25→**26**）；agents（18）與管線階段不變。無破壞性變更，故為 MINOR bump。
+
+1. **新增 `skills/chinese-academic-editing`**：內建中文學術潤稿站，與 0.8.0 的英文站對稱——同一套掛點合約（只改語言呈現；不得動數字、`<!-- -->` markers、`[@citekey]`、claim strength、validation boundary、方法或限制語意；潤稿後重跑 numbers／citations／claims／marker 與 full `check-consistency(zh)`；不可取代★中文人工定稿）。層級骨架（Layer 1／2／3／5）對稱自 `academic-english-editing`，中文語境的 pattern、例句與規則為重新撰寫。
+2. **語域基準與外部 `chinese-deai-editing` 明確分野**：外部那支的目標讀感是「像人整理過」，且同時服務 Claude Code 產出的技術 .md，尺偏向「清楚、直接、可操作」；稿件層需要的是「像期刊論文」。本站寫死「去 AI 味不等於改得像講話」，兩者衝突時一律以學術語域為準。外部 skill 退出 pipeline 掛點，仍可獨立用於非稿件的中文材料。
+3. **新增 Layer 4「結果與討論的陳述規格」**（相對英文站的唯一新增層）：把「用學術語氣把結果講清楚」寫成可執行的呈現層規則——結果句型為「對象＋方向＋量值（帶 marker）＋不確定度＋出處」、不以裸 p 值作主句、效果量與不確定度同時報、`results.json` 缺鍵時**停下標記回 `analyze-data` 而非自行換算**、數字精度以 `display` 為準、結果節不解釋因果、限制節不得改成正面語氣、摘要不得移除正文保留的核心限定；並以四級強度對照表限制「同級可為行文替換、跨級一律不動」。**全部錨定 `write-manuscript` 第 4／5／6 步與 `check_numbers.py` 的既有豁免定義，不新增契約**；`write-manuscript` 改版時同步本層。
+4. **刻意不含 claim 強度調整與起草模式**：強度升降會改變 claim strength，違反潤稿站合約，職責留在 `claim-audit`／`interpret-results`；起草仍歸 `write-manuscript`，本站只潤既有稿。發現 over-claim 或 under-claim 只標記回上游。
+5. **掛點內建化**：`peer-review` 與 `revise` 的〈中文潤稿站掛點〉、`status` 的主流程線／路由判斷／〈選用潤稿站〉、README 的流程圖與人工確認表由「偵測外部 user skill、未安裝自動略過」改為「本 plugin 內建、選用」。掛點合約與後續 gate 完全不變。
+6. **術語治理**：Layer 2.12 的中國大陸用語正規化清單明訂三條例外優先——`project.yaml` 的 glossary 優先（衝突只標記、不自行改 glossary）、物理術語「質量」（mass）不改、台灣學術已通用者（數據／優化／介面）保留。
+7. **出處與致謝**：README 該節由兩處增為三處，補記 `chinese-academic-editing` 的衍生範圍（骨架對稱自本 plugin 英文站，其源頭為 `academic-humanizer` v0.3.3／MIT；中文 pattern 清單部分參考作者自有 user skill `chinese-deai-editing`；掛點合約與 Layer 4 為本 plugin 專屬新增）。
+8. **測試**：新增 `tests/run_v0100_regressions.py`——驗內建 skill 存在、掛點合約錨點、語域分野措辭、Layer 4 的十二個規則錨點、四處掛點改為內建且外部 skill 不再被當成中文潤稿站、潤稿後 gate 未被放寬、trigger-eval 新增例句且不搶走 `write-manuscript`／`translate-en`／`check-consistency` 的既有歸屬、README skills 26、`plugin.json` 精確為 `0.10.0`。`run_v071` 的中文掛點斷言由特定 skill 名放寬為「掛點存在」；`run_v080` 的「中文站維持外部」斷言移交本檔，其 README skills 計數斷言一併放寬（計數屬當期契約，不該由舊測試 pin）；`run_v090` 的精確版號 pin 由 `== "0.9.0"` 改為單調 `>= (0,9,0)`、README 計數斷言同步放寬（沿用 0.7.3→0.8.0→0.8.1→0.9.0 的 pin 交接慣例）。既有七支測試全部通過。
+
 ## 0.9.0（2026-07-20）
 
 新增執行期故障根因定位 skill `debug-pipeline`。skills（24→**25**）；agents（18）與管線階段不變，無破壞性變更，故為 MINOR bump。
