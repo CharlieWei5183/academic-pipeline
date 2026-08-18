@@ -118,10 +118,11 @@ canonical writer 是 `record_review_score.py`；canonical reader 是 `check_ledg
 
 ## 中文潤稿站掛點
 
-收斂後、中文人工定稿前，偵測外部 user skill `chinese-deai-editing`：
+收斂後、中文人工定稿前，呼叫內建 skill `chinese-academic-editing`（0.10.0 起隨附；選用，不可取代★中文人工定稿）：
 
-- 已安裝：建議先跑，產生新中文版本；只可改語言呈現，不得改數字、結果／主張標記、citekey、claim strength、validation boundary、方法或限制語意。潤稿後重跑 numbers、citations、claims、marker 與 full `check-consistency(zh)`。
-- 未安裝：自動略過，不報錯。
+- 產生新中文版本；只可改語言呈現，不得改數字、結果／主張標記、citekey、claim strength、validation boundary、方法或限制語意。
+- 其 Layer 4 校準結果與討論的陳述句型；發現 over-claim 或 `results.json` 缺鍵只標記回 `claim-audit`／`analyze-data`。
+- 潤稿後重跑 numbers、citations、claims、marker 與 full `check-consistency(zh)`。
 
 使用者仍須親自確認 `state.zh_final`；潤稿站不能取代人工定稿。
 

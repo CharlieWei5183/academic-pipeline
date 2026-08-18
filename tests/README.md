@@ -119,7 +119,7 @@ python3 tests/run_v071_regressions.py
 - v0.6 已有 `{last_consistency: {result: pass, version: vN}}` 時，`check_gate.py` 相容模式通過，不要求 `gate_fingerprint`／`report`；明確 `--strict` 或 0.7.x 專案仍阻擋缺欄。
 - editor 四段分數帶、新穎性／定位敘事子問題及 `REVIEW_SCORE` block 均存在。
 - 每個完整 panel 輪可由 `record_review_score.py` 寫入且依 round 去重；兩輪改善不足時 `check_ledger.py` 確實輸出邊際遞減保險閥。
-- README、status、peer-review、revise 都保留外部 `chinese-deai-editing` 掛點。
+- README、status、peer-review、revise 都保留中文潤稿掛點（0.10.0 起為內建 `chinese-academic-editing`；skill 名的當期契約由 run_v0100 pin）。
 
 ## run_v072_regressions.py
 
@@ -135,6 +135,19 @@ v0.8.1 的兩個確定性缺陷修補，以**實際執行腳本**斷言行為（
 - `rerun_all.py`、`check_gate.py`、`plan_common.content_hash`：`project.yaml`／plan 內的裸日期（`routed_at: 2026-07-20`、`created_at: 2026-07-14`）不得崩潰，且與有引號版本產生**相同** fingerprint／`content_hash`。
 - 全 repo 掃描：範本與文件不得再出現裸日期寫法（`*_at`／`date`／`*_on`）。
 - `methodology-router/SKILL.md` 範例已改為有引號寫法。
-- `plugin.json` 精確 pin `0.8.1`，且 `run_v080_regressions.py` 已改為單調斷言。
+- `plugin.json` 版號單調 `>= 0.8.1`（當期精確 pin 由最新一支回歸測試負責），且 `run_v080_regressions.py` 已改為單調斷言。
 
 注意 `run_v07_smoke.py` 寫入的 `routed_at` 是 Python 字串（序列化成有引號的 YAML），因此**不會**覆蓋無引號路徑；缺陷 2 能在全綠狀態下存活正是這個原因。測試若只走自己寫入的那條路徑，就守不住文件所教的那條。
+
+## run_v0100_regressions.py
+
+v0.10.0 把中文潤稿站由外部 user skill 升為內建 `chinese-academic-editing`，以跨檔案錨點斷言：
+
+- 內建 skill 存在，且掛點合約完整——只改語言呈現、不得動數字／markers／citekey／claim strength／validation boundary；潤稿後 full `check-consistency(zh)`；不可取代★中文人工定稿。
+- **語域分野**：寫死「去 AI 味不等於改得像講話」與「像期刊論文」，避免退回外部 `chinese-deai-editing` 的口語尺；且刻意不含 claim 強度調整與起草模式。
+- **Layer 4（結果與討論的陳述規格）**的十二個規則錨點：不以裸 p 值作主句、效果量與不確定度同時報、缺鍵回 `analyze-data` 且不得自行換算、精度以 `display`／`analysis.rounding` 為準、限制節不得改成正面語氣、摘要不得移除正文核心限定、強度對照表「跨級一律不動」。這些全部錨定 `write-manuscript` 與 `check_numbers.py` 的既有契約——**Layer 4 若被改寬，本測試會失敗**。
+- README／status／peer-review／revise 四處掛點改為內建，且 peer-review／revise 不再把外部 `chinese-deai-editing` 當成中文潤稿站；潤稿後 gate 未被放寬。
+- trigger-eval 新增四條例句，且 `write-manuscript`／`translate-en`／`check-consistency` 的既有歸屬未被搶走。
+- README skills 數為 26；`plugin.json` 精確 pin `0.10.0`，`run_v090_regressions.py` 已改為單調斷言。
+
+有牙驗證：未修補版本下 `test_hook_wording_builtin`／`test_trigger_evals_no_collision`／`test_docs_and_version` 三段各自失敗；只放 skill 檔而不改掛點與文件時，前兩段仍失敗。
