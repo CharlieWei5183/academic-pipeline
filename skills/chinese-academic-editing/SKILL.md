@@ -1,18 +1,8 @@
 ---
 name: chinese-academic-editing
-description: >
-  中文學術稿件的潤稿站：清除中文 AI 生成痕跡（AI tells）、把語域拉回學術書面體、
-  校準結果與討論的陳述句型，一律不動數字、`<!-- -->` markers、citekey、claim strength、
-  validation boundary 與方法／限制語意。
-  Use when 中文潤稿、潤飾中文稿、去中文 AI 味、中文稿太口語、把中文稿改成學術語氣、
-  中文稿讀起來不像論文、Chinese academic editing、de-AI the Chinese manuscript，
-  或在 academic-pipeline 的 peer-review／revise 收斂之後、★中文人工定稿之前。
-  不用於英文稿（academic-english-editing）、經費提案（grant-proposal-editing）、
-  非稿件的技術 .md 或部落格文字（外部 chinese-deai-editing）；也不改論點、數據或主張強度。
-license: MIT
+description: 中文學術潤稿站。Use when 中文潤稿、去中文 AI 味、chinese-academic-editing。
 metadata:
-  version: "0.10.0"
-allowed-tools: [Read, Write, Edit, Grep, Glob, AskUserQuestion]
+  version: "0.10.2"
 ---
 
 # 中文潤稿站（chinese-academic-editing）
