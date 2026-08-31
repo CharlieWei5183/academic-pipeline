@@ -121,7 +121,7 @@ def test_docs_and_version() -> None:
     need("CHANGELOG.md", "0.10.0", "chinese-academic-editing", "Layer 4")
     # 當期精確版號由本檔 pin
     meta = json.loads(text(".claude-plugin/plugin.json"))
-    assert meta["version"] == "0.10.0", meta["version"]
+    assert tuple(int(x) for x in meta["version"].split(".")) >= (0, 10, 0), meta["version"]
     # 依既有慣例：前一支回歸測試改為單調斷言
     prev = text("tests/run_v090_regressions.py")
     assert '== "0.9.0"' not in prev, "run_v090 仍精確 pin 0.9.0，升版會誤紅"
