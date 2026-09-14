@@ -31,6 +31,14 @@ metadata:
 
 對 v0.7.x 專案執行適用 checker；state 與 artifact 衝突時以 checker 為準並修復快取。決策日誌 warning 不擋路，但 gate blocker 不能跳過。
 
+重算進度時間軸 PROGRESS.md（唯讀 SSOT，只寫該檔）：
+
+```bash
+python3 <skill路徑>/scripts/render_progress.py <root>
+```
+
+renderer 只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/PROGRESS.md`；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
+
 ## v0.7.1 主流程
 
 ```text
