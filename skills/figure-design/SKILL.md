@@ -34,7 +34,7 @@ metadata:
 3. **Caption 撰寫**：每張圖與每張表的 caption 寫入 manifest.json 的 `caption` 欄位——自足（不讀內文能懂）、逐面板說明、n 與誤差棒含義標明。寫作階段直接取用；check-consistency 據此核對圖文一致。
 
 4. **驗收（人工確認點）**：逐圖逐表對照 checklist（訊息單一、自足、解析度、字級、色盲檢視、表格三線式與有效位數）呈使用者確認。確認後更新 manifest（含 `spec`：寬 mm、dpi、格式）——submission-prep 的圖表項以此為準。收尾申報一行：「本階段更新：figures/manifest.json <N> 筆（caption／spec）；state 無變更則申報「無狀態變更」；下一站：<skill 名>」。
-5. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: figure-design`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
+5. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: figure-design`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`exec_issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 exec_issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
 
 ## 規則
 

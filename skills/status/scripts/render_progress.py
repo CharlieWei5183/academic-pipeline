@@ -13,7 +13,7 @@
 
 每筆決策一列，欄位: 編號、日期、階段、方法、問題、執行憑據。缺漏值一律顯示 unknown，
 不代填、不猜; 執行憑據缺漏留白。問題欄 = question（決策落在哪一層: main／SQ#／AQ#
-或自由文字）; issue 非空時寫成「<question> › <issue>」（question 缺時「unknown › <issue>」）。
+或自由文字）; exec_issue 非空時寫成「<question> › <exec_issue>」（question 缺時「unknown › <exec_issue>」）。
 執行憑據 = evidence 清單 ＋ links 裡 results.<key>
 反查 results.json（script／run_id／data_fingerprint）。已知日期（YYYY-MM-DD）升冪，
 同日依檔案順序; 日期缺或非 ISO 的列放最後、依檔案順序。不過濾任何記錄。
@@ -195,7 +195,7 @@ def build_rows(decisions: list, results, results_present: bool, results_ok: bool
         date_known = bool(date_s) and DATE_RE.fullmatch(date_s) is not None
         method = _or_unknown(d.get('method'))
         question = _or_unknown(d.get('question'))
-        issue = _text(d.get('issue'))
+        exec_issue = _text(d.get('exec_issue'))
         evidence = _evidence_items(d, results, results_present, results_ok, warnings, did)
         rows.append({
             'id': did,
@@ -204,7 +204,7 @@ def build_rows(decisions: list, results, results_present: bool, results_ok: bool
             'stage': _or_unknown(d.get('stage')),
             'method': method,
             'question': question,
-            'issue': issue,
+            'exec_issue': exec_issue,
             'evidence': evidence,
             'checkpoint': _text(d.get('checkpoint')),
             'complete': date_known and method != UNKNOWN and question != UNKNOWN
@@ -218,8 +218,8 @@ def build_rows(decisions: list, results, results_present: bool, results_ok: bool
 # ---------- 渲染 ----------
 
 def _question_cell(row: dict) -> str:
-    """問題欄: question; issue 非空時「<question> › <issue>」。"""
-    return f"{row['question']} › {row['issue']}" if row['issue'] else row['question']
+    """問題欄: question; exec_issue 非空時「<question> › <exec_issue>」。"""
+    return f"{row['question']} › {row['exec_issue']}" if row['exec_issue'] else row['question']
 
 
 def _cell(text: str) -> str:
@@ -307,7 +307,7 @@ def render_markdown(rows: list[dict], title: str, root: Path, generated_at: str,
         f"資料來源：{dec_src}、project.yaml（{presence('project')}）、"
         f"{RESULTS_REL}（{presence('results')}）。",
         '欄位缺漏顯示 `unknown`；執行憑據缺漏留白。',
-        '問題欄＝question；有執行問題時寫成「question › issue」。',
+        '問題欄＝question；有執行問題時寫成「question › exec_issue」。',
         '',
         '## 記錄表',
         '',
