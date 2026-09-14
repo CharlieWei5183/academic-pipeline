@@ -353,7 +353,7 @@ def test_validate_graph_figure_rules() -> None:
 
 
 def test_docs_registered() -> None:
-    need("CHANGELOG.md", "## 0.12.0（未發布）", "figure", "depicts", "--embed-figures", "figures_unreviewed")
+    need("CHANGELOG.md", "## 0.12.0（", "figure", "depicts", "--embed-figures", "figures_unreviewed")
     need("skills/status/SKILL.md", "--embed-figures", "圖表")
     need("tests/README.md", "run_v0120_regressions.py", "depicts", "--embed-figures")
     need("README.md", "run_v0120_regressions.py")
