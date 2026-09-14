@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.14.1（未發布）
+## 0.14.1（2026-09-14）
 
 進度圖加「問題 id 別名」：主問題降為附錄問題（例：SQ1 → AQ2）後，`analysis/plans/index.yaml` 的舊版條目、決策 `links`、validation item 的 `sq` 仍寫舊 id，里程與關聯圖都把它們併進現行問題，不再造一個「goals 無此問題」的占位節點。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位）。
 
