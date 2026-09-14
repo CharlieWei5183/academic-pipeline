@@ -69,3 +69,5 @@ python3 <skill路徑>/scripts/check_adapter_validation.py <root>
 ## 收尾
 
 申報：「本階段更新：state.analysis.validation → <pass/qualified>（<results/source> fingerprint <...>）；下一站：evaluate（result-fit）」。
+
+收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: validate-results`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

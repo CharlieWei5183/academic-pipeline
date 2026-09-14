@@ -64,6 +64,7 @@ python3 <skill路徑>/scripts/check_coverage.py project.yaml analysis/results.js
 - goals 變更時，使 plans、validation、claims、稿件 consistency 依影響範圍失效。
 - **收尾更新快照**：本輪檢核與使用者逐條確認完成後，重跑第一層腳本並加 `--update-snapshot`，把現行 goals 寫入 `evaluations/goals-snapshot.json`——確認過的改動才進快照，下一輪的比對基準才乾淨。
 - 收尾申報一行：「本階段更新：<SQ status／state.last_full_evaluation> <舊值>→<新值>（無則「無狀態變更」）；下一站：<skill 名>」。
+- 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: evaluate`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
 
 ## 規則
 

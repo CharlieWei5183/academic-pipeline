@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""決策日誌檢核（確定性）: decisions.yaml 的 schema 與指向有效性。
+"""決策日誌檢核（確定性）: decisions.yaml 的 schema、指向有效性與階段覆蓋。
 
 用法: python3 check_decisions.py <decisions.yaml> <project.yaml>
         [--results <results.json>] [--claims <claims.yaml>]
@@ -8,14 +8,24 @@
 
 檢查:
 - id 形如 D-<三位連號> 且連號、唯一; 必填欄位（id/date/stage/checkpoint/decision/reason）
-- stage 屬 skill 名詞彙表
+- date 經 str() 後須為 ISO 8601（YYYY-MM-DD）
+- stage 屬 skill 名詞彙表（STAGES）
+- 選填欄位型別: method / problem 為字串; evidence 為字串清單
 - links 指向存在的對象: SQ id / results 鍵 / claim id / issue id / E# / manifest 步驟(P#) / D#
   （對應來源檔未提供或不存在時, 該類指向列 info 不驗）
 - supersedes 指向存在的 D#
+- 階段覆蓋: project.yaml 的 state 已有某 stage 的紀錄（判準見 STATE_COVERAGE）,
+  決策日誌卻沒有任何該 stage 的條目 → WARNING（各 stage 收尾須記一筆
+  checkpoint 為 STAGE_CLOSE_CHECKPOINT 的 D#; 進度時間軸以此為資料來源）
+- 統計: 各階段筆數、階段收尾條目數
 
 決策日誌是紀錄不是關卡: 一律列 WARNING 請使用者修, 不擋管線（exit 0;
 檔案無法解析才 exit 2）。decisions.yaml 不存在 → info, exit 0（回溯相容）。
+新欄位（method / problem / evidence）與階段收尾條目皆為選填, 舊專案缺欄位只列
+WARNING 或 INFO, 不改 exit code。
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -33,8 +43,45 @@ STAGES = {
     'evidence-synthesis', 'evaluate', 'interpret-results', 'claim-audit',
     'figure-design', 'write-manuscript', 'write-supplementary',
     'check-consistency', 'peer-review', 'revise', 'translate-en',
-    'submission-prep', 'journal-match', 'status', 'typeset',
+    'submission-prep', 'journal-match', 'status', 'typeset', 'debug-pipeline',
 }
+
+# 各 stage 收尾必記的那一筆 D# 固定用此 checkpoint 字串; 進度時間軸 renderer 以此比對。
+STAGE_CLOSE_CHECKPOINT = '階段收尾'
+
+DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
+
+# 階段覆蓋表: (stage, project.yaml state 內的路徑, 判準種類, 判準參數)。
+# 判準種類:
+#   any_field     路徑節點為 dict, 且任一列出的欄位「非空」（字串非空白、清單或 dict 非空、
+#                 數字 > 0、日期物件視為非空）
+#   any_dict      路徑節點為 dict, 且任一列出的欄位為非空 dict
+#   nonempty_dict 路徑節點本身為非空 dict
+#   nonempty      路徑節點本身非空（同 any_field 的非空定義）
+#   num_gt0       路徑節點為 dict, 且指定欄位為數字且 > 0
+# state 缺、為空或型別不對一律視為「無紀錄」。表中沒有的 stage（project-init、
+# figure-design、revise、journal-match、status、debug-pipeline）不做覆蓋檢查。
+STATE_COVERAGE = (
+    ('methodology-router', 'methodology', 'any_field', ('result', 'route', 'at')),
+    ('integrity-check', 'integrity', 'any_dict', ('prestudy', 'presubmission')),
+    ('study-design', 'study_design', 'any_field',
+     ('result', 'protocol', 'at', 'active_plans')),
+    ('data-audit', 'data_audit', 'any_field', ('result', 'at')),
+    ('lit-review', 'literature', 'any_field', ('updated_at',)),
+    ('evidence-synthesis', 'evidence_synthesis', 'any_field', ('result', 'at')),
+    ('analyze-data', 'analysis.rerun', 'nonempty_dict', ()),
+    ('validate-results', 'analysis.validation', 'nonempty_dict', ()),
+    ('evaluate', 'last_full_evaluation', 'any_field', ('id', 'result')),
+    ('interpret-results', 'claims', 'num_gt0', ('version',)),
+    ('claim-audit', 'claim_audit', 'any_field', ('result', 'at')),
+    ('write-manuscript', 'zh_latest', 'nonempty', ()),
+    ('write-supplementary', 'si_latest', 'nonempty', ()),
+    ('check-consistency', 'last_consistency', 'any_field', ('result', 'at')),
+    ('peer-review', 'review', 'num_gt0', ('round',)),
+    ('translate-en', 'en_final', 'any_field', ('version',)),
+    ('submission-prep', 'submission.prep', 'nonempty_dict', ()),
+    ('typeset', 'submission.build', 'nonempty_dict', ()),
+)
 
 
 def get_arg(argv, flag):
@@ -48,6 +95,67 @@ def get_arg(argv, flag):
 def load_yaml(path):
     return yaml.safe_load(open(path, encoding='utf-8')) or {} if \
         path and os.path.exists(path) else None
+
+
+def _present(v) -> bool:
+    """「非空」的統一定義（見 STATE_COVERAGE 註解）。"""
+    if v is None or isinstance(v, bool):
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    if isinstance(v, (list, dict, tuple, set)):
+        return len(v) > 0
+    if isinstance(v, (int, float)):
+        return v > 0
+    return True  # datetime.date 等物件
+
+
+def _is_num_gt0(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+
+def _walk(state, path: str):
+    node = state
+    for seg in path.split('.'):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(seg)
+    return node
+
+
+def state_has_record(state, path: str, kind: str, args) -> bool:
+    """依 STATE_COVERAGE 的一列判斷該 stage 在 project.yaml state 是否已有紀錄。"""
+    node = _walk(state, path)
+    if kind == 'nonempty_dict':
+        return isinstance(node, dict) and len(node) > 0
+    if kind == 'nonempty':
+        return _present(node)
+    if not isinstance(node, dict):
+        return False
+    if kind == 'any_field':
+        return any(_present(node.get(k)) for k in args)
+    if kind == 'any_dict':
+        return any(isinstance(node.get(k), dict) and len(node.get(k)) > 0
+                   for k in args)
+    if kind == 'num_gt0':
+        return any(_is_num_gt0(node.get(k)) for k in args)
+    return False
+
+
+def coverage_warnings(proj, decisions) -> list[str]:
+    """state 已有紀錄、決策日誌卻無該 stage 條目 → 一則 WARNING。"""
+    state = proj.get('state') if isinstance(proj, dict) else None
+    if not isinstance(state, dict) or not state:
+        return []
+    logged = {str(d.get('stage') or '') for d in decisions if isinstance(d, dict)}
+    out = []
+    for stage, path, kind, args in STATE_COVERAGE:
+        if stage in logged:
+            continue
+        if state_has_record(state, path, kind, args):
+            out.append(f'{stage}: project.yaml state 已有紀錄，但決策日誌無此 stage '
+                       f'條目（收尾須記 D#）')
+    return out
 
 
 def main():
@@ -100,8 +208,22 @@ def main():
         for f in ('date', 'stage', 'checkpoint', 'decision', 'reason'):
             if not str(d.get(f) or '').strip():
                 warnings.append(f'{did}: 必填欄位 {f} 為空')
+        # PyYAML 會把裸日期讀成 datetime.date, 經 str() 後仍為 YYYY-MM-DD
+        date_s = str(d.get('date') or '').strip()
+        if date_s and not DATE_RE.fullmatch(date_s):
+            warnings.append(f'{did}: date 須為 ISO 8601 YYYY-MM-DD（實際 "{date_s}"）')
         if d.get('stage') and d.get('stage') not in STAGES:
             warnings.append(f'{did}: stage "{d.get("stage")}" 不在 skill 名詞彙表')
+        # 選填欄位型別（舊條目缺欄位不報）
+        for f in ('method', 'problem'):
+            if d.get(f) is not None and not isinstance(d.get(f), str):
+                warnings.append(f'{did}: {f} 須為字串（實際 {type(d.get(f)).__name__}）')
+        ev = d.get('evidence')
+        if ev is not None:
+            if not isinstance(ev, list):
+                warnings.append(f'{did}: evidence 須為字串清單（實際 {type(ev).__name__}）')
+            elif any(not isinstance(x, str) for x in ev):
+                warnings.append(f'{did}: evidence 的元素須全為字串')
         sup = str(d.get('supersedes') or '').strip()
         if sup and sup not in d_ids and sup not in \
                 {str(x.get('id')) for x in decisions}:
@@ -148,12 +270,18 @@ def main():
         if sorted(nums) != expect:
             warnings.append(f'id 連號中斷: 實際 {sorted(nums)}')
 
+    # 階段覆蓋: state 已有紀錄卻無對應 stage 條目
+    warnings.extend(coverage_warnings(proj, decisions))
+
     print(f'=== check_decisions: {dec_path} ===')
     by_stage = {}
     for d in decisions:
         by_stage[d.get('stage', '?')] = by_stage.get(d.get('stage', '?'), 0) + 1
     print('各階段筆數: ' + (', '.join(f'{k}:{v}' for k, v in
           sorted(by_stage.items())) or '（空）'))
+    n_close = sum(1 for d in decisions
+                  if str(d.get('checkpoint') or '').strip() == STAGE_CLOSE_CHECKPOINT)
+    print(f'階段收尾條目: {n_close}/{len(decisions)}')
     for w in warnings:
         print(f'WARNING {w}')
     for i in infos:

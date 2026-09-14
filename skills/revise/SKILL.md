@@ -133,3 +133,5 @@ canonical writer 是 `record_review_score.py`；canonical reader 是 `check_ledg
 「本階段更新：state.zh_latest v3→v4；results/validation/claims/consistency 因 plan amendment 重建；state.review.scores round 2 已驗證存在；下一站：peer-review。」
 
 固定加註：收斂只代表虛擬審稿停止，不等於真實期刊 accept。
+
+收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: revise`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

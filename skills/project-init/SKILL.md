@@ -42,23 +42,28 @@ metadata:
    └── submission/
    ```
 
-5. **建立決策日誌**：建立空的 `decisions.yaml`（研究決策的「為什麼」的單一落點，既有帳本記「是什麼」）。append-only：修正舊決策以新條目填 `supersedes`，不改寫舊條目。
+5. **建立決策日誌**：建立空的 `decisions.yaml`（研究決策的「為什麼」的單一落點，既有帳本記「是什麼」）。append-only：修正舊決策以新條目填 `supersedes`，不改寫舊條目。收尾強制記錄的規則見各 skill 收尾：每個 pipeline stage skill 收尾時各追加一筆 `checkpoint: 階段收尾` 的條目，照建議原樣通過也要記。
 
    ```yaml
    # 決策日誌——研究決策的「為什麼」的單一落點（既有帳本記「是什麼」）。
-   # 只記三類：(a) 人工確認點附帶的取捨、條件或修改（照建議原樣通過可不記）;
+   # 只記四類：(a) 人工確認點附帶的取捨、條件或修改（照建議原樣通過可不記）;
    # (b) 使用者推翻 agent 建議（註明理由）; (c) 方向性選擇（資料剔除或插補、
-   # goals 增修、審稿意見反駁定案、保險閥裁決、persona profile 核可）。
+   # goals 增修、審稿意見反駁定案、保險閥裁決、persona profile 核可）;
+   # (d) 階段收尾：每個 pipeline stage skill 收尾時各記一筆，checkpoint 固定寫「階段收尾」，
+   # 照建議原樣通過也要記——(a) 的「可不記」不適用於 (d)。
    # v0.7 新關卡同樣適用：methodology route 的選定與推翻、protocol/plan amendment、
    # data-audit 處置、validation qualified 的接受、claim 分級的推翻、integrity 例外。
    # 條目 schema：
    #   - id: D-014            # D-<三位連號>
-   #     date: 2026-07-10
+   #     date: "2026-07-10"   # ISO 8601（YYYY-MM-DD），加引號寫成字串
    #     stage: analyze-data  # 產生決策的 skill 名
    #     checkpoint: 結果評估確認
    #     decision: ""         # 一句話
    #     reason: ""           # 展開的理由
    #     rejected: ""         # 選填：被否決的替代方案
+   #     method: ""           # 選填：本決策採用的方法或做法（一句話）
+   #     problem: ""          # 選填：本決策要解決的問題（一句話）
+   #     evidence: []         # 選填：執行憑據——指令、腳本路徑、fingerprint 或輸出檔路徑（字串清單）
    #     links: []            # SQ / results 鍵 / claim / issue / E# / P# / V# / D#
    #     supersedes: ""       # 選填：修正舊決策時填原 D#
    decisions: []
@@ -74,3 +79,4 @@ metadata:
 - 專案內所有路徑引用一律相對於專案根目錄。
 - 舊專案不自動升版。遷移到 v0.7 時先備份，再由 status 盤點缺失 artifacts；一旦將 `pipeline.version` 設為 0.7.3，新硬關卡即生效。`appendix_questions` 為附加、可選欄位（缺省視同 `[]`），對舊專案回溯相容。
 - 收尾申報：「本階段更新：pipeline.version → 0.7.3；goals 寫入 <N> 個 SQ；下一站：methodology-router」。
+- 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: project-init`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

@@ -50,3 +50,5 @@ plugin 不能核發倫理許可、替全體作者同意、或自行宣稱通過�
 ## 收尾
 
 申報：「本階段更新：state.integrity.<stage> → <result>；下一站：<study-design / submission-prep>」。
+
+收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: integrity-check`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

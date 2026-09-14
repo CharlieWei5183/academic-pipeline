@@ -48,6 +48,7 @@ literature-scout 負責搜尋、取得、撤稿／版本檢查、筆記、refere
    - **寫入者分工（單一寫入者，兩邊不重複寫）**：evidence-synthesis 走 `focused` 模式的 SQ，links 由**本 skill 在此步驟**寫入；走 `systematic`／`scoping`／`meta-analysis`（系統性回顧／統合分析路線，文獻本身即研究主體）的 SQ，links 改由 **evidence-synthesis 在其確定性檢核通過後**寫入，本 skill 只交付 matrix 候選清單，**不寫 links**。
 4. **literature 時戳**：寫入 `state.literature: {updated_at: <日期>, mode: 全}`——peer-review 的 matrix 新鮮度檢查（逾六個月）讀此欄，取代不可靠的檔案 mtime。
 5. **收尾申報**：「本階段更新：literature 搜尋與 matrix → <日期>；evidence synthesis → <pass/待執行>；文獻型 SQ links → <已補 N 條／由 evidence-synthesis 寫入>（另列 goals 變更，若有）；下一站：evidence-synthesis／evaluate」。
+6. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: lit-review`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
 
 ## 增補模式
 
