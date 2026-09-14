@@ -4,7 +4,7 @@
 用法: python3 render_progress.py <project-root> [--dry-run] [--json]
 
 讀取（只讀）: <root>/project.yaml、<root>/decisions.yaml、<root>/analysis/results.json
-寫入: 只寫 <root>/PROGRESS.md（一張記錄表＋一個 mermaid timeline＋統計）
+寫入: 只寫 <root>/PROGRESS.md（一張記錄表＋一個 mermaid gantt 里程碑圖＋統計）
 
 旗標:
 - --dry-run  不寫檔；單獨使用時把整份 PROGRESS.md 印到 stdout
@@ -18,9 +18,13 @@
 反查 results.json（script／run_id／data_fingerprint）。已知日期（YYYY-MM-DD）升冪，
 同日依檔案順序; 日期缺或非 ISO 的列放最後、依檔案順序。不過濾任何記錄。
 
-mermaid timeline: 同日合成一個 period，事件文字為「<stage>：<method>」（截 40 字）。
-標籤含 mermaid 不安全字元（半形 : ; # % ` " < > { } \\ 與換行）時整個區塊不產出，
-改為一句說明並印 WARNING; 不為此改動或過濾任何列。
+mermaid gantt 里程碑圖: 一筆一列（milestone, <YYYY-MM-DD>, 0d），section 為 question——
+順序 main → SQ#／AQ# 依整數自然序（先 SQ 後 AQ）→ 其他自由文字依字串序 → unknown 最後;
+section 內依已知日期升冪、同日依檔案順序。列標籤「<id> <stage>：<method>」（截 40 字），
+exec_issue 不進圖。日期未知或非 ISO 的列不入圖，圖下另列「無日期未入圖：<id>…」;
+全部列都無已知日期則不產圖。專案標題、section 名或列標籤含 mermaid 不安全字元
+（半形 : ; # % ` " < > { } \\ 與換行）時整個區塊不產出，改為一句說明並印 WARNING;
+不為此改動或過濾任何列。
 
 exit code: 0 完成（缺欄位、缺 decisions.yaml、空 decisions、缺 project.yaml、
 缺 results.json 都不是錯誤）; 2 BLOCKER（專案根目錄不存在、decisions.yaml 存在但
@@ -228,8 +232,21 @@ def _cell(text: str) -> str:
 
 
 def _label(row: dict) -> str:
-    text = f"{row['stage']}：{row['method']}"
+    """gantt 列標籤「<id> <stage>：<method>」, 超過 LABEL_MAX 字截斷加「…」。"""
+    text = f"{row['id']} {row['stage']}：{row['method']}"
     return text[:LABEL_MAX] + '…' if len(text) > LABEL_MAX else text
+
+
+def _section_key(name: str):
+    """section 排序: main → SQ#（整數）→ AQ#（整數）→ 其他自由文字（字串序）→ unknown。"""
+    if name == 'main':
+        return (0, 0, '')
+    m = re.fullmatch(r'(SQ|AQ)(\d+)', name)
+    if m:
+        return (1 if m.group(1) == 'SQ' else 2, int(m.group(2)), '')
+    if name == UNKNOWN:
+        return (4, 0, '')
+    return (3, 0, name)
 
 
 def _unsafe_char(text: str):
@@ -243,31 +260,41 @@ def _char_display(ch: str) -> str:
     return '換行' if ch in ('\n', '\r') else ch
 
 
-def build_mermaid(rows: list[dict], title: str):
-    """回傳 (mermaid 區塊文字或 None, 略過原因或 '')。"""
+def build_gantt(rows: list[dict], title: str):
+    """回傳 (mermaid 區塊文字或 None, 略過原因或 '', 無日期未入圖的 id 清單)。
+
+    rows 須已依「已知日期升冪、同日依檔案順序、無日期列殿後依檔案順序」排好。
+    """
+    undated = [r['id'] for r in rows if not r['date_known']]
+    if not rows:
+        return None, '無記錄，略過時間軸。', undated
+    dated = [r for r in rows if r['date_known']]
+    if not dated:
+        return None, '無已知日期的記錄，略過時間軸。', undated
     bad = _unsafe_char(title)
     if bad is not None:
-        return None, f'時間軸略過：專案標題含 mermaid 不安全字元「{_char_display(bad)}」。'
-    periods: dict[str, list[str]] = {}
-    unknown_events: list[str] = []
-    for row in rows:
-        label = _label(row)
-        for text in (label, row['date']):
-            bad = _unsafe_char(text)
+        return None, f'時間軸略過：專案標題含 mermaid 不安全字元「{_char_display(bad)}」。', undated
+    sections: dict[str, list[dict]] = {}
+    for row in dated:
+        sections.setdefault(row['question'], []).append(row)
+    lines = ['```mermaid', 'gantt', f'    title {title}', '    dateFormat YYYY-MM-DD',
+             '    axisFormat %m-%d', '    todayMarker off']
+    for name in sorted(sections, key=_section_key):
+        bad = _unsafe_char(name)
+        if bad is not None:
+            shown = re.sub(r'\s+', ' ', name)
+            return None, (f'時間軸略過：section「{shown}」含 mermaid 不安全字元'
+                          f'「{_char_display(bad)}」。'), undated
+        lines.append(f'    section {name}')
+        for row in sections[name]:
+            label = _label(row)
+            bad = _unsafe_char(label)
             if bad is not None:
                 return None, (f"時間軸略過：第 {row['id']} 筆的標籤含 mermaid 不安全字元"
-                              f'「{_char_display(bad)}」。')
-        if row['date'] == UNKNOWN:
-            unknown_events.append(label)
-        else:
-            periods.setdefault(row['date'], []).append(label)
-    lines = ['```mermaid', 'timeline', f'    title {title}']
-    for period, events in periods.items():
-        lines.append(f'    {period} : ' + ' : '.join(events))
-    if unknown_events:
-        lines.append(f'    {UNKNOWN} : ' + ' : '.join(unknown_events))
+                              f'「{_char_display(bad)}」。'), undated
+            lines.append(f"    {label} : milestone, {row['date']}, 0d")
     lines.append('```')
-    return '\n'.join(lines), ''
+    return '\n'.join(lines), '', undated
 
 
 def _stats_line(rows: list[dict]) -> str:
@@ -289,7 +316,8 @@ def _axes(rows: list[dict]) -> dict:
 
 
 def render_markdown(rows: list[dict], title: str, root: Path, generated_at: str,
-                    sources: dict, n_decisions: int, mermaid, mermaid_reason: str) -> str:
+                    sources: dict, n_decisions: int, gantt) -> str:
+    block, reason, undated = gantt
     def presence(key: str) -> str:
         if sources[key] == 'ok':
             return '有'
@@ -319,18 +347,21 @@ def render_markdown(rows: list[dict], title: str, root: Path, generated_at: str,
                  '；'.join(r['evidence']))
         out.append('| ' + ' | '.join(_cell(c) for c in cells) + ' |')
     out += ['', '## 時間軸', '']
-    if not rows:
-        out.append('無記錄，略過時間軸。')
-    elif mermaid is None:
-        out.append(mermaid_reason)
+    if block is None:
+        out.append(reason)
     else:
-        out += ['節點文字為「階段：方法」，超過 40 字截斷加「…」；完整內容見上表。', '', mermaid]
+        out += ['以 gantt 里程碑呈現：一筆一列，section 為 question（main／子問題 id／unknown），'
+                f'列標籤「D-編號 stage：method」（超過 {LABEL_MAX} 字截斷加「…」）；完整內容見上表。',
+                '', block]
+        if undated:
+            out += ['', '無日期未入圖：' + '、'.join(undated) + '。']
     out += ['', '## 統計', '', _stats_line(rows), '']
     return '\n'.join(out)
 
 
 def build_json(rows: list[dict], title: str, root: Path, generated_at: str,
-               sources: dict, mermaid, mermaid_reason: str) -> dict:
+               sources: dict, gantt) -> dict:
+    block, reason, undated = gantt
     return {
         'schema_version': 1,
         'generated_at': generated_at,
@@ -340,9 +371,8 @@ def build_json(rows: list[dict], title: str, root: Path, generated_at: str,
         'n_total': len(rows),
         'n_complete': sum(1 for r in rows if r['complete']),
         'axes': _axes(rows),
-        'mermaid': {'included': mermaid is not None and bool(rows),
-                    'skipped_reason': '' if rows and mermaid is not None
-                    else ('無記錄，略過時間軸。' if not rows else mermaid_reason)},
+        'mermaid': {'included': block is not None, 'kind': 'gantt',
+                    'skipped_reason': reason, 'undated_ids': undated},
         'rows': rows,
     }
 
@@ -376,6 +406,7 @@ def main() -> int:
         print('INFO decisions.yaml 不存在，視為 0 筆', file=diag)
 
     warnings: list[str] = []
+    infos: list[str] = []
     proj, proj_present, proj_warn = load_project(root)
     if proj_warn:
         warnings.append(proj_warn)
@@ -390,18 +421,21 @@ def main() -> int:
 
     title = _project_title(proj, root)
     rows = build_rows(decisions, results, res_present, results is not None, warnings)
-    mermaid, mermaid_reason = build_mermaid(rows, title) if rows else (None, '')
-    if rows and mermaid is None:
-        warnings.append(mermaid_reason)
+    gantt = build_gantt(rows, title)
+    if gantt[0] is None and gantt[1].startswith('時間軸略過'):
+        warnings.append(gantt[1])
+    elif gantt[0] is None and rows:
+        infos.append(gantt[1])
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
 
     for w in warnings:
         print(f'WARNING {w}', file=diag)
+    for i in infos:
+        print(f'INFO {i}', file=diag)
 
-    text = render_markdown(rows, title, root, generated_at, sources, len(decisions),
-                           mermaid, mermaid_reason)
+    text = render_markdown(rows, title, root, generated_at, sources, len(decisions), gantt)
     if args.json:
-        payload = build_json(rows, title, root, generated_at, sources, mermaid, mermaid_reason)
+        payload = build_json(rows, title, root, generated_at, sources, gantt)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     elif args.dry_run:
         sys.stdout.write(text)

@@ -202,7 +202,7 @@ decisions.yaml
 PROGRESS.md
 ```
 
-`PROGRESS.md` 由 `skills/status/scripts/render_progress.py` 從 `decisions.yaml` 自動產生（一張記錄表＋一個 mermaid timeline；問題欄＝`question`，有執行問題時寫成「question › exec_issue」），不是事實來源；要改內容請改 `decisions.yaml` 再重跑 renderer。
+`PROGRESS.md` 由 `skills/status/scripts/render_progress.py` 從 `decisions.yaml` 自動產生（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」），不是事實來源；要改內容請改 `decisions.yaml` 再重跑 renderer。
 
 ## 相容性與升級
 

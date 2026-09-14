@@ -37,7 +37,7 @@ metadata:
 python3 <skill路徑>/scripts/render_progress.py <root>
 ```
 
-renderer 只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/PROGRESS.md`；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
+renderer 只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/PROGRESS.md`（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section、一筆一個 milestone，無日期的列不入圖而列於圖下）；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
 
 ## v0.7.1 主流程
 
