@@ -30,6 +30,7 @@ route、protocol/active plans、prestudy integrity、適用的 data/evidence aud
    ```
 
 5. `fail` 回 amendment；`qualified` 必須明列 limitations 並傳入 claims/稿件。
+6. validation item 的 `sq` 可為主問題 `SQ#` 或附錄問題 `AQ#`（`goals.appendix_questions`）；AQ 的 item 與 SQ 走同一套逐項檢查（plan_id 須為該 AQ 的 active plan、primary_results 歸屬、adapter 必查項目覆蓋）。差別只有一項：有結果鍵卻沒有任何 item 的 AQ 只 WARNING（`AQ1: 無 validation item（附錄問題，不擋）`），主問題仍 BLOCKER；`--sq AQ1` 可只查一個附錄問題，統計行分列 `target SQ n + AQ m`。
 
 ## B. adapter validation route
 

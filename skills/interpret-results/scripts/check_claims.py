@@ -146,9 +146,11 @@ def main() -> int:
         validation_path = (Path.cwd() / validation_path).resolve()
     validations = validation_map(validation_path)
 
+    # claim.sq 可指向主問題（SQ#）或附錄問題（AQ#）；兩個清單的 id 都合法。
     sq_ids = {
         str(sq.get("id"))
-        for sq in ((project.get("goals") or {}).get("sub_questions") or [])
+        for list_name in ("sub_questions", "appendix_questions")
+        for sq in ((project.get("goals") or {}).get(list_name) or [])
         if isinstance(sq, dict) and sq.get("id")
     }
     claims = claims_doc.get("claims") or []

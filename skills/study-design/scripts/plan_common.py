@@ -58,12 +58,39 @@ def pipeline_v07(project: dict[str, Any]) -> bool:
     return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
-def goal_map(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
+# goals 的兩個清單：主問題（SQ#）與附錄問題（AQ#，v0.7.3 起）。機械關卡（plan／results／
+# validation／claims）對兩者一視同仁，所以 goal_map 預設兩者都收；只有「主問題清單本身」
+# 的消費者（init_protocol 寫 protocol.sub_questions）才關掉 include_appendix。
+GOAL_LISTS: tuple[tuple[str, str], ...] = (("sub_questions", "sq"), ("appendix_questions", "aq"))
+
+
+def goal_map(project: dict[str, Any], include_appendix: bool = True) -> dict[str, dict[str, Any]]:
+    """id → goal entry。sub_questions 先收；同 id 若也出現在 appendix_questions，主問題優先、不覆蓋。"""
     out: dict[str, dict[str, Any]] = {}
-    for sq in ((project.get("goals") or {}).get("sub_questions") or []):
-        if isinstance(sq, dict) and sq.get("id"):
-            out[str(sq["id"])] = sq
+    goals = project.get("goals") or {}
+    for list_name, kind in GOAL_LISTS:
+        if kind == "aq" and not include_appendix:
+            continue
+        for item in (goals.get(list_name) or []):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            gid = str(item["id"])
+            if kind == "aq" and gid in out:
+                continue
+            out[gid] = item
     return out
+
+
+def goal_kinds(project: dict[str, Any]) -> dict[str, str]:
+    """id → 'sq' | 'aq'。與 goal_map 分開回傳，讓 goal entry 維持原樣（不往 project 資料塞標記，
+    也不影響任何把 goal entry 拿去雜湊或快照的呼叫端）。"""
+    kinds: dict[str, str] = {}
+    goals = project.get("goals") or {}
+    for list_name, kind in GOAL_LISTS:
+        for item in (goals.get(list_name) or []):
+            if isinstance(item, dict) and item.get("id"):
+                kinds.setdefault(str(item["id"]), kind)
+    return kinds
 
 
 def next_plan_id(plans_dir: Path, sq: str) -> str:

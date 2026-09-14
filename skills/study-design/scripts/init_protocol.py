@@ -25,7 +25,8 @@ def main() -> int:
         return 1
     project = load_yaml(project_path)
     methodology = project.get("methodology") or {}
-    goals = goal_map(project)
+    # protocol.sub_questions 只列主問題；附錄問題（AQ#）不是研究設計的拆解單位，不進 protocol。
+    goals = goal_map(project, include_appendix=False)
     doc = {
         "schema_version": 1,
         "protocol_id": "SP1-v1",

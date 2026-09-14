@@ -548,6 +548,333 @@ def test_docs_registered() -> None:
     assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
 
 
+# --- v0.13.4：附錄問題（AQ#）進機械關卡 --------------------------------------------------
+# 契約：goals.appendix_questions 與 sub_questions 在 plan／results／validation／claims／exploration 關卡上
+# 同等可掛；唯一差別是 AQ 缺 active plan／缺 validation item 只 WARNING（SQ 仍 BLOCKER）。
+# fixture 以 tempfile 動態建：真的用 init_protocol／init_plan／seal_artifact 建與封，讀磁碟實際產出斷言。
+
+SCRIPTS = {
+    "init_protocol": PLUGIN / "skills/study-design/scripts/init_protocol.py",
+    "init_plan": PLUGIN / "skills/study-design/scripts/init_plan.py",
+    "seal": PLUGIN / "skills/study-design/scripts/seal_artifact.py",
+    "check_plan": PLUGIN / "skills/study-design/scripts/check_plan.py",
+    "check_validation": PLUGIN / "skills/validate-results/scripts/check_validation.py",
+    "rerun_all": PLUGIN / "skills/analyze-data/scripts/rerun_all.py",
+    "check_claims": PLUGIN / "skills/interpret-results/scripts/check_claims.py",
+    "check_exploration": PLUGIN / "skills/analyze-data/scripts/check_exploration.py",
+    "check_coverage": PLUGIN / "skills/evaluate/scripts/check_coverage.py",
+    "check_claim_audit": PLUGIN / "skills/claim-audit/scripts/check_claim_audit.py",
+}
+
+AQ_PROJECT = """pipeline:
+  version: "0.7.3"
+project:
+  title_zh: "附錄問題關卡測試"
+  research_question: "主問題一句"
+methodology:
+  primary: quantitative-inference
+  secondary: []
+  confirmed: true
+goals:
+  sub_questions:
+    - id: SQ1
+      question: "主問題一"
+      why: "承重"
+      evidence: [analysis]
+      success_criteria: "估出效應量與不確定度"
+      role: primary
+      origin: ""
+      status: open
+      status_reason: ""
+      links: []
+  appendix_questions:
+    - id: AQ1
+      question: "換方法後主結果是否維持"
+      why: "defend SQ1"
+      evidence: [analysis]
+      success_criteria: "收斂或分歧都並陳"
+      status: open
+      status_reason: ""
+      links: []
+analysis:
+  alpha: 0.05
+  rerun: full
+state: {}
+"""
+
+
+def sh(script: str, *args: str, expect: int | None = 0) -> tuple[int, str]:
+    proc = subprocess.run([sys.executable, str(SCRIPTS[script]), *(str(a) for a in args)],
+                          capture_output=True, text=True, encoding="utf-8")
+    out = proc.stdout + proc.stderr
+    if expect is not None:
+        assert proc.returncode == expect, f"{script} rc={proc.returncode} (expect {expect})\n{out}"
+    return proc.returncode, out
+
+
+def _yaml():
+    import yaml
+    return yaml
+
+
+def _fill_quant_plan(path: Path, key: str) -> None:
+    yaml = _yaml()
+    plan = yaml.safe_load(path.read_text(encoding="utf-8"))
+    plan.update({
+        "analysis_unit": "record", "inclusion": ["valid"], "exclusion": ["none"],
+        "estimand": {"target": "mean", "population": "records", "exposure_or_intervention": "n/a",
+                     "comparator": "n/a", "outcome": "x", "summary_measure": "mean"},
+        "missing_data": {"strategy": "complete-case", "assumptions": "", "sensitivity": ""},
+        "primary_model": {"id": "M1", "method": "mean", "specification": "mean(x)", "parameters": {}, "assumptions": ["iid"]},
+        "multiplicity": {"family": "single", "strategy": "none", "alpha": 0.05},
+        "robustness": [{"id": "R1", "change": "alt", "expected_keys": [f"{key}_alt"]}],
+        "outputs": [{"key": key, "kind": "inferential", "measure": "mean", "uncertainty": "95% CI"}],
+    })
+    path.write_text(yaml.safe_dump(plan, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+
+
+def write_aq_fixture(root: Path) -> None:
+    """SQ1 與 AQ1 各一份 sealed plan、results 各一鍵、validation 各一 item。"""
+    yaml = _yaml()
+    (root / "project.yaml").write_text(AQ_PROJECT, encoding="utf-8")
+    sh("init_protocol", root, "--timing", "retrospective")
+    protocol_path = root / "protocol/study-protocol.yaml"
+    protocol = yaml.safe_load(protocol_path.read_text(encoding="utf-8"))
+    # (1) protocol.sub_questions 維持只列主問題
+    assert protocol["sub_questions"] == ["SQ1"], protocol["sub_questions"]
+    protocol.update({"design": "cross-sectional", "population_or_material": "records",
+                     "outcomes": {"primary": ["x"], "secondary": []}})
+    protocol_path.write_text(yaml.safe_dump(protocol, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+    sh("seal", protocol_path, "--kind", "protocol", "--confirmed-by", "test")
+    # (d) init_plan --sq AQ1 能建檔
+    sh("init_plan", root, "--sq", "SQ1")
+    _, out = sh("init_plan", root, "--sq", "AQ1")
+    assert "plan_id: AQ1-v1" in out, out
+    aq_plan = yaml.safe_load((root / "analysis/plans/AQ1-v1.yaml").read_text(encoding="utf-8"))
+    assert aq_plan["sq"] == "AQ1" and aq_plan["plan_id"] == "AQ1-v1" and aq_plan["question"] == "換方法後主結果是否維持", aq_plan
+    assert aq_plan["role"] == "secondary", "AQ 無 role 欄時 plan role 預設 secondary"
+    sq_plan = yaml.safe_load((root / "analysis/plans/SQ1-v1.yaml").read_text(encoding="utf-8"))
+    assert sq_plan["role"] == "primary", sq_plan["role"]
+    for pid, key in (("SQ1-v1", "sq1_primary"), ("AQ1-v1", "aq1_primary")):
+        _fill_quant_plan(root / f"analysis/plans/{pid}.yaml", key)
+        sh("seal", root / f"analysis/plans/{pid}.yaml", "--kind", "plan", "--root", root, "--confirmed-by", "test")
+    index = yaml.safe_load((root / "analysis/plans/index.yaml").read_text(encoding="utf-8"))
+    assert index["active"] == {"SQ1": "SQ1-v1", "AQ1": "AQ1-v1"}, index["active"]
+    results = {
+        "sq1_primary": {"plan_id": "SQ1-v1", "model_id": "M1", "run_id": "run_2026-09-14", "script": "a.py", "data_fingerprint": "sha256:1", "description": "sq1", "value": 1},
+        "aq1_primary": {"plan_id": "AQ1-v1", "model_id": "M1", "run_id": "run_2026-09-14", "script": "b.py", "data_fingerprint": "sha256:1", "description": "aq1", "value": 2},
+    }
+    (root / "analysis/results.json").write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
+    (root / "analysis/validation").mkdir(parents=True)
+    (root / "analysis/validation/diag.txt").write_text("ok\n", encoding="utf-8")
+    (root / "analysis/validation/indep.json").write_text("{}\n", encoding="utf-8")
+    (root / "reviews").mkdir()
+    (root / "reviews/validation-1.md").write_text("驗證報告\n", encoding="utf-8")
+    _, rfp = sh("check_validation", root, "--fingerprint-only")
+    _, sfp_raw = sh("check_validation", root, "--source-fingerprint-only")
+    sfp = json.loads(sfp_raw)
+    assert not sfp["blockers"], sfp
+
+    def item(vid: str, sq: str, pid: str, key: str) -> dict:
+        return {
+            "id": vid, "sq": sq, "plan_id": pid, "status": "pass", "primary_results": [key],
+            "diagnostics": [{"name": n, "status": "pass", "evidence": "analysis/validation/diag.txt"}
+                            for n in ("assumptions", "influence", "missing_data", "multiplicity", "sensitivity")],
+            "robustness": [{"name": "alternative_model", "status": "stable", "result_keys": [key], "interpretation": "unchanged"}],
+            "independent_recalculation": {"mode": "second-implementation", "result": "pass",
+                                          "artifacts": ["analysis/validation/indep.json"], "reason": "", "decision": ""},
+            "null_assessment": {"needed": False, "method": "", "conclusion": ""},
+            "limitations": "",
+        }
+    validation = {
+        "schema_version": 1, "results_fingerprint": rfp.strip(), "source_fingerprint": sfp["source_fingerprint"],
+        "status": "pass", "completed": True, "completed_at": "2026-09-14", "report": "reviews/validation-1.md",
+        "items": [item("V1", "SQ1", "SQ1-v1", "sq1_primary"), item("V2", "AQ1", "AQ1-v1", "aq1_primary")],
+    }
+    (root / "analysis/validation.yaml").write_text(yaml.safe_dump(validation, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+
+
+def _set_active(root: Path, active: dict) -> None:
+    yaml = _yaml()
+    path = root / "analysis/plans/index.yaml"
+    index = yaml.safe_load(path.read_text(encoding="utf-8"))
+    index["active"] = active
+    path.write_text(yaml.safe_dump(index, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _edit_project(root: Path, fn) -> None:
+    yaml = _yaml()
+    path = root / "project.yaml"
+    project = yaml.safe_load(path.read_text(encoding="utf-8"))
+    fn(project)
+    path.write_text(yaml.safe_dump(project, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+
+
+def test_aq_plan_results_validation_gates() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_aq_fixture(root)
+        # (a) AQ 的 sealed plan／結果鍵／validation item 與 SQ 同等通過
+        _, out = sh("check_plan", root, "--require-confirmed", "--results", "analysis/results.json")
+        assert "BLOCKER" not in out and "checked SQ 1 + AQ 1; 0 blocker(s)" in out, out
+        _, out = sh("check_plan", root, "--sq", "AQ1", "--require-confirmed")
+        assert "checked SQ 0 + AQ 1; 0 blocker(s)" in out, out
+        _, out = sh("check_validation", root)
+        assert "sq 無效" not in out and "BLOCKER" not in out and "target SQ 1 + AQ 1;" in out, out
+        _, out = sh("check_validation", root, "--sq", "AQ1")
+        assert "BLOCKER" not in out and "target SQ 0 + AQ 1;" in out, out
+        # (b) AQ 沒 plan → 只 WARNING、exit 0；SQ 沒 plan → 仍 BLOCKER
+        noaq = root / "no-aq-plan"
+        shutil.copytree(root, noaq, ignore=shutil.ignore_patterns("no-*"))
+        _set_active(noaq, {"SQ1": "SQ1-v1"})
+        results = json.loads((noaq / "analysis/results.json").read_text(encoding="utf-8"))
+        results.pop("aq1_primary")
+        (noaq / "analysis/results.json").write_text(json.dumps(results), encoding="utf-8")
+        rc, out = sh("check_plan", noaq, "--require-confirmed", "--results", "analysis/results.json")
+        assert rc == 0 and "WARNING AQ1: index.active 無 confirmed plan（附錄問題，不擋）" in out and "BLOCKER" not in out, out
+        assert "checked SQ 1 + AQ 1; 0 blocker(s), 1 warning(s)" in out, out
+        # AQ 的結果鍵仍掛在 index 已無的 plan 上 → 與 SQ 同一套：plan_id 不是 active plan 是 BLOCKER
+        (noaq / "analysis/results.json").write_text((root / "analysis/results.json").read_text(encoding="utf-8"), encoding="utf-8")
+        rc, out = sh("check_plan", noaq, "--require-confirmed", "--results", "analysis/results.json", expect=1)
+        assert "BLOCKER aq1_primary: plan_id AQ1-v1 不是目前載入的 active plan" in out, out
+        nosq = root / "no-sq-plan"
+        shutil.copytree(root, nosq, ignore=shutil.ignore_patterns("no-*"))
+        _set_active(nosq, {"AQ1": "AQ1-v1"})
+        rc, out = sh("check_plan", nosq, "--require-confirmed", expect=1)
+        assert "BLOCKER SQ1: index.active 無 confirmed plan" in out, out
+        # validation：AQ 有結果卻無 item → WARNING 不擋；SQ 無 item → BLOCKER
+        yaml = _yaml()
+        vpath = root / "analysis/validation.yaml"
+        full = yaml.safe_load(vpath.read_text(encoding="utf-8"))
+        only_sq = dict(full, items=[full["items"][0]])
+        vpath.write_text(yaml.safe_dump(only_sq, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_validation", root)
+        assert rc == 0 and "WARNING AQ1: 無 validation item（附錄問題，不擋）" in out and "BLOCKER" not in out, out
+        only_aq = dict(full, items=[full["items"][1]])
+        vpath.write_text(yaml.safe_dump(only_aq, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_validation", root, expect=1)
+        assert "BLOCKER SQ1: 無 validation item" in out, out
+        # AQ 有 item 就照 SQ 同一套驗：item 的 plan_id 錯 → BLOCKER
+        bad = json.loads(json.dumps(full))
+        bad["items"][1]["plan_id"] = "AQ1-v9"
+        vpath.write_text(yaml.safe_dump(bad, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_validation", root, expect=1)
+        assert "BLOCKER V2: plan_id AQ1-v9 不是 AQ1 active plan AQ1-v1" in out, out
+        # sq 指向不存在的 AQ → 仍是「sq 無效」
+        bad["items"][1]["plan_id"] = "AQ1-v1"
+        bad["items"][1]["sq"] = "AQ9"
+        vpath.write_text(yaml.safe_dump(bad, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_validation", root, expect=1)
+        assert "BLOCKER V2: sq 無效 AQ9" in out, out
+
+
+def test_aq_source_fingerprint_field_whitelist() -> None:
+    """(c) rerun_all --fingerprint-only：改 AQ 的 status／links／status_reason 前後相同，改 question 則不同。"""
+    def fp(root: Path) -> str:
+        _, out = sh("rerun_all", root, "--fingerprint-only")
+        m = re.search(r"^input_fingerprint: (\S+)$", out, re.M)
+        assert m, out
+        return m.group(1)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "analysis").mkdir()
+        (root / "project.yaml").write_text(AQ_PROJECT, encoding="utf-8")
+        (root / "analysis/results.json").write_text("{}", encoding="utf-8")
+        base = fp(root)
+
+        def progress(project):
+            aq = project["goals"]["appendix_questions"][0]
+            aq.update({"status": "addressed", "status_reason": "已做", "links": ["results:aq1_primary", "V2"]})
+        _edit_project(root, progress)
+        assert fp(root) == base, "AQ 的 status／links／status_reason 不得動 source fingerprint"
+
+        def reword(project):
+            project["goals"]["appendix_questions"][0]["question"] = "改了題目"
+        _edit_project(root, reword)
+        assert fp(root) != base, "AQ 的 question 改動必須讓 source fingerprint 變"
+        # 沒有附錄問題（[]）的專案：白名單前後都是 []，fingerprint 不受本版影響
+        (root / "project.yaml").write_text(AQ_PROJECT, encoding="utf-8")
+        _edit_project(root, lambda p: p["goals"].__setitem__("appendix_questions", []))
+        empty = fp(root)
+        _edit_project(root, lambda p: p["goals"].__setitem__("appendix_questions", []))
+        assert fp(root) == empty
+
+
+def test_aq_claims_exploration_coverage_audit() -> None:
+    """(e) check_claims／check_exploration／check_coverage 接受 AQ id；claim-audit 的 context 另列 appendix_questions。"""
+    yaml = _yaml()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_aq_fixture(root)
+        claims = {
+            "version": 1, "confirmed": False,
+            "claims": [{
+                "id": "C1", "sq": "AQ1", "claim": "換方法後主結果維持", "strength": "descriptive",
+                "evidence": ["results:aq1_primary"], "validation": ["V2"], "boundary": "僅限本資料",
+                "counterevidence": [], "exploratory": False,
+            }],
+        }
+        cpath = root / "analysis/claims.yaml"
+        cpath.write_text(yaml.safe_dump(claims, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_claims", cpath, root / "project.yaml", root / "analysis/results.json",
+                     "--validation", root / "analysis/validation.yaml")
+        assert rc == 0 and "sq 無效" not in out, out
+        claims["claims"][0]["sq"] = "AQ9"
+        cpath.write_text(yaml.safe_dump(claims, allow_unicode=True, sort_keys=False, width=1000), encoding="utf-8")
+        rc, out = sh("check_claims", cpath, root / "project.yaml", root / "analysis/results.json",
+                     "--validation", root / "analysis/validation.yaml", expect=1)
+        assert 'BLOCKER C1: sq 無效, goals 無 "AQ9"' in out, out
+        # exploration：promoted 轉正到 AQ1（AQ1.origin = E1）
+        _edit_project(root, lambda p: p["goals"]["appendix_questions"][0].__setitem__("origin", "E1"))
+        (root / "analysis/exploration").mkdir()
+        (root / "analysis/exploration/e1.txt").write_text("x\n", encoding="utf-8")
+        log = {"explorations": [{"id": "E1", "trigger": "看到分歧", "scope": "換方法", "finding": "結果維持",
+                                 "disposition": "promoted", "sq": "AQ1", "artifacts": ["analysis/exploration/e1.txt"]}]}
+        lpath = root / "analysis/exploration-log.yaml"
+        lpath.write_text(yaml.safe_dump(log, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        rc, out = sh("check_exploration", lpath, root / "project.yaml", root)
+        assert rc == 0 and "BLOCKER" not in out, out
+        log["explorations"][0]["sq"] = "AQ9"
+        lpath.write_text(yaml.safe_dump(log, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        rc, out = sh("check_exploration", lpath, root / "project.yaml", root, expect=1)
+        assert 'BLOCKER E1: sq 指向不存在的 "AQ9"' in out, out
+        # coverage 輕量模式 --sq AQ1（既有行為，確認仍可用）
+        _edit_project(root, lambda p: p["goals"]["appendix_questions"][0].update(
+            {"status": "addressed", "links": ["results:aq1_primary"]}))
+        (root / "literature").mkdir()
+        (root / "literature/references.bib").write_text("", encoding="utf-8")
+        rc, out = sh("check_coverage", root / "project.yaml", root / "analysis/results.json",
+                     root / "literature/references.bib", "--sq", "AQ1")
+        assert rc == 0 and "AQ1 [addressed]" in out and "SQ1 [" not in out, out
+        # claim-audit context：appendix_questions 另列一鍵（只留白名單欄位），沒有 AQ 時不加鍵
+        spec = importlib.util.spec_from_file_location("check_claim_audit", SCRIPTS["check_claim_audit"])
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        project = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8"))
+        context = module.project_claim_context(project)
+        assert [q["id"] for q in context["sub_questions"]] == ["SQ1"], context["sub_questions"]
+        assert context["appendix_questions"] == [{"id": "AQ1", "question": "換方法後主結果是否維持", "why": "defend SQ1",
+                                                  "evidence": ["analysis"], "success_criteria": "收斂或分歧都並陳",
+                                                  "origin": "E1"}], context["appendix_questions"]
+        project["goals"]["appendix_questions"] = []
+        assert "appendix_questions" not in module.project_claim_context(project)
+        del project["goals"]["appendix_questions"]
+        assert "appendix_questions" not in module.project_claim_context(project)
+
+
+def test_aq_docs_registered() -> None:
+    need("CHANGELOG.md", "## 0.13.4", "appendix_questions", "附錄問題", "source fingerprint", "index.active 無 confirmed plan（附錄問題，不擋）")
+    need("skills/study-design/SKILL.md", "附錄問題", "AQ")
+    need("skills/validate-results/SKILL.md", "AQ")
+    need("README.md", "附錄問題", "plan")
+    need("tests/README.md", "附錄問題", "AQ1-v1")
+    meta = json.loads(text(".claude-plugin/plugin.json"))
+    assert tuple(int(x) for x in meta["version"].split(".")) >= (0, 13, 3), meta["version"]
+    assert text("skills/study-design/SKILL.md").startswith("---\nname: study-design\n")
+    assert text("skills/validate-results/SKILL.md").startswith("---\nname: validate-results\n")
+
+
 def main() -> int:
     test_sensitivity_subnodes_and_result_kinds()
     print("[regression] 敏感性子節點（subtype／parent／state／部分／隨父收合）、結果 result_kind 主要／次要／未宣告、declared_by、validated 獨立標記、produces 一律可見（未宣告 dashed）、列序、stats、拿掉 k4 → R2 pending: pass")
@@ -567,6 +894,14 @@ def main() -> int:
     print("[regression] validate_ir：parent 不存在、subtype 非法或非 method／result、result 的 parent 須為敏感性子節點、缺 stats.sensitivity_items: pass")
     test_docs_registered()
     print("[regression] 登記：CHANGELOG 0.13.0／status SKILL／tests README／README: pass")
+    test_aq_plan_results_validation_gates()
+    print("[regression] v0.13.4 附錄問題進關卡：AQ sealed plan／results 鍵／validation item 與 SQ 同等通過；AQ 缺 plan 只 WARNING、SQ 缺 plan BLOCKER；AQ 無 item 只 WARNING、SQ 無 item BLOCKER；AQ 有 item 照 SQ 同套驗；protocol.sub_questions 只列 SQ；init_plan --sq AQ1 建檔且 role 預設 secondary: pass")
+    test_aq_source_fingerprint_field_whitelist()
+    print("[regression] v0.13.4 rerun_all source fingerprint：AQ 的 status／links／status_reason 不動、question 會動、空 [] 不變: pass")
+    test_aq_claims_exploration_coverage_audit()
+    print("[regression] v0.13.4 check_claims／check_exploration 接受 AQ id、check_coverage --sq AQ1、claim-audit context 另列 appendix_questions: pass")
+    test_aq_docs_registered()
+    print("[regression] v0.13.4 登記：CHANGELOG 0.13.4／study-design 與 validate-results SKILL／README／tests README／plugin.json >= 0.13.4: pass")
     print("PASS v0.13.0 regressions")
     return 0
 
