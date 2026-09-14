@@ -174,7 +174,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         # 子節點：type method、subtype sensitivity、parent、label／title／meta
         for sid in ("p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ1-v1#R1"):
             assert sid in nodes, sorted(k for k in nodes if k.startswith("p:"))
-            assert nodes[sid]["type"] == "method" and nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["col"] == 1
+            assert nodes[sid]["type"] == "method" and nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["col"] == 2
         r1, r2, r3 = nodes["p:SQ1-v2#R1"], nodes["p:SQ1-v2#R2"], nodes["p:SQ1-v2#R3"]
         assert r1["parent"] == "p:SQ1-v2" and r2["parent"] == "p:SQ1-v2" and nodes["p:SQ1-v1#R1"]["parent"] == "p:SQ1-v1"
         assert r1["label"] == "R1：" + "換 block 尺度看主要鍵是否穩定——與主要重疊"[:24] + "…", r1["label"]
@@ -288,6 +288,34 @@ def test_html_subnodes() -> None:
         assert parser.errors == [] and parser.stack == []
 
 
+def test_main_question_own_column() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        g = graph_of(root)
+        nodes = {n["id"]: n for n in g["nodes"]}
+        main = nodes["q:main"]
+        qs = [n for n in g["nodes"] if n["type"] == "question" and n["id"] != "q:main"]
+        assert main["type"] == "question" and main["col"] == 0 and all(q["col"] == 1 for q in qs)
+        assert all(main["x"] < q["x"] for q in qs) and len({q["x"] for q in qs}) == 1, "主問題在更左一欄、SQ／AQ 同 x"
+        assert nodes["p:SQ1-v2"]["col"] == 2 and nodes["v:V1"]["col"] == 3 and nodes["r:k1"]["col"] == 4
+        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"], "node_types 不變"
+        assert g["stats"]["by_type"]["question"] == 3, "q:main 仍算 question"
+        # 居中：在 SQ／AQ 欄第一筆與最後一筆的中間
+        ys = sorted(q["y"] for q in qs)
+        assert main["y"] == (ys[0] + ys[-1]) / 2 and main["order"] == 0, (main["y"], ys)
+        # decomposes 邊仍在、可見，且現在是跨欄邊（一般折線，起點在主問題右緣）
+        edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
+        for q in qs:
+            assert ("q:main", q["id"], "decomposes") in edges and edges[("q:main", q["id"], "decomposes")]["default_visible"] is True
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        m = re.search(r'data-from="q:main" data-to="q:SQ1" data-type="decomposes" d="([^"]*)"', html_text)
+        assert m and m.group(1).startswith(f"M{main['x'] + 260},"), m.group(1) if m else None
+        assert "欄序：主問題 → 問題（SQ／AQ）" in html_text
+
+
 def test_validate_graph_subtype_rules() -> None:
     spec = importlib.util.spec_from_file_location("render_progress", RENDERER)
     module = importlib.util.module_from_spec(spec)
@@ -324,6 +352,8 @@ def main() -> int:
     print("[regression] 敏感性子節點（subtype／parent／state／部分／隨父收合）、結果 result_kind 主要／次要／未宣告、declared_by、validated 獨立標記、produces 一律可見（未宣告 dashed）、列序、stats、拿掉 k4 → R2 pending: pass")
     test_html_subnodes()
     print("[regression] HTML：子節點縮排 24 寬減 24、父→子 L 形線、sub／unval 錨點、面板與導覽文字錨點、無「未驗證旁路」、自含、tag 平衡: pass")
+    test_main_question_own_column()
+    print("[regression] 主問題獨占最左一欄：q:main col 0、x 小於所有 SQ／AQ、SQ／AQ 同 x、垂直居中、decomposes 跨欄可見、type 與 by_type 不變: pass")
     test_validate_graph_subtype_rules()
     print("[regression] validate_ir：parent 不存在、subtype 非法或非 method、缺 stats.sensitivity_items: pass")
     test_docs_registered()

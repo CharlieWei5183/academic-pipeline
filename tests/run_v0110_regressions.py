@@ -1314,18 +1314,19 @@ def test_graph_full_fixture() -> None:
         # 欄序 question < method < validation < result < decision；同 type 同 x
         xs = {}
         for n in g["nodes"]:
-            if n.get("subtype") != "sensitivity":
+            if n.get("subtype") != "sensitivity" and n["id"] != "q:main":
                 xs.setdefault(n["type"], set()).add(n["x"])
         assert all(len(v) == 1 for v in xs.values()), xs
+        assert nodes["q:main"]["x"] < nodes["q:SQ1"]["x"], "主問題獨占更左一欄"
         assert nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 24, "子節點向右縮排 24"
         order = [next(iter(xs[t])) for t in ("question", "method", "validation", "result", "decision")]
         assert order == sorted(order) and len(set(order)) == 5, order
-        assert [nodes[i]["col"] for i in ("q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 5], "圖表欄為 4"
+        assert [nodes[i]["col"] for i in ("q:main", "q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 4, 6], "主問題欄 0、圖表欄 5"
         # 收合檢視：collapsed 節點不佔列（y 借用現行版）、同欄可見 y 連續；order 含 collapsed 節點
         y = {n["id"]: n["y"] for n in g["nodes"]}
         assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ1-v2#R1", "p:SQ2-v1")] == [0, 1, 2, 3]
         assert y["p:SQ1-v2"] == 20 and y["p:SQ1-v2#R1"] == 20 + 48 and y["p:SQ2-v1"] == 20 + 96 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
-        assert y["q:main"] < y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"], y
+        assert y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"] and y["q:main"] == (y["q:SQ1"] + y["q:AQ1"]) / 2, y
         ry = [n["y"] for n in g["nodes"] if n["type"] == "result"]
         assert sorted(ry) == [20 + 48 * i for i in range(len(ry))], "result 欄 y 須連續"
         assert y["r:k1"] < y["r:k2"] < y["r:legacy_key"] < y["r:k3"] < y["r:k_missing"], {k: v for k, v in y.items() if k.startswith("r:")}
