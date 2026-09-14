@@ -1052,7 +1052,7 @@ def test_progress_full_fixture() -> None:
         assert a == {"id": "D-002", "date": "2026-07-02", "stage": "analyze-data", "summary": "依 plan 跑分析",
                      "exec_issue": "快取", "method": "GLMM"}, a
         # stats
-        assert ir["stats"] == {"lanes": 4, "nodes": 17 + 18, "annotations": 3,
+        assert ir["stats"] == {"lanes": 4, "nodes": 17 + 18, "annotations": 3, "inbox_pending": 0,
                                "by_state": {"done": 8, "expired": 1, "blocked": 1, "pending": 25, "unknown": 0}}, ir["stats"]
         assert "泳道 4、節點 35：完成 8、過期 1、受阻 1、未到 25、不明 0；決策註記 3。" in out, out
         # HTML 檔頭與頁尾

@@ -19,11 +19,17 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
+SERVER = PLUGIN / "skills/status/scripts/progress_server.py"
+CHECK_INBOX = PLUGIN / "skills/status/scripts/check_inbox.py"
 
 PROJECT = """pipeline:
   version: "0.7.3"
@@ -355,6 +361,341 @@ def test_docs_registered() -> None:
     assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
 
 
+# ---------- 收件匣：progress_server.py／check_inbox.py／renderer／頁面 ----------
+
+INBOX_FIXTURE = """# 進度頁面收件匣——由 progress_server.py 寫入、status skill 處理；不是事實來源，進 SSOT 須經人工確認。
+schema_version: 1
+items:
+  - id: "IN-001"
+    at: "2026-09-14T15:00:00+08:00"
+    kind: "comment"
+    target: "q:SQ2"
+    title: "意見：SQ2"
+    body: "這題的 success_criteria 太寬"
+    author: ""
+    status: "pending"
+    resolved_by: ""
+    resolved_at: ""
+    note: ""
+  - id: "IN-002"
+    at: "2026-09-14T15:01:00+08:00"
+    kind: "new_question"
+    target: ""
+    title: "海拔梯度"
+    body: "想加一個 SQ"
+    author: "charlie"
+    status: "done"
+    resolved_by: "D-050"
+    resolved_at: "2026-09-14T16:00:00+08:00"
+    note: "已記入"
+"""
+
+SSOT_FILES = ("project.yaml", "analysis/plans/index.yaml", "analysis/plans/SQ1-v1.yaml", "analysis/plans/SQ2-v1.yaml",
+              "analysis/results.json", "analysis/validation.yaml")
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def http(base: str, method: str, path: str, data=None) -> tuple[int, dict | bytes, dict]:
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(base + path, method=method, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw, status, headers = r.read(), r.status, dict(r.headers)
+    except urllib.error.HTTPError as e:
+        raw, status, headers = e.read(), e.code, dict(e.headers)
+    ctype = headers.get("Content-Type", "")
+    return status, (json.loads(raw.decode("utf-8")) if ctype.startswith("application/json") else raw), headers
+
+
+class Served:
+    """在背景 thread 起 make_server(root, '127.0.0.1', 0)。"""
+
+    def __init__(self, root: Path) -> None:
+        self.mod = load_module(SERVER, "progress_server_under_test")
+        self.server = self.mod.make_server(root, "127.0.0.1", 0)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+def test_server_inbox_roundtrip() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        rc, out, err = run(root)   # 先有 IR，伺服器才能核對 target
+        assert rc == 0, out + err
+        ssot_before = {f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in SSOT_FILES}
+        html_mtime = (root / "PROGRESS.html").stat().st_mtime_ns
+        with Served(root) as srv:
+            st, d, h = http(srv.base, "GET", "/api/ping")
+            assert st == 200 and d == {"ok": True, "root": str(root.resolve()), "inbox_pending": 0}, (st, d)
+            assert h.get("Cache-Control") == "no-store"
+            st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "new_analysis", "target": "q:SQ2", "title": "補一個模型", "body": "說明", "author": "me"})
+            assert st == 201 and d == {"ok": True, "id": "IN-001"}, (st, d)
+            inbox = root / "PROGRESS.inbox.yaml"
+            assert inbox.is_file()
+            text = inbox.read_text(encoding="utf-8")
+            assert text.startswith("# 進度頁面收件匣") and "\nschema_version: 1\nitems:\n  - id: \"IN-001\"\n" in text, text
+            import yaml
+            items = yaml.safe_load(text)["items"]
+            assert len(items) == 1 and items[0]["id"] == "IN-001" and items[0]["status"] == "pending" and items[0]["kind"] == "new_analysis"
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}", items[0]["at"]), items[0]["at"]
+            assert items[0]["target"] == "q:SQ2" and items[0]["title"] == "補一個模型" and items[0]["author"] == "me"
+            st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "comment", "target": "r:k1", "title": "意見：k1", "body": "欄名"})
+            assert st == 201 and d["id"] == "IN-002", (st, d)
+            digest = hashlib.sha256(inbox.read_bytes()).hexdigest()
+            # 非法 kind／不存在的 target／空 body／非 JSON → 400，檔案雜湊不變
+            for payload in ({"kind": "bogus", "target": "", "title": "x", "body": "y"},
+                            {"kind": "comment", "target": "q:NOPE", "title": "x", "body": "y"},
+                            {"kind": "comment", "target": "", "title": "x", "body": "  "},
+                            {"kind": "comment", "target": "", "title": "x" * 201, "body": "y"}):
+                st, d, _ = http(srv.base, "POST", "/api/inbox", payload)
+                assert st == 400 and d["ok"] is False and d["error"], (payload, st, d)
+            req = urllib.request.Request(srv.base + "/api/inbox", method="POST", data=b"{not json", headers={"Content-Type": "application/json"})
+            try:
+                urllib.request.urlopen(req, timeout=30)
+                raise AssertionError("非 JSON 應 400")
+            except urllib.error.HTTPError as e:
+                assert e.code == 400
+            assert hashlib.sha256(inbox.read_bytes()).hexdigest() == digest, "拒絕的請求不得寫檔"
+            # 偽造 Origin → 403；Content-Type 非 JSON → 415；本機 Origin → 201
+            good_payload = json.dumps({"kind": "comment", "target": "", "title": "x", "body": "y"}).encode("utf-8")
+            for headers, code, msg in (({"Content-Type": "application/json", "Origin": "http://evil.test"}, 403, "跨來源請求已拒絕"),
+                                       ({"Content-Type": "application/json", "Origin": "null"}, 403, "跨來源請求已拒絕"),
+                                       ({"Content-Type": "text/plain"}, 415, "Content-Type"),
+                                       ({}, 415, "Content-Type")):
+                req = urllib.request.Request(srv.base + "/api/inbox", method="POST", data=good_payload, headers=headers)
+                try:
+                    urllib.request.urlopen(req, timeout=30)
+                    raise AssertionError(f"{headers} 應被拒絕")
+                except urllib.error.HTTPError as e:
+                    d = json.loads(e.read().decode("utf-8"))
+                    assert e.code == code and d["ok"] is False and msg in d["error"], (headers, e.code, d)
+                    assert "Access-Control-Allow-Origin" not in dict(e.headers), "不得回 CORS header"
+            assert hashlib.sha256(inbox.read_bytes()).hexdigest() == digest, "被拒的跨來源／非 JSON 請求不得寫檔"
+            req = urllib.request.Request(srv.base + "/api/inbox", method="POST", data=good_payload,
+                                         headers={"Content-Type": "application/json; charset=utf-8", "Origin": srv.base})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                assert r.status == 201 and json.loads(r.read().decode("utf-8"))["id"] == "IN-003", "同源 Origin 須放行"
+                assert "Access-Control-Allow-Origin" not in dict(r.headers)
+            st, d, _ = http(srv.base, "GET", "/api/inbox")
+            assert st == 200 and d["ok"] is True and d["present"] is True and [it["id"] for it in d["items"]] == ["IN-001", "IN-002", "IN-003"]
+            st, d, _ = http(srv.base, "GET", "/api/ping")
+            assert d["inbox_pending"] == 3
+            # GET / 回 HTML 且觸發重算（mtime 變、內容含收件匣狀態）
+            time.sleep(0.02)
+            st, raw, h = http(srv.base, "GET", "/")
+            assert st == 200 and h.get("Content-Type", "").startswith("text/html") and raw.startswith(b"<!DOCTYPE html>"), (st, h)
+            assert (root / "PROGRESS.html").stat().st_mtime_ns > html_mtime, "GET / 須重算 PROGRESS.html"
+            assert "收件匣待處理 3 筆".encode("utf-8") in raw and "收件 1".encode("utf-8") in raw
+            # 靜態檔規則
+            st, _, _ = http(srv.base, "GET", "/../etc/passwd")
+            assert st == 403
+            st, _, _ = http(srv.base, "GET", "/analysis/../project.yaml")
+            assert st == 403, "路徑含 .. 一律 403"
+            st, raw, h = http(srv.base, "GET", "/project.yaml")
+            assert st == 200 and b"sub_questions" in raw and h.get("Content-Type", "").startswith("text/plain")
+            st, raw, h = http(srv.base, "GET", "/analysis/figures/fig_a.svg")
+            assert st == 200 and h.get("Content-Type") == "image/svg+xml"
+            st, _, _ = http(srv.base, "GET", "/analysis/plans")
+            assert st == 404, "目錄 404"
+            (root / "secret.bin").write_bytes(b"\x00")
+            st, _, _ = http(srv.base, "GET", "/secret.bin")
+            assert st == 404, "白名單外的副檔名 404"
+            st, _, _ = http(srv.base, "GET", "/nope.svg")
+            assert st == 404
+            st, d, _ = http(srv.base, "GET", "/api/nope")
+            assert st == 404 and d["ok"] is False
+            for method in ("PUT", "DELETE", "PATCH"):
+                st, d, _ = http(srv.base, method, "/api/inbox", {})
+                assert st == 405 and d == {"ok": False, "error": "方法不允許"}, (method, st, d)
+            st, d, _ = http(srv.base, "POST", "/project.yaml", {})
+            assert st == 405
+        # SSOT 全同；只多出收件匣、secret.bin 與重算的三個產物
+        for f, digest in ssot_before.items():
+            assert hashlib.sha256((root / f).read_bytes()).hexdigest() == digest, f"SSOT 被改動: {f}"
+        assert not list(root.glob(".PROGRESS.inbox.*.tmp")), "暫存檔須清掉"
+
+
+def test_server_post_without_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        assert not (root / "PROGRESS.ir.json").exists() and not (root / "PROGRESS.html").exists()
+        with Served(root) as srv:   # make_server 不重算；核對 target 時 IR 不存在 → 先重算再核對
+            st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "comment", "target": "q:SQ1", "title": "x", "body": "y"})
+            assert st == 201 and d == {"ok": True, "id": "IN-001"}, (st, d)
+            assert (root / "PROGRESS.ir.json").is_file() and (root / "PROGRESS.html").is_file(), "核對 target 前須重算出 IR"
+            st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "comment", "target": "q:NOPE", "title": "x", "body": "y"})
+            assert st == 400 and "q:NOPE" in d["error"]
+            # IR 壞掉 → 重算後恢復 → 201
+            (root / "PROGRESS.ir.json").write_text("{broken", encoding="utf-8")
+            st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "comment", "target": "r:k1", "title": "x", "body": "y"})
+            assert st == 201 and d["id"] == "IN-002", (st, d)
+            assert json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["schema_version"] == 1
+    # CLI 啟動時先重算一次（印 URL 前），失敗照常啟動
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        proc = subprocess.Popen([sys.executable, str(SERVER), str(root), "--port", "0"], stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        try:
+            line = proc.stderr.readline().strip()
+            assert re.fullmatch(r"http://127\.0\.0\.1:\d+/", line), line
+            assert (root / "PROGRESS.ir.json").is_file() and (root / "PROGRESS.html").is_file(), "啟動時須先重算"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+
+def test_server_refuses_non_loopback() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        proc = subprocess.run([sys.executable, str(SERVER), str(root), "--host", "0.0.0.0", "--port", "0"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert proc.returncode == 2 and "BLOCKER" in proc.stderr and "loopback" in proc.stderr, proc.stderr
+        mod = load_module(SERVER, "progress_server_under_test2")
+        try:
+            mod.make_server(root, "0.0.0.0", 0)
+            raise AssertionError("make_server 應拒絕非 loopback")
+        except ValueError:
+            pass
+        proc = subprocess.run([sys.executable, str(SERVER), str(root / "nope"), "--port", "0"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert proc.returncode == 2 and "專案根目錄不存在" in proc.stderr
+
+
+def run_check_inbox(root: Path, *flags: str) -> tuple[int, str]:
+    proc = subprocess.run([sys.executable, str(CHECK_INBOX), str(root), *flags], capture_output=True, text=True, encoding="utf-8")
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_check_inbox() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        rc, out = run_check_inbox(root)
+        assert rc == 0 and "INFO PROGRESS.inbox.yaml 不存在" in out and "結果: 完成" in out, out
+        rc, out = run_check_inbox(root, "--resolve", "IN-001", "--by", "D-001")
+        assert rc == 2 and "BLOCKER 找不到 IN-001" in out, out
+        (root / "PROGRESS.inbox.yaml").write_text(INBOX_FIXTURE, encoding="utf-8")
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        rc, out = run_check_inbox(root)
+        assert rc == 0 and out.startswith(f"=== check_inbox: {root.resolve()} ===\n"), out
+        assert "IN-001   pending    comment       q:SQ2                    意見：SQ2" in out, out
+        assert "IN-002   pending" not in out, "done 的項目不列在 pending 清單"
+        assert "pending 1／done 1／dismissed 0" in out and "WARNING" not in out and "結果: 完成" in out, out
+        # --resolve：只該筆的四行變，其餘行逐行相同
+        before = (root / "PROGRESS.inbox.yaml").read_text(encoding="utf-8").splitlines()
+        rc, out = run_check_inbox(root, "--resolve", "IN-001", "--by", "D-051", "--note", "已記 D#")
+        assert rc == 0 and "IN-001 → done（D-051）" in out and "pending 0／done 2／dismissed 0" in out, out
+        after = (root / "PROGRESS.inbox.yaml").read_text(encoding="utf-8").splitlines()
+        assert len(before) == len(after)
+        changed = [(i, a, b) for i, (a, b) in enumerate(zip(before, after)) if a != b]
+        assert [a.strip().split(":")[0] for _, a, _ in changed] == ["status", "resolved_by", "resolved_at", "note"], changed
+        assert all(i < 14 for i, _, _ in changed), "只能改 IN-001 那一筆的行"
+        assert after[10] == '    status: "done"' and after[11] == '    resolved_by: "D-051"' and after[13] == '    note: "已記 D#"', after[9:14]
+        assert re.fullmatch(r'    resolved_at: "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}"', after[12]), after[12]
+        assert before[14:] == after[14:], "IN-002 的行不得變"
+        assert not list(root.glob(".PROGRESS.inbox.*.tmp"))
+        # --dismiss；--resolve 缺 --by；找不到 id
+        rc, out = run_check_inbox(root, "--dismiss", "IN-002", "--note", "不採納")
+        assert rc == 0 and "IN-002 → dismissed" in out and "pending 0／done 1／dismissed 1" in out, out
+        rc, out = run_check_inbox(root, "--resolve", "IN-002")
+        assert rc == 2 and "須配 --by" in out, out
+        rc, out = run_check_inbox(root, "--resolve", "IN-009", "--by", "x")
+        assert rc == 2 and "BLOCKER 找不到 IN-009" in out, out
+        # 連號斷裂／status 非法／target 不在 IR → WARNING、exit 0；無法解析 → BLOCKER 2
+        broken = INBOX_FIXTURE.replace('"IN-002"', '"IN-004"').replace('status: "done"', 'status: "weird"').replace('target: "q:SQ2"', 'target: "q:GONE"')
+        (root / "PROGRESS.inbox.yaml").write_text(broken, encoding="utf-8")
+        rc, out = run_check_inbox(root)
+        assert rc == 0 and "WARNING IN-004: id 非連號（預期 IN-002）" in out and "WARNING IN-004: status 非法" in out, out
+        assert "WARNING IN-001: target 不在 IR 的節點裡（q:GONE）" in out, out
+        (root / "PROGRESS.inbox.yaml").write_text("items: [\n", encoding="utf-8")
+        rc, out = run_check_inbox(root)
+        assert rc == 2 and "BLOCKER PROGRESS.inbox.yaml 無法解析" in out, out
+
+
+def test_renderer_reads_inbox() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        g_none = graph_of(root)
+        rc, out, err = run(root, "--dry-run", "--json")
+        ir = json.loads(out)
+        assert ir["inbox"] == {"present": False, "pending": 0, "items": []} and ir["stats"]["inbox_pending"] == 0
+        rc, out, err = run(root)
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert "收件匣待處理" not in html_text and 'id="inbox-banner"' not in html_text, "無收件匣就不顯示"
+        assert "收件匣待處理 0。" in out, out
+        (root / "PROGRESS.inbox.yaml").write_text(INBOX_FIXTURE, encoding="utf-8")
+        rc, out, err = run(root, "--dry-run", "--json")
+        assert rc == 0, out + err
+        ir = json.loads(out)
+        assert ir["inbox"]["present"] is True and ir["inbox"]["pending"] == 1 and ir["stats"]["inbox_pending"] == 1
+        assert [it["id"] for it in ir["inbox"]["items"]] == ["IN-001", "IN-002"]
+        assert ir["inbox"]["items"][1] == {"id": "IN-002", "at": "2026-09-14T15:01:00+08:00", "kind": "new_question", "target": "",
+                                            "title": "海拔梯度", "body": "想加一個 SQ", "author": "charlie", "status": "done",
+                                            "resolved_by": "D-050", "resolved_at": "2026-09-14T16:00:00+08:00", "note": "已記入"}
+        sq2 = [n for n in ir["graph"]["nodes"] if n["id"] == "q:SQ2"][0]
+        assert sq2["meta"]["inbox"] == ["IN-001"] and sq2["badge"] == "收件 1", sq2
+        assert all("inbox" not in n["meta"] for n in ir["graph"]["nodes"] if n["id"] != "q:SQ2")
+        rc, out, err = run(root)
+        assert rc == 0 and "收件匣待處理 1。" in out, out
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        for token in ("收件匣待處理 1 筆", 'id="inbox-banner"', 'data-goto="q:SQ2"', "意見：SQ2", "api/ping", "＋ 新問題／新分析", "＋ 意見",
+                      "用 progress_server.py 開啟才能送出", 'id="inbox-form"', 'id="inbox-new" disabled', "file:// 頁面無法送表單"):
+            assert token in html_text, f"HTML 缺 {token}"
+        for token in ("http://", "https://", "<link ", 'src="http'):
+            assert token not in html_text, f"HTML 不得含 {token}"
+        parser = TagBalance()
+        parser.feed(html_text)
+        parser.close()
+        assert parser.errors == [] and parser.stack == []
+        # 收件匣無法解析 → WARNING、視為無
+        (root / "PROGRESS.inbox.yaml").write_text("items: [\n", encoding="utf-8")
+        rc, out, err = run(root, "--dry-run", "--json")
+        assert rc == 0 and "WARNING PROGRESS.inbox.yaml 無法解析" in err, err
+        assert json.loads(out)["inbox"] == {"present": False, "pending": 0, "items": []}
+        # IR 驗證：inbox 缺 → IR-01；pending 數不符 → IR-15
+        module = load_module(RENDERER, "render_progress_under_test")
+        (root / "PROGRESS.inbox.yaml").write_text(INBOX_FIXTURE, encoding="utf-8")
+        good = module.build_ir(root.resolve(), module.Sources(root.resolve()), "2026-09-14T00:00:00+08:00")
+        assert module.validate_ir(good) == []
+        bad = json.loads(json.dumps(good))
+        bad["inbox"]["pending"] = 5
+        assert "IR-15 inbox.pending" in module.validate_ir(bad)
+        del bad["inbox"]
+        assert "IR-01 top-level.inbox" in module.validate_ir(bad)
+
+
+def test_inbox_docs_registered() -> None:
+    need("README.md", "PROGRESS.inbox.yaml", "progress_server.py", "check_inbox.py", "收件匣")
+    need("skills/status/SKILL.md", "PROGRESS.inbox.yaml", "progress_server.py", "check_inbox.py", "--resolve", "--dismiss", "loopback")
+    body = text("skills/project-init/SKILL.md")
+    tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
+    assert "PROGRESS.inbox.yaml" in tree
+    need("CHANGELOG.md", "progress_server.py", "check_inbox.py", "PROGRESS.inbox.yaml")
+    need("tests/README.md", "progress_server.py", "check_inbox.py")
+
+
 def main() -> int:
     test_figure_nodes_and_depicts()
     print("[regression] figure 節點與 depicts 邊：f: 兩節點、r:k1→f:fig_a、第二張「無對應結果鍵」＋WARNING、k1 表 3 列、k2 值、k3 截 200 列、figures_unreviewed 2、stdout 一句: pass")
@@ -368,6 +709,18 @@ def main() -> int:
     print("[regression] validate_ir：figure meta.files／data_uri、result meta.table、stats.figures_unreviewed、id 前綴: pass")
     test_docs_registered()
     print("[regression] 登記：CHANGELOG 0.12.0／status SKILL／tests README／README: pass")
+    test_server_inbox_roundtrip()
+    print("[regression] progress_server：ping、POST 連號寫入（at 含時區）、非法 kind／target／空 body／非 JSON → 400、偽造 Origin → 403、非 JSON Content-Type → 415（皆不寫檔、無 CORS header）、同源 Origin 放行、GET / 重算、靜態檔白名單與 .. 403、405、SSOT 雜湊全同: pass")
+    test_server_post_without_artifacts()
+    print("[regression] progress_server：無任何產物時直接 POST → 先重算再核對 target → 201、IR 壞掉亦重算恢復；CLI 啟動時印 URL 前先重算一次: pass")
+    test_server_refuses_non_loopback()
+    print("[regression] progress_server：--host 0.0.0.0 → exit 2、make_server 拒絕非 loopback、根不存在 → exit 2: pass")
+    test_check_inbox()
+    print("[regression] check_inbox：缺檔 INFO、列 pending、--resolve 只改該筆四行、--dismiss、缺 --by／找不到 id → 2、連號／status／target WARNING、無法解析 → 2: pass")
+    test_renderer_reads_inbox()
+    print("[regression] renderer 讀收件匣：IR inbox／stats.inbox_pending、節點 meta.inbox 與徽章「收件 1」、頁首橫幅與表單錨點、無收件匣不顯示、無法解析 WARNING、IR-15: pass")
+    test_inbox_docs_registered()
+    print("[regression] 登記：README／status SKILL／project-init 樹／CHANGELOG／tests README 含收件匣三件: pass")
     print("PASS v0.12.0 regressions")
     return 0
 

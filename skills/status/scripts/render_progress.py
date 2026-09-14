@@ -17,6 +17,11 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 - --embed-figures  圖表節點 meta.data_uri 內嵌圖檔（svg／png、單檔 ≤ 5 MB，超過跳過並 WARNING）；預設不內嵌，
              HTML 以相對路徑 meta.file 顯示（HTML 在專案根，相對路徑直接可用）
 
+收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
+{present, pending, items}、有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；
+頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
+＋ 意見）只在經 progress_server.py 以 http 開啟（fetch /api/ping 成功）時啟用，file:// 一律 disabled。
+
 泳道: 專案層（17 站，含 clean rerun 與整體評估兩個專案級關卡）最上，接著 goals.sub_questions
 （kind sq）、goals.appendix_questions（kind aq）各 6 站。每站從對應 SSOT 檔判定 done／expired／blocked／pending／unknown，
 判定規則見 SQ_RULES／PROJECT_RULES 與各 judge_* 函式；每個節點的 evidence[].source 寫出
@@ -142,6 +147,7 @@ REL = {
     'evidence_synthesis': 'literature/evidence-synthesis.yaml',
     'manifest': 'analysis/figures/manifest.json',
     'ledger': 'reviews/issue-ledger.yaml',
+    'inbox': 'PROGRESS.inbox.yaml',
 }
 
 
@@ -932,6 +938,9 @@ TABLE_ROWS_MAX = 200
 EMBED_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
+INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見'}
+INBOX_STATUSES = ('pending', 'done', 'dismissed')
+INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
 PLAN_PATH_RE = re.compile(r'^analysis/plans/([^/]+)\.ya?ml$')
 META_MAX = 200
@@ -1588,6 +1597,38 @@ def validate_graph(graph) -> list[str]:
     return errors
 
 
+# ---------- 收件匣（唯讀） ----------
+
+def build_inbox(src: Sources, graph: dict) -> dict:
+    """讀 PROGRESS.inbox.yaml（唯讀）：回傳 IR 的 inbox 區塊，並把 pending 項掛到圖節點 meta.inbox／badge。"""
+    st = src.status('inbox')
+    if st == 'missing':
+        return {'present': False, 'pending': 0, 'items': []}
+    if st == 'broken':
+        return {'present': False, 'pending': 0, 'items': []}   # Sources 已記 WARNING；視為無
+    items = []
+    for i, it in enumerate(_list(src.data('inbox').get('items'))):
+        if not isinstance(it, dict):
+            src.warnings.append(f'{REL["inbox"]}#items[{i}] 不是 mapping，略過')
+            continue
+        row = {k: _text(it.get(k)) for k in INBOX_FIELDS}
+        row['id'] = row['id'] or f'items[{i}]'
+        row['status'] = row['status'] or 'pending'
+        items.append(row)
+    by_id = {n['id']: n for n in graph.get('nodes', [])}
+    counts: dict[str, int] = {}
+    for row in items:
+        if row['status'] == 'pending' and row['target'] and row['target'] in by_id:
+            n = by_id[row['target']]
+            n['meta'].setdefault('inbox', []).append(row['id'])
+            counts[row['target']] = counts.get(row['target'], 0) + 1
+    for nid, k in counts.items():
+        n = by_id[nid]
+        n['badge'] = '、'.join(x for x in (n['badge'], f'收件 {k}') if x)
+    pending = sum(1 for row in items if row['status'] == 'pending')
+    return {'present': True, 'pending': pending, 'items': items}
+
+
 # ---------- IR ----------
 
 def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False) -> dict:
@@ -1611,6 +1652,8 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         for n in lane['nodes']:
             n_nodes += 1
             by_state[n['state']] = by_state.get(n['state'], 0) + 1
+    graph = build_graph(src, lanes, embed_figures)
+    inbox = build_inbox(src, graph)
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': generated_at,
@@ -1619,8 +1662,9 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         'stages': stages,
         'lanes': lanes,
         'stats': {'lanes': len(lanes), 'nodes': n_nodes, 'by_state': by_state,
-                  'annotations': sum(len(lane['annotations']) for lane in lanes)},
-        'graph': build_graph(src, lanes, embed_figures),
+                  'annotations': sum(len(lane['annotations']) for lane in lanes), 'inbox_pending': inbox['pending']},
+        'graph': graph,
+        'inbox': inbox,
     }
 
 
@@ -1629,7 +1673,7 @@ def validate_ir(ir) -> list[str]:
     errors: list[str] = []
     if not isinstance(ir, dict):
         return ['IR-01 top-level 不是 object']
-    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph'):
+    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph', 'inbox'):
         if key not in ir:
             errors.append(f'IR-01 top-level.{key}')
     if ir.get('schema_version') != SCHEMA_VERSION:
@@ -1714,6 +1758,18 @@ def validate_ir(ir) -> list[str]:
         if any(k not in stats['by_state'] for k in STATES) or sum(stats['by_state'].get(k, 0) for k in STATES) != n_nodes:
             errors.append('IR-10 stats.by_state')
     errors.extend(validate_graph(ir.get('graph')))
+    inbox = ir.get('inbox')
+    if not isinstance(inbox, dict) or not isinstance(inbox.get('present'), bool) or not isinstance(inbox.get('pending'), int) \
+            or not isinstance(inbox.get('items'), list):
+        errors.append('IR-15 inbox')
+    else:
+        for i, it in enumerate(inbox['items']):
+            if not isinstance(it, dict) or any(not isinstance(it.get(k), str) for k in INBOX_FIELDS):
+                errors.append(f'IR-15 inbox.items[{i}]')
+        if sum(1 for it in inbox['items'] if isinstance(it, dict) and it.get('status') == 'pending') != inbox['pending']:
+            errors.append('IR-15 inbox.pending')
+        if isinstance(stats, dict) and stats.get('inbox_pending') != inbox['pending']:
+            errors.append('IR-15 stats.inbox_pending')
     return errors
 
 
@@ -1944,6 +2000,23 @@ path.edge.own{opacity:.9}
 #lightbox[hidden]{display:none}
 #lightbox img{max-width:96vw;max-height:92vh;background:#fff}
 #lightbox .lb-cap{position:absolute;left:16px;right:16px;bottom:10px;color:#fff;font-size:12px;text-align:center}
+#inbox-banner{margin:10px 0 0;padding:8px 12px;border:1px solid var(--expired);border-radius:8px;background:var(--bg-expired);font-size:13px}
+#inbox-banner summary{cursor:pointer;font-weight:600}
+#inbox-banner table{border-collapse:collapse;margin-top:6px;font-size:12px}#inbox-banner td,#inbox-banner th{padding:2px 8px;text-align:left;border-bottom:1px solid var(--line)}
+.inbox-actions{display:flex;gap:8px;align-items:center;margin:10px 0 0;font-size:13px}
+.inbox-actions button,#inbox-form button,.inbox-comment{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
+.inbox-actions button[disabled],.inbox-comment[disabled]{opacity:.5;cursor:not-allowed}
+.inbox-actions .hint{color:var(--muted);font-size:12px}
+#inbox-form{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;align-items:center;justify-content:center}
+#inbox-form[hidden]{display:none}
+#inbox-form form{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;width:min(560px,calc(100vw - 32px));max-height:90vh;overflow:auto}
+#inbox-form label{display:block;margin:8px 0 2px;font-size:13px;font-weight:600}
+#inbox-form input,#inbox-form select,#inbox-form textarea{width:100%;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);box-sizing:border-box}
+#inbox-form textarea{min-height:120px}
+#inbox-form .row{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+#inbox-form .err{color:var(--blocked);font-size:12px;margin-top:6px;min-height:1em}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:8px;z-index:70;font-size:13px}
+#toast[hidden]{display:none}
 @media (max-width:700px){#gdetail{position:static;width:auto;max-height:none;margin-top:14px}}
 """
 
@@ -2072,12 +2145,13 @@ GRAPH_JS = """
   function openLightbox(src,cap){lbImg.src=src;lbImg.alt=cap||'';lbCap.textContent=cap||'';lb.hidden=false;}
   function closeLightbox(){lb.hidden=true;lbImg.removeAttribute('src');}
   lb.addEventListener('click',closeLightbox);
-  function metaRows(m,skip){var keys=Object.keys(m||{}).filter(function(k){return skip.indexOf(k)<0;});if(!keys.length)return '—';var h='<ul>';keys.forEach(function(k){var v=m[k];if(Array.isArray(v))v=v.join('、');if(typeof v==='boolean')v=v?'true':'false';h+='<li><b>'+esc(k)+'</b>：'+esc(v)+'</li>';});return h+'</ul>';}
+  function metaRows(m,skip){var keys=Object.keys(m||{}).filter(function(k){return skip.indexOf(k)<0&&k!=='inbox';});if(!keys.length)return '—';var h='<ul>';keys.forEach(function(k){var v=m[k];if(Array.isArray(v))v=v.join('、');if(typeof v==='boolean')v=v?'true':'false';h+='<li><b>'+esc(k)+'</b>：'+esc(v)+'</li>';});return h+'</ul>';}
   function edgeList(list,dir){if(!list||!list.length)return '—';var h='<ul>';list.forEach(function(ei){var e=G.edges[ei];var other=dir>0?e.to:e.from;h+='<li>'+esc(edgeLabel[e.type]||e.type)+(e.label?'（'+esc(e.label)+'）':'')+' '+(dir>0?'→':'←')+' <span class="goto" data-goto="'+esc(other)+'">'+esc(nodes[other].label)+'</span>'+(nodeVisible(other)?'':'（目前隱藏）')+(e.default_visible?'':' <span class="src">預設不畫</span>')+'<br><span class="src">'+esc(e.source)+'</span></li>';});return h+'</ul>';}
   function renderPanel(id,up,down){
     var n=nodes[id];var h='';
     if(tour!==null)h+=tourLine();
-    h+='<h3>'+esc(typeLabel[n.type]||n.type)+' · '+esc(n.label)+(n.badge?' <span class="src">'+esc(n.badge)+'</span>':'')+'</h3><dl>';
+    h+='<h3>'+esc(typeLabel[n.type]||n.type)+' · '+esc(n.label)+(n.badge?' <span class="src">'+esc(n.badge)+'</span>':'')+' <button type="button" class="inbox-comment" data-target="'+esc(id)+'"'+(serverOk?'':' disabled title="用 progress_server.py 開啟才能送出"')+'>＋ 意見</button></h3><dl>';
+    if(n.meta.inbox&&n.meta.inbox.length){h+='<dt>收件匣（待處理）</dt><dd>'+n.meta.inbox.map(function(x){var it=(ir.inbox&&ir.inbox.items||[]).filter(function(y){return y.id===x;})[0];return esc(x)+(it?'：'+esc(it.title):'');}).join('<br>')+'</dd>';}
     h+='<dt>title</dt><dd>'+esc(n.title||'—')+'</dd>';
     h+='<dt>state</dt><dd>'+esc(stateZh[n.state]||n.state)+'</dd>';
     h+='<dt>source</dt><dd><span class="src">'+esc(n.source)+'</span></dd>';
@@ -2157,6 +2231,31 @@ GRAPH_JS = """
     if(tour!==null&&e.key==='ArrowRight'){e.preventDefault();tourGo(tour+1);}
     if(tour!==null&&e.key==='ArrowLeft'){e.preventDefault();tourGo(tour-1);}
   });
+  // ---- 收件匣表單（只在經 progress_server.py 以 http 開啟時啟用） ----
+  var serverOk=false,formEl=document.getElementById('inbox-form'),newBtn=document.getElementById('inbox-new'),hintEl=document.getElementById('inbox-hint');
+  var fKind=document.getElementById('inbox-kind'),fTarget=document.getElementById('inbox-target'),fTitle=document.getElementById('inbox-title'),fBody=document.getElementById('inbox-body'),fAuthor=document.getElementById('inbox-author'),fErr=document.getElementById('inbox-err');
+  function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.hidden=false;setTimeout(function(){t.hidden=true;},2500);}
+  function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment'),function(b){b.disabled=false;b.title='';});}
+  if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok)enableInbox();}).catch(function(){});}catch(e){}}
+  function fillTargets(sel){fTarget.innerHTML='<option value="">（無）</option>';G.nodes.forEach(function(n){if(n.type!=='question'||n.id==='q:main')return;var o=document.createElement('option');o.value=n.id;o.textContent=n.label+(n.title?'：'+n.title.slice(0,40):'');fTarget.appendChild(o);});
+    if(sel&&!Array.prototype.some.call(fTarget.options,function(o){return o.value===sel;})){var o=document.createElement('option');o.value=sel;o.textContent=(nodes[sel]?nodes[sel].label:sel);fTarget.appendChild(o);}fTarget.value=sel||'';}
+  function openForm(kind,target){if(!serverOk)return;fErr.textContent='';fKind.value=kind;fillTargets(target||'');fKind.disabled=(kind==='comment');fTarget.disabled=(kind==='comment');
+    fTitle.value=(kind==='comment'&&target&&nodes[target])?'意見：'+nodes[target].label:'';fBody.value='';fAuthor.value='';
+    document.getElementById('inbox-form-title').textContent=kind==='comment'?'＋ 意見（'+(nodes[target]?nodes[target].label:target)+'）':'＋ 新問題／新分析';formEl.hidden=false;(kind==='comment'?fBody:fTitle).focus();}
+  function closeForm(){formEl.hidden=true;fKind.disabled=false;fTarget.disabled=false;}
+  newBtn.addEventListener('click',function(){openForm('new_question','');});
+  fKind.addEventListener('change',function(){if(fKind.value==='new_question'){fTarget.value='';}});
+  document.getElementById('inbox-cancel').addEventListener('click',closeForm);
+  document.getElementById('inbox-form-inner').addEventListener('submit',function(e){e.preventDefault();fErr.textContent='';
+    var payload={kind:fKind.value,target:fTarget.value||'',title:fTitle.value.trim(),body:fBody.value.trim(),author:fAuthor.value.trim()};
+    if(!payload.title){fErr.textContent='title 不得為空';return;}if(!payload.body){fErr.textContent='body 不得為空';return;}
+    if(payload.kind==='new_analysis'&&!payload.target){fErr.textContent='新分析請選一個問題節點';return;}
+    fetch('/api/inbox',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(d){return {status:r.status,d:d};});})
+      .then(function(x){if(x.d&&x.d.ok){closeForm();toast('已送入收件匣 '+x.d.id);setTimeout(function(){location.reload();},900);}else{fErr.textContent=(x.d&&x.d.error)||('HTTP '+x.status);}})
+      .catch(function(err){fErr.textContent='送出失敗：'+err;});});
+  body.addEventListener('click',function(e){var b=e.target.closest('.inbox-comment');if(b&&!b.disabled){openForm('comment',b.getAttribute('data-target'));}});
+  var banner=document.getElementById('inbox-banner');if(banner)banner.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&nodes[t.getAttribute('data-goto')]){showTab('relations',true);var id=t.getAttribute('data-goto');if(nodes[id].collapsed&&!nodeVisible(id)){expanded[currentOf[id]]=true;relayout();}select(id,true);}});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!formEl.hidden){closeForm();}});
   relayout();
 })();
 """
@@ -2312,6 +2411,43 @@ def _relations_tab(ir: dict) -> list[str]:
     return lines
 
 
+def _inbox_block(ir: dict) -> list[str]:
+    """頁首的收件匣狀態（兩個分頁共用）＋表單骨架；伺服器不在時按鈕 disabled。"""
+    inbox = ir['inbox']
+    labels = {n['id']: n['label'] for n in ir['graph']['nodes']}
+    lines = []
+    if inbox['present']:
+        lines.append(f'<details id="inbox-banner"><summary>收件匣待處理 {inbox["pending"]} 筆（PROGRESS.inbox.yaml，共 {len(inbox["items"])} 筆）</summary>')
+        pend = [it for it in inbox['items'] if it['status'] == 'pending']
+        if pend:
+            lines.append('<table><thead><tr><th>id</th><th>kind</th><th>target</th><th>title</th><th>at</th></tr></thead><tbody>')
+            for it in pend:
+                tgt = (f'<span class="goto" data-goto="{_h(it["target"])}">{_h(labels.get(it["target"], it["target"]))}</span>'
+                       if it['target'] else '—')
+                lines.append(f'<tr><td>{_h(it["id"])}</td><td>{_h(INBOX_KINDS.get(it["kind"], it["kind"]))}</td><td>{tgt}</td>'
+                             f'<td>{_h(_clip(it["title"], 60))}</td><td>{_h(it["at"])}</td></tr>')
+            lines.append('</tbody></table>')
+        else:
+            lines.append('<p class="src">沒有待處理的項目。</p>')
+        lines.append('<p class="src">處理方式：status skill 逐筆呈使用者裁決後進 SSOT，再以 check_inbox.py --resolve／--dismiss 結案。</p></details>')
+    lines += [
+        '<div class="inbox-actions"><button type="button" id="inbox-new" disabled title="用 progress_server.py 開啟才能送出">＋ 新問題／新分析</button>'
+        '<span class="hint" id="inbox-hint">用 progress_server.py 開啟才能送出（file:// 頁面無法送表單）</span></div>',
+        '<div id="inbox-form" hidden><form id="inbox-form-inner" autocomplete="off">',
+        '<h3 id="inbox-form-title">送入收件匣</h3>',
+        '<label for="inbox-kind">kind</label><select id="inbox-kind"><option value="new_question">新問題</option><option value="new_analysis">新分析</option><option value="comment">意見</option></select>',
+        '<label for="inbox-target">target（節點）</label><select id="inbox-target"><option value="">（無）</option></select>',
+        '<label for="inbox-title">title（一句話）</label><input id="inbox-title" maxlength="200">',
+        '<label for="inbox-body">body（需求或意見全文）</label><textarea id="inbox-body" maxlength="5000"></textarea>',
+        '<label for="inbox-author">author（選填）</label><input id="inbox-author" maxlength="100">',
+        '<div class="err" id="inbox-err"></div>',
+        '<div class="row"><button type="button" id="inbox-cancel">取消</button><button type="submit" id="inbox-submit">送出</button></div>',
+        '</form></div>',
+        '<div id="toast" hidden></div>',
+    ]
+    return lines
+
+
 def _current_label(stage_id: str, stage_label: dict) -> str:
     if not stage_id:
         return '（state.next_stage 未填）'
@@ -2344,6 +2480,7 @@ def render_html(ir: dict, root: Path) -> str:
         f'<p>來源路徑：<code>{_h(ir["project_root"])}</code></p>',
         f'<p class="notice">本檔由 {SCRIPT_REL} 自動產生，請勿手動編輯；要改內容請改對應的 SSOT 檔再重跑。</p>',
         '</header>',
+        *_inbox_block(ir),
         '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button></nav>',
         '<section id="tab-milestones">',
         '<div class="controls">',
@@ -2404,7 +2541,8 @@ def stats_line(ir: dict) -> str:
             f'受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。'
             f'關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、'
             f'goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、'
-            f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。')
+            f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。'
+            f'收件匣待處理 {ir["inbox"]["pending"]}。')
 
 
 def main(argv: list[str] | None = None) -> int:
