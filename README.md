@@ -204,7 +204,7 @@ PROGRESS.ir.json
 PROGRESS.html
 ```
 
-最後三個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）。
+最後三個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——「里程」分頁是每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，「關聯」分頁是問題→計畫→方法→結果→驗證→決策的分層關聯圖（IR 的 `graph` 鍵：節點座標由 Python 算好，SVG 內嵌，點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽），單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）。
 
 ## 相容性與升級
 
