@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.12.0（未發布）
+## 0.12.0（2026-09-14）
 
 關聯圖加第五欄「圖表」，結果節點面板可直接看完成的表與圖。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位）；hook 未動。
 

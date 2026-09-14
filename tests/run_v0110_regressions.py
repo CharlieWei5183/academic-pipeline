@@ -1797,7 +1797,7 @@ def test_hook_docs_registered() -> None:
     assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
     assert text("skills/project-init/SKILL.md").startswith("---\nname: project-init\n")
     plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
-    assert plugin["version"] == "0.11.0", "plugin.json 版號應為 0.11.0（進度時間軸與里程圖釋出）"
+    assert tuple(int(x) for x in plugin["version"].split(".")) >= (0, 11, 0), "plugin.json 版號須 >= 0.11.0（進度時間軸與里程圖自 0.11.0 起）"
 
 
 def main() -> int:
