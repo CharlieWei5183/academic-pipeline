@@ -14,6 +14,8 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 - --json     stdout 改印 IR（ensure_ascii=False, indent=2）；與 --dry-run 正交
              （單獨用仍寫檔；兩者同時 = 只印 IR、不寫）
 - --ir-only  只寫 PROGRESS.ir.json、不寫 PROGRESS.html
+- --embed-figures  圖表節點 meta.data_uri 內嵌圖檔（svg／png、單檔 ≤ 5 MB，超過跳過並 WARNING）；預設不內嵌，
+             HTML 以相對路徑 meta.file 顯示（HTML 在專案根，相對路徑直接可用）
 
 泳道: 專案層（17 站，含 clean rerun 與整體評估兩個專案級關卡）最上，接著 goals.sub_questions
 （kind sq）、goals.appendix_questions（kind aq）各 6 站。每站從對應 SSOT 檔判定 done／expired／blocked／pending／unknown，
@@ -23,6 +25,9 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 
 關聯圖（IR 的 graph 鍵、HTML 的「關聯」分頁）: 節點＝問題 q:／方法 p:（＝計畫版本，label 帶 model_id）／
 驗證 v:／結果 r:／決策 d:，邊＝decomposes／plans／supersedes／validated_by／primary／produces／cites／refers，
+再加第五欄圖表 f:（analysis/figures/manifest.json，r → f depicts「呈現於」；state 依 status 與檔案存在與否；
+results_keys 指到不在圖裡的鍵不建邊、徽章「無對應結果鍵」並 WARNING），結果節點 meta 帶表（columns／rows 最多
+200 列／n_rows／truncated）或 value／display／unit，面板可直接看表與圖。
 全部只從 SSOT 建（來源見 build_graph），缺檔缺欄位就沒有那條邊；每條邊帶 default_visible 與 style
 （solid／dashed／thin）——預設只畫主幹（q→SQ、q→現行 p、p→v、v→主要結果 r、v→穩健性 r 細線）與「未驗證
 旁路」（現行 p→不在任何 primary_results 也不在任何 robustness result_keys 的 r，虛線），取代／引用／決策邊
@@ -39,6 +44,7 @@ exit code: 0 完成; 2 BLOCKER（專案根目錄不存在、IR 未通過自身 s
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import html
 import json
@@ -913,15 +919,19 @@ def attach_annotations(src: Sources, lanes: list[dict]) -> None:
 # ---------- 關聯圖（graph IR） ----------
 
 NODE_TYPES = (('question', '問題'), ('method', '方法'), ('validation', '驗證'), ('result', '結果'),
-              ('decision', '決策'))  # 順序＝關聯圖欄序（問題 → 方法 → 驗證 → 主要結果 → 決策）
+              ('figure', '圖表'), ('decision', '決策'))  # 順序＝關聯圖欄序（問題 → 方法 → 驗證 → 主要結果 → 圖表 → 決策）
 EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('validated_by', '驗證'),
-              ('primary', '主要結果'), ('robustness', '穩健性'), ('produces', '未驗證旁路'), ('cites', '引為證據'),
-              ('refers', '決策關聯'))
+              ('primary', '主要結果'), ('robustness', '穩健性'), ('produces', '未驗證旁路'), ('depicts', '呈現於'),
+              ('cites', '引為證據'), ('refers', '決策關聯'))
 EDGE_STYLES = ('solid', 'dashed', 'thin')
-NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'decision': 'd:'}
+NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'figure': 'f:', 'decision': 'd:'}
 GRAPH_COL = {t: i for i, (t, _) in enumerate(NODE_TYPES)}
 NODE_W, NODE_H, COL_GAP, ROW_GAP, GRAPH_PAD = 260, 36, 330, 48, 20
-DOWNSTREAM_TYPES = ('plans', 'validated_by', 'primary', 'robustness', 'produces', 'cites')
+DOWNSTREAM_TYPES = ('plans', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
+TABLE_ROWS_MAX = 200
+EMBED_MAX_BYTES = 5 * 1024 * 1024
+IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
+MD_MARK_RE = re.compile(r'\*{1,2}')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
 PLAN_PATH_RE = re.compile(r'^analysis/plans/([^/]+)\.ya?ml$')
 META_MAX = 200
@@ -988,7 +998,7 @@ def _plan_doc_meta(doc: dict | None) -> dict:
     return out
 
 
-def build_graph(src: Sources, lanes: list[dict]) -> dict:
+def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) -> dict:
     g = Graph()
     proj = src.data('project') if src.status('project') == 'ok' else {}
     pmeta = _dict(proj.get('project'))
@@ -1107,6 +1117,17 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
             meta = {k: _text(obj.get(k)) for k in ('plan_id', 'model_id', 'run_id', 'script', 'data_fingerprint', 'type')
                     if _text(obj.get(k))}
             meta.update(base_meta)
+            if _text(obj.get('description')):
+                meta['description'] = _text(obj.get('description'))
+            if obj.get('type') == 'table' or isinstance(obj.get('columns'), list):
+                cols = [_text(c) for c in _list(obj.get('columns'))]
+                rows = [r for r in _list(obj.get('rows')) if isinstance(r, list)]
+                meta['table'] = {'columns': cols, 'rows': rows[:TABLE_ROWS_MAX], 'n_rows': len(rows),
+                                 'truncated': len(rows) > TABLE_ROWS_MAX}
+            else:
+                for fld in ('value', 'display', 'unit'):
+                    if fld in obj:
+                        meta[fld] = obj.get(fld)
             n = g.add_node(nid, 'result', key, _text(obj.get('description')) or key,
                            'expired' if pstate == 'expired' else 'done', meta, f'{REL["results"]}#{key}')
         else:
@@ -1238,6 +1259,91 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
             dangling.add(key)
         cite_rank.setdefault(nid, (question_order.index(qid), 2, BIG, ci))
 
+    # 結果節點的列序提示（供圖表欄跟著第一個相連結果排）
+    q_index = {qid: i for i, qid in enumerate(question_order)}
+    active_of_sq: dict[str, str] = {sq: pid for pid, sq in plan_sq.items() if plan_active.get(pid)}
+    producers: dict[str, list[str]] = {}
+    for e in g.edges:
+        if e['type'] == 'produces':
+            producers.setdefault(e['to'], []).append(e['from'][2:])
+    rank_hint: dict[str, tuple] = {}
+    for nid, n in g.nodes.items():
+        if n['type'] != 'result':
+            continue
+        owner = _text(n['meta'].get('plan_id'))
+        pids = producers.get(nid, [])
+        pid = owner if owner and f'p:{owner}' in g.nodes else (pids[0] if pids else '')
+        key = nid[2:]
+        if pid:
+            sq = plan_sq.get(pid, '')
+            cur = active_of_sq.get(sq, pid)
+            decl = decl_order.get((cur, key), decl_order.get((pid, key), BIG))
+            rank_hint[nid] = (q_index.get(f'q:{sq}', BIG), 0 if n['meta'].get('primary') else 1, decl, key)
+        elif nid in cite_rank:
+            rank_hint[nid] = cite_rank[nid] + (key,)
+        else:
+            rank_hint[nid] = (BIG, 3, BIG, key)
+
+    # 圖表節點（analysis/figures/manifest.json）：r → f depicts
+    manifest = src.data('manifest') if src.status('manifest') == 'ok' else {}
+    figs = manifest.get('figures')
+    fig_items = [f for f in figs if isinstance(f, dict)] if isinstance(figs, list) else \
+        [dict(v, id=v.get('id') or k) for k, v in figs.items() if isinstance(v, dict)] if isinstance(figs, dict) else []
+    fig_rank: dict[str, tuple] = {}
+    for fi, fig in enumerate(fig_items):
+        fid = _text(fig.get('id')) or f'figures[{fi}]'
+        nid = f'f:{fid}'
+        source = f'{REL["manifest"]}#figures[{fid}]'
+        file_rel = _text(fig.get('file'))
+        files = [_text(x) for x in _list(fig.get('files')) if _text(x)]
+        status = _text(fig.get('status')).lower()
+        caption_raw = _text(fig.get('caption'))
+        title = _clip(MD_MARK_RE.sub('', caption_raw), META_MAX)
+        exists = bool(file_rel) and src.exists(file_rel)
+        if not exists:
+            state = 'unknown'
+            title = (title + '（檔案不存在）') if title else '檔案不存在'
+        elif ('confirmed' in status or 'reviewed' in status) and 'not_reviewed' not in status:
+            state = 'done'
+        elif 'not_reviewed' in status or 'registered' in status:
+            state = 'pending'
+            title = '已登錄未審：' + title
+        else:
+            state = 'pending'
+        meta = {'file': file_rel, 'files': files, 'role': _text(fig.get('role')), 'figure_number': _text(fig.get('figure_number')),
+                'status': status, 'script': _text(fig.get('script')), 'registered_at': _date(fig.get('registered_at')),
+                'results_keys': [_text(k) for k in _list(fig.get('results_keys')) if _text(k)], 'caption': caption_raw,
+                'spec': fig.get('spec') if isinstance(fig.get('spec'), (dict, list, str, int, float)) else _text(fig.get('spec'))}
+        if embed_figures and exists:
+            cand = file_rel if file_rel.lower().endswith('.svg') else next(
+                (f for f in files if f.lower().endswith(('.png', '.svg')) and src.exists(f)), '')
+            if cand:
+                path = src.root / cand
+                size = path.stat().st_size
+                if size > EMBED_MAX_BYTES:
+                    src.warnings.append(f'{cand} 超過 {EMBED_MAX_BYTES // (1024 * 1024)} MB（{size / (1024 * 1024):.1f} MB），不內嵌')
+                else:
+                    mime = IMAGE_MIME.get(Path(cand).suffix.lower(), 'application/octet-stream')
+                    meta['data_uri'] = f'data:{mime};base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
+        n = g.add_node(nid, 'figure', fid, title, state, meta, source)
+        role = _text(fig.get('role')).lower()
+        n['badge'] = {'main': '主圖', 'supplementary': '補充'}.get(role, '')
+        keys = meta['results_keys']
+        missing = [k for k in keys if f'r:{k}' not in g.nodes]
+        first_rank: tuple = (BIG,)
+        for k in keys:
+            if f'r:{k}' in g.nodes:
+                g.add_edge(f'r:{k}', nid, 'depicts', f'{source}.results_keys', '呈現於')
+                first_rank = min(first_rank, rank_hint.get(f'r:{k}', (BIG,)))
+        if keys and len(missing) == len(keys):
+            n['badge'] = '無對應結果鍵'
+        if missing:
+            src.warnings.append(f'{REL["manifest"]}#figures[{fid}].results_keys 指到不在圖裡的鍵: {"、".join(missing)}')
+        elif not keys:
+            n['badge'] = '無結果鍵'
+            src.infos.append(f'{REL["manifest"]}#figures[{fid}] 無 results_keys')
+        fig_rank[nid] = first_rank + (fi,)
+
     # decisions → refers／supersedes（全部 hidden）
     decisions = [d for d in _list(src.data('decisions').get('decisions')) if isinstance(d, dict)] \
         if src.status('decisions') == 'ok' else []
@@ -1313,16 +1419,14 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
             common = reaches[a] & reaches[b]
             via += sorted(n for n in common if n.startswith('r:'))
             via += sorted(n for n in common if n.startswith('v:'))
+            via += sorted(n for n in common if n.startswith('f:'))
             if via:
-                kinds = [t for t, pre in (('method', 'model:'), ('result', 'r:'), ('validation', 'v:'))
+                kinds = [t for t, pre in (('method', 'model:'), ('result', 'r:'), ('validation', 'v:'), ('figure', 'f:'))
                          if any(v.startswith(pre) for v in via)]
                 shared.append({'a': a, 'b': b, 'via': via, 'kinds': kinds})
 
     # 固定列序（全欄都有）：question 依 lanes；method 依（問題順序, 版本）；validation 依（問題順序, item 序）；
     # result 依（問題順序, primary 先→其他→dangling, 現行 plan 的宣告序）；decision 依 id
-    q_index = {qid: i for i, qid in enumerate(question_order)}
-    active_of_sq: dict[str, str] = {sq: pid for pid, sq in plan_sq.items() if plan_active.get(pid)}
-
     def plan_rank(pid: str) -> tuple:
         sq = plan_sq.get(pid, '')
         return (q_index.get(f'q:{sq}', BIG), g.nodes[f'p:{pid}']['meta'].get('version', BIG), pid)
@@ -1333,26 +1437,10 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
     for pid in plan_sq:
         rank[f'p:{pid}'] = plan_rank(pid)
     rank.update(vrank)
-    producers: dict[str, list[str]] = {}
-    for e in g.edges:
-        if e['type'] == 'produces':
-            producers.setdefault(e['to'], []).append(e['from'][2:])
+    rank.update(rank_hint)
+    rank.update(fig_rank)   # 圖表依（第一個相連結果的列序, manifest 序）
     for nid, n in g.nodes.items():
-        if n['type'] == 'result':
-            owner = _text(n['meta'].get('plan_id'))
-            pids = producers.get(nid, [])
-            pid = owner if owner and f'p:{owner}' in g.nodes else (pids[0] if pids else '')
-            key = nid[2:]
-            if pid:
-                sq = plan_sq.get(pid, '')
-                cur = active_of_sq.get(sq, pid)
-                decl = decl_order.get((cur, key), decl_order.get((pid, key), BIG))
-                rank[nid] = (q_index.get(f'q:{sq}', BIG), 0 if n['meta'].get('primary') else 1, decl, key)
-            elif nid in cite_rank:
-                rank[nid] = cite_rank[nid] + (key,)
-            else:
-                rank[nid] = (BIG, 3, BIG, key)
-        elif n['type'] == 'decision':
+        if n['type'] == 'decision':
             rank[nid] = (nid,)
     layout_graph(g, rank)
 
@@ -1360,6 +1448,7 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
     for n in g.nodes.values():
         by_type[n['type']] += 1
     unvalidated = sum(1 for key in result_objs if key not in validated_by)
+    figures_unreviewed = sum(1 for n in g.nodes.values() if n['type'] == 'figure' and n['state'] != 'done')
     return {
         'node_types': [{'id': t, 'label': lbl} for t, lbl in NODE_TYPES],
         'edge_types': [{'id': t, 'label': lbl} for t, lbl in EDGE_TYPES],
@@ -1368,7 +1457,7 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
         'shared': shared,
         'stats': {'nodes': len(g.nodes), 'edges': len(g.edges), 'by_type': by_type,
                   'shared_pairs': len(shared), 'dangling_result_keys': len(dangling),
-                  'unvalidated_result_keys': unvalidated},
+                  'unvalidated_result_keys': unvalidated, 'figures_unreviewed': figures_unreviewed},
     }
 
 
@@ -1435,8 +1524,21 @@ def validate_graph(graph) -> list[str]:
                 errors.append(f'IR-12 {sub}.{k}')
         if n.get('state') not in STATES and n.get('state') != '':
             errors.append(f'IR-12 {sub}.state')
-        if not isinstance(n.get('meta'), dict):
+        meta = n.get('meta')
+        if not isinstance(meta, dict):
             errors.append(f'IR-12 {sub}.meta')
+        else:
+            if n.get('type') == 'figure':
+                for k in ('files', 'results_keys'):
+                    if k in meta and not isinstance(meta[k], list):
+                        errors.append(f'IR-12 {sub}.meta.{k}')
+                if 'data_uri' in meta and not (isinstance(meta['data_uri'], str) and meta['data_uri'].startswith('data:')):
+                    errors.append(f'IR-12 {sub}.meta.data_uri')
+            if n.get('type') == 'result' and 'table' in meta:
+                t = meta['table']
+                if not isinstance(t, dict) or not isinstance(t.get('columns'), list) or not isinstance(t.get('rows'), list) \
+                        or not isinstance(t.get('n_rows'), int) or not isinstance(t.get('truncated'), bool):
+                    errors.append(f'IR-12 {sub}.meta.table')
         for k in ('x', 'y'):
             if isinstance(n.get(k), bool) or not isinstance(n.get(k), (int, float)):
                 errors.append(f'IR-12 {sub}.{k}')
@@ -1480,14 +1582,15 @@ def validate_graph(graph) -> list[str]:
     n_shared = len(graph['shared'] if isinstance(graph['shared'], list) else [])
     if not isinstance(stats, dict) or stats.get('nodes') != len(ids) or stats.get('edges') != n_edges or \
             stats.get('shared_pairs') != n_shared or not isinstance(stats.get('by_type'), dict) or \
-            not isinstance(stats.get('dangling_result_keys'), int) or not isinstance(stats.get('unvalidated_result_keys'), int):
+            not isinstance(stats.get('dangling_result_keys'), int) or not isinstance(stats.get('unvalidated_result_keys'), int) \
+            or not isinstance(stats.get('figures_unreviewed'), int):
         errors.append('IR-14 graph.stats')
     return errors
 
 
 # ---------- IR ----------
 
-def build_ir(root: Path, src: Sources, generated_at: str) -> dict:
+def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False) -> dict:
     proj = src.data('project') if src.status('project') == 'ok' else {}
     meta = _dict(proj.get('project'))
     title = _text(meta.get('title_zh')) or _text(meta.get('title_en')) or root.name or str(root)
@@ -1517,7 +1620,7 @@ def build_ir(root: Path, src: Sources, generated_at: str) -> dict:
         'lanes': lanes,
         'stats': {'lanes': len(lanes), 'nodes': n_nodes, 'by_state': by_state,
                   'annotations': sum(len(lane['annotations']) for lane in lanes)},
-        'graph': build_graph(src, lanes),
+        'graph': build_graph(src, lanes, embed_figures),
     }
 
 
@@ -1620,10 +1723,10 @@ CSS = """
 :root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
 --done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
 --badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;
---t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;}
+--t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;}
 @media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
 --done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;
---t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;}}
+--t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px}
@@ -1787,7 +1890,7 @@ GRAPH_CSS = """
 .glegend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:6px 0 12px;font-size:12px;color:var(--muted)}
 .glegend span{display:inline-flex;align-items:center;gap:5px}
 .tsw{display:inline-block;width:10px;height:14px;border-radius:2px}
-.tsw.question{background:var(--t-question)}.tsw.method{background:var(--t-method)}.tsw.validation{background:var(--t-validation)}.tsw.result{background:var(--t-result)}.tsw.decision{background:var(--t-decision)}
+.tsw.question{background:var(--t-question)}.tsw.method{background:var(--t-method)}.tsw.validation{background:var(--t-validation)}.tsw.result{background:var(--t-result)}.tsw.figure{background:var(--t-figure)}.tsw.decision{background:var(--t-decision)}
 .esw{display:inline-block;width:26px;height:0;border-top:2px solid var(--fg);opacity:.7}
 .esw.dashed{border-top-style:dashed}.esw.faint{opacity:.25}.esw.thin{border-top-width:1px;opacity:.35}
 #graph-wrap{position:relative;overflow:auto;height:72vh;min-height:360px;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:grab;user-select:none}
@@ -1805,7 +1908,7 @@ GRAPH_CSS = """
 .gnode.s-pending .box{fill:var(--bg-pending);stroke:var(--pending)}.gnode.s-pending .sym{fill:var(--pending)}
 .gnode.s-unknown .box{fill:var(--bg-pending);stroke:var(--unknown);stroke-dasharray:2 3}.gnode.s-unknown .sym{fill:var(--unknown)}
 .gnode .tbar{fill:var(--pending)}
-.gnode.t-question .tbar{fill:var(--t-question)}.gnode.t-method .tbar{fill:var(--t-method)}.gnode.t-validation .tbar{fill:var(--t-validation)}.gnode.t-result .tbar{fill:var(--t-result)}.gnode.t-decision .tbar{fill:var(--t-decision)}
+.gnode.t-question .tbar{fill:var(--t-question)}.gnode.t-method .tbar{fill:var(--t-method)}.gnode.t-validation .tbar{fill:var(--t-validation)}.gnode.t-result .tbar{fill:var(--t-result)}.gnode.t-figure .tbar{fill:var(--t-figure)}.gnode.t-decision .tbar{fill:var(--t-decision)}
 .gnode.gone,path.edge.off{display:none}
 path.edge{fill:none;stroke:var(--fg);stroke-width:1.4;opacity:.45;marker-end:url(#arrow)}
 path.edge.st-dashed{stroke-dasharray:6 4}
@@ -1829,6 +1932,18 @@ path.edge.own{opacity:.9}
 #gdetail .goto,#gdetail .expand{color:var(--current);cursor:pointer;text-decoration:underline dotted}
 #gdetail .tour{background:var(--proj);border-radius:6px;padding:6px 8px;margin-bottom:8px}
 .arrow-default{fill:var(--fg);opacity:.6}.arrow-up{fill:var(--up)}.arrow-down{fill:var(--down)}.arrow-path{fill:var(--path)}
+#gdetail{width:min(560px,calc(100vw - 32px))}
+#gdetail table.rt{border-collapse:collapse;font-size:11px;margin:4px 0;max-width:100%}
+#gdetail .rt-wrap{overflow:auto;max-height:260px;border:1px solid var(--line);border-radius:6px}
+#gdetail table.rt th,#gdetail table.rt td{border:1px solid var(--line);padding:2px 5px;text-align:left;white-space:nowrap}
+#gdetail table.rt th{background:var(--proj);position:sticky;top:0}
+#gdetail .fig{margin:6px 0 10px;padding:6px;border:1px solid var(--line);border-radius:6px}
+#gdetail .fig img{max-width:100%;max-height:220px;display:block;cursor:zoom-in;background:#fff}
+#gdetail .fig .cap{font-size:12px;margin-top:4px}#gdetail .fig .missing{color:var(--blocked);font-size:12px}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:50;display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+#lightbox[hidden]{display:none}
+#lightbox img{max-width:96vw;max-height:92vh;background:#fff}
+#lightbox .lb-cap{position:absolute;left:16px;right:16px;bottom:10px;color:#fff;font-size:12px;text-align:center}
 @media (max-width:700px){#gdetail{position:static;width:auto;max-height:none;margin-top:14px}}
 """
 
@@ -1933,6 +2048,30 @@ GRAPH_JS = """
       h+='</ol>';}
     body.innerHTML=h;panel.hidden=false;
   }
+  function plainCaption(c){return String(c||'').replace(/\*{1,2}/g,'');}
+  function figSrc(f){return f.meta.data_uri||f.meta.file||'';}
+  function figBlock(f){
+    var src=figSrc(f);var h='<div class="fig" data-fig="'+esc(f.id)+'">';
+    if(src)h+='<img loading="lazy" alt="'+esc(f.id)+'" data-src="'+esc(src)+'" data-cap="'+esc(plainCaption(f.meta.caption))+'">';
+    else h+='<div class="missing">找不到檔案：（manifest 未給 file）</div>';
+    h+='<div class="cap"><b>'+esc(f.id)+'</b>'+(f.badge?' <span class="src">'+esc(f.badge)+'</span>':'')+'<br>'+esc(plainCaption(f.meta.caption)||'—')+'</div>';
+    h+='<div class="src">role '+esc(f.meta.role||'—')+' · status '+esc(f.meta.status||'—')+' · '+esc(f.meta.figure_number||'—')+' · '+esc(stateZh[f.state]||f.state)+'</div>';
+    return h+'</div>';
+  }
+  function tableBlock(t){
+    if(!t)return '';var h='<p class="src">共 '+t.n_rows+' 列'+(t.truncated?'（顯示前 '+t.rows.length+'）':'')+'，'+t.columns.length+' 欄</p>';
+    h+='<div class="rt-wrap"><table class="rt"><thead><tr>';t.columns.forEach(function(c){h+='<th>'+esc(c)+'</th>';});h+='</tr></thead><tbody>';
+    t.rows.forEach(function(r){h+='<tr>';(r||[]).forEach(function(c){h+='<td>'+esc(c===null||c===undefined?'':c)+'</td>';});h+='</tr>';});
+    return h+'</tbody></table></div>';
+  }
+  function bindImages(){Array.prototype.forEach.call(body.querySelectorAll('.fig img[data-src]'),function(img){
+    img.addEventListener('error',function(){var d=document.createElement('div');d.className='missing';d.textContent='找不到檔案：'+(img.getAttribute('data-src')||'').slice(0,200);img.replaceWith(d);});
+    img.addEventListener('click',function(e){e.stopPropagation();openLightbox(img.getAttribute('data-src'),img.getAttribute('data-cap'));});
+    img.src=img.getAttribute('data-src');});}
+  var lb=document.getElementById('lightbox'),lbImg=lb.querySelector('img'),lbCap=lb.querySelector('.lb-cap');
+  function openLightbox(src,cap){lbImg.src=src;lbImg.alt=cap||'';lbCap.textContent=cap||'';lb.hidden=false;}
+  function closeLightbox(){lb.hidden=true;lbImg.removeAttribute('src');}
+  lb.addEventListener('click',closeLightbox);
   function metaRows(m,skip){var keys=Object.keys(m||{}).filter(function(k){return skip.indexOf(k)<0;});if(!keys.length)return '—';var h='<ul>';keys.forEach(function(k){var v=m[k];if(Array.isArray(v))v=v.join('、');if(typeof v==='boolean')v=v?'true':'false';h+='<li><b>'+esc(k)+'</b>：'+esc(v)+'</li>';});return h+'</ul>';}
   function edgeList(list,dir){if(!list||!list.length)return '—';var h='<ul>';list.forEach(function(ei){var e=G.edges[ei];var other=dir>0?e.to:e.from;h+='<li>'+esc(edgeLabel[e.type]||e.type)+(e.label?'（'+esc(e.label)+'）':'')+' '+(dir>0?'→':'←')+' <span class="goto" data-goto="'+esc(other)+'">'+esc(nodes[other].label)+'</span>'+(nodeVisible(other)?'':'（目前隱藏）')+(e.default_visible?'':' <span class="src">預設不畫</span>')+'<br><span class="src">'+esc(e.source)+'</span></li>';});return h+'</ul>';}
   function renderPanel(id,up,down){
@@ -1947,21 +2086,33 @@ GRAPH_JS = """
       h+='<dt>models</dt><dd>'+esc((n.meta.models||[]).join('、')||'—')+'</dd>';
       var sv=n.meta.superseded_versions||[];h+='<dt>superseded_versions（'+sv.length+'）</dt><dd>'+(sv.length?sv.map(function(p){return '<span class="goto" data-goto="p:'+esc(p)+'">'+esc(p)+'</span>';}).join('、')+' <span class="expand" data-expand="'+esc(id)+'">'+(expanded[id]?'收合舊版':'展開舊版')+'</span>':'無')+'</dd>';
       if(n.meta.amendment_reason)h+='<dt>amendment_reason</dt><dd>'+esc(n.meta.amendment_reason)+'</dd>';}
-    if(n.type==='result'){skip=['primary','validated_by','robustness_id','validation_kind'];
+    if(n.type==='result'){skip=['primary','validated_by','robustness_id','validation_kind','table','description'];
       var vk=n.meta.validation_kind||'';h+='<dt>validation_kind</dt><dd>'+(vk==='primary'?'primary（主要結果）':vk==='robustness'?'robustness（只在穩健性 result_keys）':'—（未經任何驗證 item）')+'</dd>';
       h+='<dt>primary</dt><dd>'+(n.meta.primary?'是':'否')+'</dd>';
       h+='<dt>validated_by</dt><dd>'+((n.meta.validated_by||[]).length?n.meta.validated_by.map(function(v){return '<span class="goto" data-goto="v:'+esc(v)+'">'+esc(v)+'</span>';}).join('、'):'無')+'</dd>';
-      if(n.meta.robustness_id)h+='<dt>robustness_id</dt><dd>'+esc(n.meta.robustness_id)+'</dd>';}
+      if(n.meta.robustness_id)h+='<dt>robustness_id</dt><dd>'+esc(n.meta.robustness_id)+'</dd>';
+      if(n.meta.description)h+='<dt>description</dt><dd>'+esc(n.meta.description)+'</dd>';}
+    if(n.type==='figure'){skip=['caption','files','results_keys','data_uri','spec'];
+      h+='<dt>圖</dt><dd>'+figBlock(n)+'</dd>';
+      h+='<dt>files</dt><dd>'+esc((n.meta.files||[]).join('、')||'—')+'</dd>';
+      var rk=(inE[id]||[]).filter(function(ei){return G.edges[ei].type==='depicts';}).map(function(ei){return G.edges[ei].from;});
+      h+='<dt>結果鍵</dt><dd>'+(rk.length?rk.map(function(r){return '<span class="goto" data-goto="'+esc(r)+'">'+esc(nodes[r].label)+'</span>';}).join('、'):'無（'+esc((n.meta.results_keys||[]).join('、')||'manifest 未列')+'）')+'</dd>';
+      if(n.meta.spec)h+='<dt>spec</dt><dd>'+esc(typeof n.meta.spec==='object'?JSON.stringify(n.meta.spec):n.meta.spec)+'</dd>';}
     h+='<dt>meta</dt><dd>'+metaRows(n.meta,skip)+'</dd>';
+    if(n.type==='result'){
+      if(n.meta.table)h+='<dt>表</dt><dd>'+tableBlock(n.meta.table)+'</dd>';
+      else if('display' in n.meta||'value' in n.meta)h+='<dt>值</dt><dd>'+esc(('display' in n.meta&&n.meta.display!==null)?n.meta.display:n.meta.value)+(n.meta.unit?' '+esc(n.meta.unit):'')+'</dd>';
+      var figs=(outE[id]||[]).filter(function(ei){return G.edges[ei].type==='depicts';}).map(function(ei){return nodes[G.edges[ei].to];});
+      h+='<dt>圖表（'+figs.length+'）</dt><dd>'+(figs.length?figs.map(figBlock).join(''):'無')+'</dd>';}
     h+='<dt>進邊（上游 '+Object.keys(up.nodes).length+' 個節點）</dt><dd>'+edgeList(inE[id],-1)+'</dd>';
     h+='<dt>出邊（下游 '+Object.keys(down.nodes).length+' 個節點）</dt><dd>'+edgeList(outE[id],1)+'</dd>';
     if(n.type==='question'){var sh=G.shared.filter(function(s){return s.a===id||s.b===id;});h+='<dt>共用關係</dt><dd>';
       if(!sh.length)h+='無';else{h+='<ul>';sh.forEach(function(s){var other=s.a===id?s.b:s.a;var parts=[];
         var mods=s.via.filter(function(v){return v.indexOf('model:')===0;}).map(function(v){return esc(v.slice(6));});if(mods.length)parts.push('方法 '+mods.join('、'));
-        [['result','r:'],['validation','v:']].forEach(function(t){var ids=s.via.filter(function(v){return v.indexOf(t[1])===0&&nodes[v];});if(ids.length)parts.push(typeLabel[t[0]]+' '+ids.map(function(v){return '<span class="goto" data-goto="'+esc(v)+'">'+esc(nodes[v].label)+'</span>';}).join('、'));});
+        [['result','r:'],['validation','v:'],['figure','f:']].forEach(function(t){var ids=s.via.filter(function(v){return v.indexOf(t[1])===0&&nodes[v];});if(ids.length)parts.push(typeLabel[t[0]]+' '+ids.map(function(v){return '<span class="goto" data-goto="'+esc(v)+'">'+esc(nodes[v].label)+'</span>';}).join('、'));});
         h+='<li>與 <span class="goto" data-goto="'+esc(other)+'">'+esc(nodes[other].label)+'</span> 共用：'+parts.join('；')+'</li>';});h+='</ul>';}
       h+='</dd>';}
-    h+='</dl>';body.innerHTML=h;panel.hidden=false;
+    h+='</dl>';body.innerHTML=h;panel.hidden=false;bindImages();
   }
   body.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&t.getAttribute('data-goto')){var id=t.getAttribute('data-goto');if(nodes[id]&&!nodeVisible(id)&&nodes[id].collapsed){expanded[currentOf[id]]=true;relayout();}select(id,true);return;}
     var x=e.target.closest('.expand');if(x){expandChain(x.getAttribute('data-expand'));}});
@@ -1982,12 +2133,14 @@ GRAPH_JS = """
     var plans=(outE[id]||[]).filter(function(ei){return G.edges[ei].type==='plans';}).map(function(ei){return nodes[G.edges[ei].to];});
     var curP=null;plans.forEach(function(p){if(!p.collapsed&&(!curP||(p.meta.version||0)>(curP.meta.version||0)))curP=p;});
     if(!curP)return n.label+' ｜ 方法 無（'+plans.length+' 個舊版，無現行版）';
+    var down=walk(id,1).nodes;
     var vids=[],vst={};(outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='validated_by'){vids.push(nodes[e.to].label);vst[nodes[e.to].meta.status||'unknown']=true;}});
     var prim={},rob={},unval=0;vids.forEach(function(v){(outE['v:'+v]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='primary')prim[e.to]=true;if(e.type==='robustness')rob[e.to]=true;});});
     Object.keys(prim).forEach(function(k){delete rob[k];});
     (outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='produces'&&e.default_visible)unval++;});
     var models=(curP.meta.models||[]).join('、')||'無 model';var k=(curP.meta.superseded_versions||[]).length;
-    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+Object.keys(prim).length+' 鍵、穩健性 '+Object.keys(rob).length+' 鍵、未驗證 '+unval+' 鍵';
+    var figs={},fu=0;Object.keys(down).forEach(function(kk){var m=nodes[kk];if(m.type==='figure'){figs[kk]=true;if(m.state!=='done')fu++;}});
+    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+Object.keys(prim).length+' 鍵、穩健性 '+Object.keys(rob).length+' 鍵、未驗證 '+unval+' 鍵 → 圖表 '+Object.keys(figs).length+' 張（未審 '+fu+'）';
   }
   function tourLine(){return '<div class="tour">第 '+(tour+1)+'／'+chapters.length+' 章：'+esc(chapterSummary(chapters[tour]))+'<br><span class="src">← → 換章，Esc 離開</span></div>';}
   function tourGo(i){if(!chapters.length)return;tour=((i%chapters.length)+chapters.length)%chapters.length;select(chapters[tour],true);}
@@ -1998,7 +2151,7 @@ GRAPH_JS = """
   document.addEventListener('keydown',function(e){
     if(cur!=='relations')return;var tag=(e.target&&e.target.tagName||'').toLowerCase();var typing=tag==='input'||tag==='textarea';
     if(e.key==='/'&&!typing){e.preventDefault();search.focus();search.select();return;}
-    if(e.key==='Escape'){if(typing){search.value='';runSearch();search.blur();}clearAll();return;}
+    if(e.key==='Escape'){if(!lb.hidden){closeLightbox();return;}if(typing){search.value='';runSearch();search.blur();}clearAll();return;}
     if(typing)return;
     if(e.key==='p'||e.key==='P'){e.preventDefault();tourGo(tour===null?0:tour);return;}
     if(tour!==null&&e.key==='ArrowRight'){e.preventDefault();tourGo(tour+1);}
@@ -2137,7 +2290,7 @@ def _relations_tab(ir: dict) -> list[str]:
     for t, lbl in NODE_TYPES:
         if t != 'decision':
             lines.append(f'<span><span class="tsw {t}"></span>{lbl}</span>')
-    lines.append(f'<span><span class="tsw decision"></span>決策（開關）</span>')
+    lines.append('<span><span class="tsw decision"></span>決策（開關）</span>')
     lines += [
         '<span>｜</span>',
         '<span>● 完成</span><span>◐ 過期</span><span>✖ 受阻</span><span>○ 未到</span><span>◌ 不明</span>',
@@ -2145,13 +2298,15 @@ def _relations_tab(ir: dict) -> list[str]:
         '<span><span class="esw"></span>主幹（規劃／驗證／主要結果）</span>',
         '<span><span class="esw dashed"></span>未驗證旁路</span>',
         '<span><span class="esw thin"></span>細線＝穩健性</span>',
+        '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、未驗證的結果鍵 {st["unvalidated_result_keys"]}。欄序：問題 → 方法（計畫版本）→ 驗證 → 結果 → 決策；舊版計畫預設收合，虛線＝繞過驗證的旁路。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、未驗證的結果鍵 {st["unvalidated_result_keys"]}、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：問題 → 方法（計畫版本）→ 驗證 → 結果 → 圖表 → 決策；舊版計畫預設收合，虛線＝繞過驗證的旁路。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
+        '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
     ]
     return lines
@@ -2219,7 +2374,7 @@ def render_html(ir: dict, root: Path) -> str:
     lines += [
         '<footer>',
         f'<p>泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。</p>',
-        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}。</p>',
+        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。</p>',
         '<p>資料維護狀況：</p><ul>',
     ]
     for lane in ir['lanes']:
@@ -2248,7 +2403,8 @@ def stats_line(ir: dict) -> str:
     return (f'泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、'
             f'受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。'
             f'關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、'
-            f'goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}。')
+            f'goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、'
+            f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。')
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2258,6 +2414,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dry-run', action='store_true', help='不寫檔；單獨使用時把 HTML 印到 stdout')
     parser.add_argument('--json', action='store_true', help='stdout 改印 IR JSON')
     parser.add_argument('--ir-only', action='store_true', help='只寫 PROGRESS.ir.json、不寫 PROGRESS.html')
+    parser.add_argument('--embed-figures', action='store_true',
+                        help='把圖檔（svg／png，單檔 ≤ 5 MB）以 data URI 內嵌進圖表節點 meta.data_uri；預設不內嵌')
     args = parser.parse_args(argv)
 
     quiet_stdout = args.dry_run or args.json
@@ -2273,7 +2431,7 @@ def main(argv: list[str] | None = None) -> int:
 
     src = Sources(root)
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
-    ir = build_ir(root, src, generated_at)
+    ir = build_ir(root, src, generated_at, args.embed_figures)
     for w in src.warnings:
         print(f'WARNING {w}', file=diag)
     for i in src.infos:
