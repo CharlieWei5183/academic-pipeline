@@ -870,7 +870,7 @@ def test_aq_docs_registered() -> None:
     need("README.md", "附錄問題", "plan")
     need("tests/README.md", "附錄問題", "AQ1-v1")
     meta = json.loads(text(".claude-plugin/plugin.json"))
-    assert tuple(int(x) for x in meta["version"].split(".")) >= (0, 13, 3), meta["version"]
+    assert tuple(int(x) for x in meta["version"].split(".")) >= (0, 13, 4), meta["version"]
     assert text("skills/study-design/SKILL.md").startswith("---\nname: study-design\n")
     assert text("skills/validate-results/SKILL.md").startswith("---\nname: validate-results\n")
 
