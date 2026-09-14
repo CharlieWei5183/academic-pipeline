@@ -10,10 +10,10 @@
 - id 形如 D-<三位連號> 且連號、唯一; 必填欄位（id/date/stage/checkpoint/decision/reason）
 - date 經 str() 後須為 ISO 8601（YYYY-MM-DD）
 - stage 屬 skill 名詞彙表（STAGES）
-- 選填欄位型別: question / issue / method 為字串; evidence 為字串清單
+- 選填欄位型別: question / exec_issue / method 為字串; evidence 為字串清單
 - question 符合 SQ# / AQ# 時須存在於 project.yaml 的 goals.sub_questions[].id ∪
-  goals.appendix_questions[].id（兩個清單都空時不驗、列 info）; issue 非空時 question
-  不得為空（issue 須掛在某個 question 之下）
+  goals.appendix_questions[].id（兩個清單都空時不驗、列 info）; exec_issue 非空時 question
+  不得為空（exec_issue 須掛在某個 question 之下）
 - links 指向存在的對象: SQ id / results 鍵 / claim id / issue id / E# / manifest 步驟(P#) / D#
   （對應來源檔未提供或不存在時, 該類指向列 info 不驗）
 - supersedes 指向存在的 D#
@@ -24,9 +24,9 @@
 
 決策日誌是紀錄不是關卡: 一律列 WARNING 請使用者修, 不擋管線（exit 0;
 檔案無法解析才 exit 2）。decisions.yaml 不存在 → info, exit 0（回溯相容）。
-新欄位（question / issue / method / evidence）與階段收尾條目皆為選填, 舊專案缺欄位只列
+新欄位（question / exec_issue / method / evidence）與階段收尾條目皆為選填, 舊專案缺欄位只列
 WARNING 或 INFO, 不改 exit code。一筆決策落在三層之一——主問題（question: main）、
-子問題（question: SQ#／AQ#）、或某個問題之下的執行問題（question 再加 issue）; method
+子問題（question: SQ#／AQ#）、或某個問題之下的執行問題（question 再加 exec_issue）; method
 只有一欄, 意義跟著那一層走。
 """
 from __future__ import annotations
@@ -223,18 +223,18 @@ def main():
         if d.get('stage') and d.get('stage') not in STAGES:
             warnings.append(f'{did}: stage "{d.get("stage")}" 不在 skill 名詞彙表')
         # 選填欄位型別（舊條目缺欄位不報）
-        for f in ('question', 'issue', 'method'):
+        for f in ('question', 'exec_issue', 'method'):
             if d.get(f) is not None and not isinstance(d.get(f), str):
                 warnings.append(f'{did}: {f} 須為字串（實際 {type(d.get(f)).__name__}）')
-        # question 指向 SQ#/AQ# 時須存在; issue 須掛在某個 question 之下
+        # question 指向 SQ#/AQ# 時須存在; exec_issue 須掛在某個 question 之下
         q = str(d.get('question') or '').strip()
         if re.fullmatch(r'(SQ|AQ)\d+', q):
             if not question_ids:
                 infos.append(f'{did}: project.yaml 無 sub_questions／appendix_questions, 不驗 question "{q}"')
             elif q not in question_ids:
                 warnings.append(f'{did}: question 指向不存在的子問題 "{q}"')
-        if str(d.get('issue') or '').strip() and not q:
-            warnings.append(f'{did}: issue 須掛在某個 question 之下（question 為空）')
+        if str(d.get('exec_issue') or '').strip() and not q:
+            warnings.append(f'{did}: exec_issue 須掛在某個 question 之下（question 為空）')
         ev = d.get('evidence')
         if ev is not None:
             if not isinstance(ev, list):

@@ -61,4 +61,4 @@ metadata:
 
 經使用者確認後更新 SQ 的 `ms:` links 與 `state.zh_latest`。有 SI 素材先 write-supplementary，再執行完整 check-consistency。申報：「本階段更新：state.zh_latest → v<N>；下一站：write-supplementary／check-consistency」。
 
-收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: write-manuscript`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
+收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: write-manuscript`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`exec_issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 exec_issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
