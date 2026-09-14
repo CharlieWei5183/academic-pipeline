@@ -1,0 +1,16 @@
+{
+  "description": "session 結束時自動重算 academic-pipeline 專案的 PROGRESS.ir.json、PROGRESS.html 與 DECISIONS-TIMELINE.md（唯讀 SSOT；失敗只寫 <root>/.progress-hook.log，不影響主流程；ACADEMIC_PIPELINE_PROGRESS_HOOK=off 可關）。",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/status/scripts/progress_hook.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

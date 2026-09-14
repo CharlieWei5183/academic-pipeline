@@ -31,7 +31,7 @@ metadata:
 
 對 v0.7.x 專案執行適用 checker；state 與 artifact 衝突時以 checker 為準並修復快取。決策日誌 warning 不擋路，但 gate blocker 不能跳過。
 
-重算兩份自動產生的進度檔（兩支腳本都唯讀 SSOT，只寫各自的產出）：
+重算兩份自動產生的進度檔（兩支腳本都唯讀 SSOT，只寫各自的產出）；同樣兩支亦由 plugin 的 `SessionEnd` hook（`hooks/hooks.json` → `scripts/progress_hook.py`）在 session 結束時自動重算，執行紀錄在 `<root>/.progress-hook.log`，`ACADEMIC_PIPELINE_PROGRESS_HOOK=off` 可關；hook 失敗不影響主流程，要立刻看到最新進度仍可手動跑：
 
 ```bash
 python3 <skill路徑>/scripts/render_progress.py <root>             # PROGRESS.ir.json ＋ PROGRESS.html

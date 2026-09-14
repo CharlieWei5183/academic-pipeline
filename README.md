@@ -202,9 +202,14 @@ decisions.yaml
 DECISIONS-TIMELINE.md
 PROGRESS.ir.json
 PROGRESS.html
+.progress-hook.log
 ```
 
-最後三個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——「里程」分頁是每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，「關聯」分頁是問題→方法（計畫版本，舊版收合）→驗證→主要結果的分層關聯圖（IR 的 `graph` 鍵：節點座標由 Python 算好，SVG 內嵌，state 以底色與符號呈現，預設只畫主幹與「未驗證旁路」虛線，點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽），單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）。
+最後四個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——「里程」分頁是每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，「關聯」分頁是問題→方法（計畫版本，舊版收合）→驗證→主要結果的分層關聯圖（IR 的 `graph` 鍵：節點座標由 Python 算好，SVG 內嵌，state 以底色與符號呈現，預設只畫主幹與「未驗證旁路」虛線，點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽），單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）；`.progress-hook.log` 是下段 hook 的執行紀錄，不是進度內容。
+
+### 自動重算（hook）
+
+plugin 根的 `hooks/hooks.json` 註冊一個 `SessionEnd` hook（`python3 "${CLAUDE_PLUGIN_ROOT}/skills/status/scripts/progress_hook.py"`，timeout 20 秒），Claude Code session 正常結束時自動跑一次：從 hook 的 stdin JSON 取 `cwd`，在 cwd 本身或其一層非隱藏子目錄（跳過 `archive/`、`data/`、`node_modules/`、`.git/`，路徑含 `/archive/` 一律不選）找第一個含 `project.yaml` 且有 `goals` 或 `project` 鍵的目錄當專案根，依序執行 `render_progress.py` 與 `render_decisions_timeline.py`（各 15 秒 timeout），重算 `PROGRESS.ir.json`、`PROGRESS.html`、`DECISIONS-TIMELINE.md`。hook 只讀 SSOT，除了那三個產物只多寫 `<root>/.progress-hook.log`（每支 renderer 一行：時間、session_id、腳本、`ok`／`fail rc=<n>`／`timeout`／`error`、stderr 末 200 字；超過 200 KB 自動截到 100 KB）；一律 exit 0、stdout 不印東西，renderer 失敗只進 log，不影響 session 結束。找不到專案根就靜默略過。逃生口：環境變數 `ACADEMIC_PIPELINE_PROGRESS_HOOK=off`。hook 隨 plugin 載入，安裝或更新 plugin 後要重開 session 才生效；手動測試可用 `progress_hook.py --find-only --cwd <path>` 只印找到的根到 stderr、不落檔。
 
 ## 相容性與升級
 
