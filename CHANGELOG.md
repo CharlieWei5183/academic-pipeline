@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.13.1（2026-09-14）
+
+1. **關聯圖把 `q:main` 放到 SQ／AQ 更左邊的獨立一欄**：欄序改為 主問題(0) → 問題(1，SQ／AQ) → 方法(2) → 驗證(3) → 結果(4) → 圖表(5) → 決策(6)；`q:main` 的 type 維持 `question`（顏色、圖例、`node_types`、`stats.by_type` 不變），只是 `col` 為 0，其他 question 節點 `col` 為 1（`node_col()` 決定，`validate_graph` 同步）。`decomposes` 邊（main → SQ／AQ）成為跨欄邊，用一般折線畫；`q:main` 垂直位置放在 SQ／AQ 欄第一筆與最後一筆的中間（Python `layout_graph` 與 JS `relayout()` 都居中，展開／篩選後仍成立）。導覽第 1 章不變。測試：`run_v0130` 加一段（col／x／居中／decomposes 可見／HTML 折線起點），`run_v0110`／`run_v0120`／`run_v0130` 涉及 col 的斷言同步 +1。
+
 ## 0.13.0（2026-09-14）
 
 關聯圖把「主要結果」與「次要結果（敏感性分析）」分開：同一個分析（plan）底下的敏感性分析是主分析的子項，每個有產出的分析都連到它的結果。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位與一種邊）。

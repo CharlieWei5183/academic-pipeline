@@ -190,7 +190,7 @@ def test_figure_nodes_and_depicts() -> None:
         assert [t["label"] for t in g["edge_types"] if t["id"] == "depicts"] == ["呈現於"]
         assert "f:fig_a" in nodes and "f:fig_b" in nodes, sorted(nodes)
         a, b = nodes["f:fig_a"], nodes["f:fig_b"]
-        assert a["type"] == "figure" and a["col"] == 4 and a["label"] == "fig_a" and a["badge"] == "主圖"
+        assert a["type"] == "figure" and a["col"] == 5 and a["label"] == "fig_a" and a["badge"] == "主圖"
         assert a["state"] == "pending" and a["title"] == "已登錄未審：Fig. 1 | 標題 內文 斜體 <i>", a["title"]
         assert a["meta"]["file"] == "analysis/figures/fig_a.svg" and a["meta"]["files"] == ["analysis/figures/fig_a.svg", "analysis/figures/fig_a.pdf"]
         assert a["meta"]["role"] == "main" and a["meta"]["figure_number"] == "Fig. 1" and a["meta"]["status"] == "registered_not_reviewed"

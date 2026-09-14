@@ -42,7 +42,8 @@ results_keys 指到不在圖裡的鍵不建邊、徽章「無對應結果鍵」�
 點選或開關才顯。superseded 計畫收合（collapsed），現行版帶 superseded_versions 與
 徽章。plan 宣告但 results.json 沒登錄的鍵建 pending 節點、goals 指向不存在的鍵建 unknown 節點並計入
 stats.dangling_result_keys；primary 與 robustness 都沒驗過的登錄鍵計入 stats.unvalidated_result_keys。版面由
-Python 算好（欄序 question → method → validation → result → decision，每欄固定序：問題依 lanes、方法依
+Python 算好（欄序 主問題 q:main → question（SQ／AQ）→ method → validation → result → figure → decision，主問題獨占
+最左一欄並在 SQ／AQ 欄的第一筆與最後一筆之間居中；每欄固定序：問題依 lanes、方法依
 （問題, 版本）、驗證依（問題, item 序）、結果依（問題, 主要→其他→dangling, 現行 plan 宣告序）、決策依 id；
 x／y 為收合檢視，另給 col／order 讓 JS 展開時重排），HTML 只照座標畫 SVG，渲染確定性。
 
@@ -928,7 +929,9 @@ def attach_annotations(src: Sources, lanes: list[dict]) -> None:
 # ---------- 關聯圖（graph IR） ----------
 
 NODE_TYPES = (('question', '問題'), ('method', '方法'), ('validation', '驗證'), ('result', '結果'),
-              ('figure', '圖表'), ('decision', '決策'))  # 順序＝關聯圖欄序（問題 → 方法 → 驗證 → 主要結果 → 圖表 → 決策）
+              ('figure', '圖表'), ('decision', '決策'))  # 順序＝關聯圖欄序（主問題 q:main 另占最左一欄）
+MAIN_ID = 'q:main'
+N_COLS = len(NODE_TYPES) + 1   # 欄 0＝主問題，欄 1..6＝question／method／validation／result／figure／decision
 EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('sensitivity', '敏感性'),
               ('validated_by', '驗證'), ('primary', '驗證（主要）'), ('robustness', '驗證（穩健性）'), ('produces', '產出'),
               ('depicts', '呈現於'), ('cites', '引為證據'), ('refers', '決策關聯'))
@@ -937,7 +940,12 @@ SUB_INDENT = 24
 RESULT_KIND_ZH = {'primary': '主要', 'secondary': '次要', 'undeclared': '未宣告'}
 EDGE_STYLES = ('solid', 'dashed', 'thin')
 NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'figure': 'f:', 'decision': 'd:'}
-GRAPH_COL = {t: i for i, (t, _) in enumerate(NODE_TYPES)}
+GRAPH_COL = {t: i + 1 for i, (t, _) in enumerate(NODE_TYPES)}
+
+
+def node_col(nid: str, ntype: str) -> int:
+    """主問題獨占欄 0；其餘依 type：question 1、method 2、validation 3、result 4、figure 5、decision 6。"""
+    return 0 if nid == MAIN_ID else GRAPH_COL[ntype]
 NODE_W, NODE_H, COL_GAP, ROW_GAP, GRAPH_PAD = 260, 36, 330, 48, 20
 DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
 TABLE_ROWS_MAX = 200
@@ -968,7 +976,7 @@ class Graph:
         n = self.nodes.get(nid)
         if n is None:
             n = {'id': nid, 'type': ntype, 'label': _text(label), 'title': _text(title), 'state': state,
-                 'meta': dict(meta or {}), 'source': source, 'x': 0, 'y': 0, 'col': GRAPH_COL[ntype],
+                 'meta': dict(meta or {}), 'source': source, 'x': 0, 'y': 0, 'col': node_col(nid, ntype),
                  'order': 0, 'collapsed': False, 'badge': '', 'subtype': '', 'parent': ''}
             self.nodes[nid] = n
         return n
@@ -1533,9 +1541,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
 def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
     """分層版面：欄＝type，列序依 rank（缺的排最後、平手依 id）。`order` 為同欄整數序（含 collapsed 節點），
     x／y 為收合檢視——collapsed 節點不佔列，y 借用同問題現行版的列（JS 展開時依 order 重排）。"""
-    cols: dict[int, list[str]] = {c: [] for c in range(len(NODE_TYPES))}
+    cols: dict[int, list[str]] = {c: [] for c in range(N_COLS)}
     for nid, n in g.nodes.items():
-        cols[GRAPH_COL[n['type']]].append(nid)
+        cols[n['col']].append(nid)
     for c, ids in cols.items():
         ids.sort(key=lambda nid: (rank.get(nid, (BIG,)), nid))
         row = 0
@@ -1562,6 +1570,12 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
     for nid, n in g.nodes.items():   # 收合舊版的子節點跟著父節點借位
         if n['collapsed'] and n.get('parent') in current_of:
             n['y'] = g.nodes[current_of[n['parent']]]['y']
+    # 主問題居中：放在 SQ／AQ 那欄第一筆與最後一筆的中間，方便扇出
+    if MAIN_ID in g.nodes:
+        ys = [g.nodes[i]['y'] for i in cols[1] if not g.nodes[i]['collapsed']]
+        if ys:
+            mid = (min(ys) + max(ys)) / 2
+            g.nodes[MAIN_ID]['y'] = int(mid) if float(mid).is_integer() else mid
 
 
 def validate_graph(graph) -> list[str]:
@@ -1617,7 +1631,7 @@ def validate_graph(graph) -> list[str]:
         for k in ('col', 'order'):
             if isinstance(n.get(k), bool) or not isinstance(n.get(k), int):
                 errors.append(f'IR-12 {sub}.{k}')
-        if n.get('col') != GRAPH_COL.get(n.get('type')):
+        if n.get('type') in ntypes and n.get('col') != node_col(str(nid), n.get('type')):
             errors.append(f'IR-12 {sub}.col')
         if not isinstance(n.get('collapsed'), bool):
             errors.append(f'IR-12 {sub}.collapsed')
@@ -2134,6 +2148,7 @@ GRAPH_JS = """
     var cols={};G.nodes.forEach(function(n){(cols[n.col]=cols[n.col]||[]).push(n);});var maxY=0;
     Object.keys(cols).forEach(function(c){var list=cols[c].slice().sort(function(a,b){return a.order-b.order;});var row=0;
       list.forEach(function(n){var el=nodeEls[n.id];var v=nodeVisible(n.id);el.classList.toggle('gone',!v);if(v){n.y=PAD+row*ROW;row++;el.setAttribute('transform','translate('+n.x+','+n.y+')');if(n.y>maxY)maxY=n.y;}});});
+    var main=nodes['q:main'];if(main){var ys=(cols[1]||[]).filter(function(n){return nodeVisible(n.id);}).map(function(n){return n.y;});if(ys.length){main.y=(Math.min.apply(null,ys)+Math.max.apply(null,ys))/2;nodeEls[main.id].setAttribute('transform','translate('+main.x+','+main.y+')');}}
     var h=maxY+H+PAD;svg.setAttribute('height',h);svg.setAttribute('viewBox','0 0 '+svg.getAttribute('width')+' '+h);
     redrawEdges();
   }
@@ -2523,7 +2538,7 @@ def _relations_tab(ir: dict) -> list[str]:
         '<div id="graph-wrap">',
         _svg_graph(graph),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：問題 → 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；舊版計畫預設收合。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
