@@ -227,7 +227,7 @@ def test_figure_nodes_and_depicts() -> None:
         # stdout 摘要
         rc, out, err2 = run(root)
         assert rc == 0, out + err2
-        assert "圖表 2 張（未審 2）。" in out and "WARNING analysis/figures/manifest.json#figures[fig_b]" in out, out
+        assert "圖表 2 張（未審 2）；區帶 main " in out and "WARNING analysis/figures/manifest.json#figures[fig_b]" in out, out
         assert (root / "PROGRESS.html").is_file() and (root / "PROGRESS.ir.json").is_file()
 
 
