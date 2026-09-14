@@ -163,3 +163,15 @@ v0.11.0 為進度時間軸補齊 `decisions.yaml` 的資料來源，以錨點字
 - 在暫存目錄動態建最小專案實跑 checker：`state.study_design.result: pass` 而 `decisions.yaml` 只有 `project-init` 條目 → exit 0 且 stdout 含 `WARNING study-design` 與「無此 stage 條目」；補一筆 `stage: study-design`、`checkpoint: 階段收尾`、三個新欄位齊全的條目 → 該 WARNING 消失且「階段收尾條目: 1/2」；舊格式條目（無新欄位、裸日期）→ exit 0、無任何關於新欄位的 WARNING；`evidence: "not-a-list"` → 有 WARNING、仍 exit 0。暫存目錄測試結束自動清除。
 - 22 個目標 SKILL.md 每一份都含「收尾必記一筆 D#」與 `checkpoint: 階段收尾`；`status`、兩個潤稿站、`debug-pipeline` 不含該句。
 - README 含 `run_v0110_regressions.py`；CHANGELOG 含 `0.11.0`。
+
+階段 2 在同一檔追加 `render_progress.py`（進度時間軸 renderer）的測試，全部以 `tempfile.TemporaryDirectory` 建 fixture、讀磁碟上實際產出的 `PROGRESS.md` 斷言，結束自動清除：
+
+- 欄位完整專案（3 筆四軸齊全、其中一筆 `links: [results.k1]`）→ 表格 3 列、統計「共 3 筆記錄，其中 3 筆有完整四軸」、`k1` 那列含 fixture 的 `script`／`run_id`／`data_fingerprint`、mermaid 區塊含 `timeline`；執行前後 fixture 逐檔 sha256 相同、只多出 `PROGRESS.md`；產出無 BOM、無 `\r`、檔尾恰一個換行；重跑除「產生時間」外相同。
+- 舊格式專案（只有必填欄、缺 `date`、缺 `stage`）→ exit 0、三列都在、對應欄顯示 `unknown`、缺日期那列排最後、「共 3 筆記錄，其中 0 筆有完整四軸」，且不用 `checkpoint`／`decision` 代填。
+- `decisions: []` 與沒有 `decisions.yaml`（同時缺 `project.yaml`／`results.json`）→ exit 0、「共 0 筆記錄」、表頭存在、無 mermaid 區塊、有「無記錄」。
+- `--dry-run` → 目錄檔案清單與雜湊完全不變、無 `PROGRESS.md`、stdout 含 `## 記錄表`；`--dry-run --json` 只印 JSON。
+- `--json` → stdout 可 `json.loads`，`n_total`／`n_complete`／`len(rows)`／`axes`／`sources`／`mermaid` 與 fixture 一致，`rows[0]` 有全部欄位；單獨使用仍寫檔。
+- `method` 含半形 `:` → exit 0、表格仍有該列、檔內無 ```` ```mermaid ```` 而有「時間軸略過」與該 id。
+- `results.<key>` 找不到 → 憑據含「results.json 無此鍵」；無 `results.json` → 含「無 results.json」。
+- 根目錄不存在／`decisions.yaml` 無法解析 → exit 2、無 traceback、不落檔。
+- 登記錨點：README 含 `PROGRESS.md` 與 `render_progress.py`；`project-init` 步驟 4 樹含 `PROGRESS.md`；`status` SKILL.md 含 `render_progress.py`（frontmatter 未動）；CHANGELOG 0.11.0 段含 `render_progress.py`。

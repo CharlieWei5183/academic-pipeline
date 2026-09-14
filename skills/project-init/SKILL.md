@@ -29,6 +29,7 @@ metadata:
    <root>/
    ├── project.yaml
    ├── decisions.yaml
+   ├── PROGRESS.md        # 自動產生（status/scripts/render_progress.py），不要手動編輯
    ├── protocol/
    ├── methodology/
    ├── integrity/

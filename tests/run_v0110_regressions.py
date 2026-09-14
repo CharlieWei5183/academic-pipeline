@@ -9,10 +9,19 @@ v0.11.0 (A) 在 `decisions.yaml` 條目 schema 加三個選填欄位 `method`／
 WARNING／INFO，`check_decisions.py` 維持「exit 0；檔案無法解析才 exit 2」。
 下列斷言同時以錨點字串與實際執行 checker 驗證此契約；暫存專案用 tempfile 建立、
 測試結束自動清除。
+
+階段 2 追加 `render_progress.py`（單一專案進度時間軸 renderer）的測試：只讀
+`project.yaml`／`decisions.yaml`／`analysis/results.json`、只寫 `<root>/PROGRESS.md`；
+缺欄位、缺 `decisions.yaml`、空 `decisions: []`、缺 `project.yaml`／`results.json`
+一律 exit 0 並產出，缺漏值顯示 `unknown`；只有根目錄不存在與 `decisions.yaml` 無法解析
+才 exit 2。斷言一律讀磁碟上實際產出的 `PROGRESS.md`，並逐檔比對 sha256 確認 SSOT 未被碰。
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,6 +29,8 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 CHECKER = PLUGIN / "skills/status/scripts/check_decisions.py"
+RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
+STATS_RE = re.compile(r"共 (\d+) 筆記錄，其中 (\d+) 筆有完整四軸")
 CLOSE_SENTENCE = "收尾必記一筆 D#"
 EXCLUDED = ("status", "academic-english-editing", "chinese-academic-editing", "debug-pipeline")
 TARGETS = (
@@ -240,6 +251,338 @@ def test_docs_synced() -> None:
     need("tests/README.md", "run_v0110_regressions.py", "STATE_COVERAGE")
 
 
+# ---------- 階段 2：render_progress.py ----------
+
+def run_renderer(root: Path, *flags: str) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        [sys.executable, str(RENDERER), str(root), *flags],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _sha_tree(root: Path) -> dict[str, str]:
+    out = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def _table_rows(progress: str) -> list[str]:
+    """記錄表的資料列（排除表頭與分隔列）。"""
+    return [line for line in progress.splitlines()
+            if line.startswith("| ") and not line.startswith("| 編號") ]
+
+
+def _stats(progress: str) -> tuple[int, int]:
+    m = STATS_RE.search(progress)
+    assert m, f"統計行缺失或格式不符:\n{progress}"
+    return int(m.group(1)), int(m.group(2))
+
+
+RENDER_PROJECT = """project:
+  title_zh: "渲染測試專案"
+  title_en: "Render test"
+goals:
+  sub_questions:
+    - id: SQ1
+"""
+
+RENDER_RESULTS = {
+    "k1": {
+        "type": "table",
+        "script": "analysis/scripts/01_fit_model.py",
+        "run_id": "run-2026-07-12",
+        "data_fingerprint": "sha256:0123456789abcdef0123",
+        "description": "fixture 結果鍵",
+    }
+}
+
+RENDER_FULL = """decisions:
+  - id: D-001
+    date: "2026-07-12"
+    stage: analyze-data
+    checkpoint: 階段收尾
+    decision: 正式分析完成
+    reason: 依封存計畫執行
+    method: 依 SQ1-v1 執行主模型
+    problem: 產出 SQ1 的主結果
+    evidence: []
+    links: [SQ1, results.k1]
+  - id: D-002
+    date: 2026-07-10
+    stage: project-init
+    checkpoint: 階段收尾
+    decision: 建立專案
+    reason: 拆解審通過
+    method: project-init 訪談＋拆解審
+    problem: 建立 SQ 與骨架
+    evidence: ["python3 skills/project-init/scripts/init.py <root>"]
+    links: [SQ1]
+  - id: D-003
+    date: "2026-07-11"
+    stage: study-design
+    checkpoint: 階段收尾
+    decision: 封存 SQ1-v1
+    reason: 設計審通過
+    method: 版本化分析計畫
+    problem: 預先宣告輸出鍵
+    evidence:
+      - python3 skills/study-design/scripts/seal_artifact.py analysis/plans/SQ1-v1.yaml
+      - analysis/plans/index.yaml
+    links: [SQ1]
+"""
+
+RENDER_OLD = """decisions:
+  - id: D-001
+    date: 2026-07-10
+    stage: project-init
+    checkpoint: 拆解審確認
+    decision: 只有必填欄
+    reason: 舊格式
+  - id: D-002
+    stage: evaluate
+    checkpoint: 缺日期
+    decision: x
+    reason: y
+    links: []
+  - id: D-003
+    date: "2026-07-11"
+    checkpoint: 缺 stage
+    decision: x
+    reason: y
+"""
+
+RENDER_UNSAFE = """decisions:
+  - id: D-001
+    date: "2026-07-10"
+    stage: analyze-data
+    checkpoint: 階段收尾
+    decision: x
+    reason: y
+    method: "GLMM: 負二項"
+    problem: p
+    evidence: [a.py]
+  - id: D-002
+    date: "2026-07-11"
+    stage: evaluate
+    checkpoint: c
+    decision: x
+    reason: y
+"""
+
+RENDER_MISSING_KEY = """decisions:
+  - id: D-001
+    date: "2026-07-10"
+    stage: analyze-data
+    checkpoint: c
+    decision: x
+    reason: y
+    links: [results.nope]
+"""
+
+
+def _write_render_project(root: Path, decisions: str | None, project: bool = True,
+                          results: bool = True) -> None:
+    if project:
+        (root / "project.yaml").write_text(RENDER_PROJECT, encoding="utf-8")
+    if decisions is not None:
+        (root / "decisions.yaml").write_text(decisions, encoding="utf-8")
+    if results:
+        (root / "analysis").mkdir(exist_ok=True)
+        (root / "analysis/results.json").write_text(
+            json.dumps(RENDER_RESULTS, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_render_full_project() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_FULL)
+        before = _sha_tree(root)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        assert "PROGRESS.md 已寫入" in out and "結果: 完成" in out, out
+        after = _sha_tree(root)
+        # 雜湊紅線：fixture 內所有檔案執行前後逐檔相同，只多出 PROGRESS.md
+        assert set(after) - set(before) == {"PROGRESS.md"}, (before, after)
+        for rel, digest in before.items():
+            assert after[rel] == digest, f"SSOT 被改動: {rel}"
+        raw = (root / "PROGRESS.md").read_bytes()
+        assert not raw.startswith(b"\xef\xbb\xbf"), "產出檔開頭是 BOM"
+        assert b"\r" not in raw, "產出檔含 CR"
+        assert raw.endswith(b"\n") and not raw.endswith(b"\n\n"), "檔尾須恰一個換行"
+        progress = raw.decode("utf-8")
+        assert progress.startswith("# 渲染測試專案 進度時間軸\n"), progress[:80]
+        assert "請勿手動編輯" in progress and "來源專案：" in progress, progress
+        assert "| 編號 | 日期 | 階段 | 方法 | 問題 | 執行憑據 |" in progress, progress
+        rows = _table_rows(progress)
+        assert len(rows) == 3, rows
+        # 已知日期升冪：D-002（07-10）→ D-003（07-11）→ D-001（07-12）
+        assert [r.split(" | ")[0].lstrip("| ") for r in rows] == ["D-002", "D-003", "D-001"], rows
+        assert _stats(progress) == (3, 3), progress
+        k1_row = [r for r in rows if r.startswith("| D-001 ")][0]
+        assert "results.k1 → analysis/scripts/01_fit_model.py" in k1_row, k1_row
+        assert "run run-2026-07-12" in k1_row and "sha256:0123456789abcdef0123" in k1_row, k1_row
+        assert "```mermaid" in progress and "timeline" in progress, progress
+        assert "    title 渲染測試專案" in progress, progress
+        assert "    2026-07-11 : study-design：版本化分析計畫" in progress, progress
+        # 冪等：再跑一次，除產生時間外相同
+        rc2, _, _ = run_renderer(root)
+        assert rc2 == 0
+        second = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("產生時間："))
+        assert strip(progress) == strip(second), "重跑後內容不冪等"
+
+
+def test_render_old_format_project() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_OLD)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        rows = _table_rows(progress)
+        assert len(rows) == 3, rows
+        ids = [r.split(" | ")[0].lstrip("| ") for r in rows]
+        assert ids[-1] == "D-002", f"缺日期那列須排最後: {ids}"
+        assert ids == ["D-001", "D-003", "D-002"], ids
+        assert "| D-001 | 2026-07-10 | project-init | unknown | unknown |  |" in progress, progress
+        assert "| D-002 | unknown | evaluate | unknown | unknown |  |" in progress, progress
+        assert "| D-003 | 2026-07-11 | unknown | unknown | unknown |  |" in progress, progress
+        assert _stats(progress) == (3, 0), progress
+        # 缺日期的列合成最後一個 period unknown
+        assert "    unknown : evaluate：unknown" in progress, progress
+        # 不得用 checkpoint／decision 代填方法與問題
+        assert "拆解審確認" not in "\n".join(rows) and "只有必填欄" not in "\n".join(rows), rows
+
+
+def test_render_empty_and_missing_decisions() -> None:
+    for variant in ("empty", "missing"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_render_project(root, "decisions: []\n" if variant == "empty" else None,
+                                  project=False, results=False)
+            rc, out, err = run_renderer(root)
+            assert rc == 0, out + err
+            if variant == "missing":
+                assert "INFO decisions.yaml 不存在，視為 0 筆" in out, out
+            progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+            assert _stats(progress) == (0, 0), progress
+            assert "| 編號 | 日期 | 階段 | 方法 | 問題 | 執行憑據 |" in progress, progress
+            assert _table_rows(progress) == [], progress
+            assert "```mermaid" not in progress, progress
+            assert "無記錄" in progress, progress
+            # 缺 project.yaml → 標題退回根目錄名；缺 results.json 不是錯誤
+            assert progress.startswith(f"# {root.name} 進度時間軸\n"), progress[:80]
+            assert "project.yaml（無）" in progress and "analysis/results.json（無）" in progress, progress
+
+
+def test_render_dry_run_touches_nothing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_FULL)
+        before = _sha_tree(root)
+        rc, out, err = run_renderer(root, "--dry-run")
+        assert rc == 0, out + err
+        assert _sha_tree(root) == before, "dry-run 改動了目錄"
+        assert not (root / "PROGRESS.md").exists(), "dry-run 不得落 PROGRESS.md"
+        assert "## 記錄表" in out and "## 統計" in out, out
+        assert len(_table_rows(out)) == 3, out
+        # dry-run + json：只印 JSON、不寫
+        rc, out, err = run_renderer(root, "--dry-run", "--json")
+        assert rc == 0, out + err
+        assert _sha_tree(root) == before
+        assert json.loads(out)["n_total"] == 3, out
+
+
+def test_render_json_output() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_FULL)
+        rc, out, err = run_renderer(root, "--json")
+        assert rc == 0, out + err
+        data = json.loads(out)
+        assert data["schema_version"] == 1
+        assert data["n_total"] == 3 and data["n_complete"] == 3 and len(data["rows"]) == 3, data
+        assert data["axes"] == {"date": 3, "method": 3, "problem": 3, "evidence": 3}, data
+        assert data["sources"] == {"decisions": True, "project": True, "results": True}, data
+        assert data["mermaid"] == {"included": True, "skipped_reason": ""}, data
+        assert data["project_title"] == "渲染測試專案"
+        for key in ("id", "date", "date_known", "stage", "method", "problem", "evidence",
+                    "checkpoint", "complete"):
+            assert key in data["rows"][0], f"rows[0] 缺 {key}: {data['rows'][0]}"
+        assert data["rows"][0]["id"] == "D-002" and data["rows"][0]["date_known"] is True
+        # --json 單獨用仍寫檔
+        assert (root / "PROGRESS.md").exists(), "--json 單獨使用時仍須寫檔"
+
+
+def test_render_mermaid_unsafe_skips_block() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_UNSAFE)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        assert "WARNING 時間軸略過" in out and "D-001" in out, out
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        rows = _table_rows(progress)
+        assert len(rows) == 2, rows
+        assert "| D-001 | 2026-07-10 | analyze-data | GLMM: 負二項 | p | a.py |" in progress, progress
+        assert "```mermaid" not in progress, progress
+        assert "時間軸略過" in progress and "D-001" in progress and "「:」" in progress, progress
+        assert _stats(progress) == (2, 1), progress
+        rc, out, err = run_renderer(root, "--dry-run", "--json")
+        data = json.loads(out)
+        assert data["mermaid"]["included"] is False and "D-001" in data["mermaid"]["skipped_reason"], data
+
+
+def test_render_results_link_missing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_MISSING_KEY)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        assert "WARNING D-001" in out and "results.nope" in out, out
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert "results.nope（analysis/results.json 無此鍵）" in progress, progress
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_MISSING_KEY, results=False)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert "results.nope（無 analysis/results.json）" in progress, progress
+        assert "analysis/results.json（無）" in progress, progress
+
+
+def test_render_blockers() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out, err = run_renderer(Path(tmp) / "nope")
+        assert rc == 2 and "BLOCKER 專案根目錄不存在" in out + err, out + err
+        assert "Traceback" not in out + err
+        root = Path(tmp)
+        (root / "decisions.yaml").write_text("decisions: [\n  - id: x\n", encoding="utf-8")
+        before = _sha_tree(root)
+        rc, out, err = run_renderer(root)
+        assert rc == 2 and "BLOCKER decisions.yaml 無法解析" in out + err, out + err
+        assert "Traceback" not in out + err
+        assert _sha_tree(root) == before and not (root / "PROGRESS.md").exists()
+
+
+def test_render_docs_registered() -> None:
+    need("README.md", "PROGRESS.md", "render_progress.py")
+    body = text("skills/project-init/SKILL.md")
+    tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
+    assert "PROGRESS.md" in tree, "project-init 步驟 4 的資料夾樹缺 PROGRESS.md"
+    need("skills/status/SKILL.md", "render_progress.py", "PROGRESS.md")
+    changelog = text("CHANGELOG.md")
+    section = changelog[changelog.index("## 0.11.0"):changelog.index("## 0.10.0")]
+    assert "render_progress.py" in section, "CHANGELOG 0.11.0 段缺 render_progress.py"
+    need("tests/README.md", "render_progress.py")
+    # frontmatter 未動
+    assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
+
+
 def main() -> int:
     test_schema_comment_has_new_fields()
     print("[regression] project-init schema 註解含 method/problem/evidence 與階段收尾: pass")
@@ -257,6 +600,24 @@ def main() -> int:
     print("[regression] 22 個 skill 收尾含固定措辭、四個排除者不含: pass")
     test_docs_synced()
     print("[regression] README/CHANGELOG/tests README 同步: pass")
+    test_render_full_project()
+    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、results.k1 反查、mermaid、雜湊紅線、無 BOM／CR、冪等: pass")
+    test_render_old_format_project()
+    print("[regression] render_progress 舊格式專案：unknown 補位、缺日期排最後、0 筆完整四軸: pass")
+    test_render_empty_and_missing_decisions()
+    print("[regression] render_progress decisions: [] 與無 decisions.yaml：0 筆、表頭在、無 mermaid: pass")
+    test_render_dry_run_touches_nothing()
+    print("[regression] render_progress --dry-run 目錄不變、無 PROGRESS.md、stdout 含記錄表: pass")
+    test_render_json_output()
+    print("[regression] render_progress --json 結構與筆數: pass")
+    test_render_mermaid_unsafe_skips_block()
+    print("[regression] render_progress mermaid 不安全字元 → 略過區塊、表格仍全列: pass")
+    test_render_results_link_missing()
+    print("[regression] render_progress results.<key> 無此鍵／無 results.json: pass")
+    test_render_blockers()
+    print("[regression] render_progress 根目錄不存在／decisions.yaml 無法解析 → exit 2 無 traceback: pass")
+    test_render_docs_registered()
+    print("[regression] render_progress 登記：README／project-init 樹／status SKILL／CHANGELOG／tests README: pass")
     print("PASS v0.11.0 regressions")
     return 0
 
