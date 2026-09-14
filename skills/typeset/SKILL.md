@@ -36,7 +36,7 @@ metadata:
    - 雙匿名版：anonymize.py 移除作者、機構、致謝、funding 區塊；掃描全文列出疑似自我引用與自我指涉句清單（"our previous work" 之類），**交使用者裁定，不代改**——機械改寫自引有語意風險。匿名版再經 build_docx／build_latex 轉檔。
    - 圖表分離（target 要求時）：正文圖位改 placeholder（Figure N about here），圖檔依 manifest 集中至 build 目錄 figures/。
 3. **收尾（人工確認點）**：產物清單、check_build 結果（citeproc 未解引用＝blocker；字數對照 target.word_limit 列示）、自引清單呈使用者；確認後寫入 `state.submission.build: {at, format, files}`。收尾申報一行：「本階段更新：state.submission.build →{at, format}；下一站：投稿（使用者）」。
-4. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: typeset`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
+4. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: typeset`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
 
 ## 規則
 
