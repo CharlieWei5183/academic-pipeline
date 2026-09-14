@@ -242,3 +242,8 @@ v0.13.0 為關聯圖把主要結果與次要結果（敏感性分析）分開，
 - HTML：子節點 `data-node-id="p:SQ1-v2#R1"`、`data-parent`、`sub` class 三種 state、寬度 236、父→子 L 形線的 d 從父節點左緣下方（x+12, y+36）垂下、以子節點左緣中線結束、無貝茲；`e-sensitivity`／`e-produces st-dashed`、「敏感性子分析」「未宣告」「未驗證」「縮排子節點＝敏感性子分析」「虛線＝未宣告」「父分析」「expected_keys（」「result_kind」「declared_by」與導覽文字的「敏感性 '+sc+' 項」錨點；「未驗證」小標恰 5 個（k2、k3、k5、k6、k7）；無「未驗證旁路」；自含、tag 平衡。
 - `validate_ir`：`parent` 不存在、`subtype` 非法或掛在非 method 節點、缺 `stats.sensitivity_items` → 各自的 `IR-12`／`IR-14`。
 - 登記錨點：CHANGELOG `## 0.13.0` 含 sensitivity／secondary_result_keys／undeclared_result_keys／敏感性子分析；`status` SKILL.md 含敏感性子分析／次要／未宣告（frontmatter 未動）；本檔與 README 含 `run_v0130_regressions.py`。
+
+走線（同檔追加兩段，v0.13.2）：
+
+- `route_edges`（直接 import 呼叫合成 fixture）：一個來源連 3 個目標 → 3 條 path、同一條幹線（`trunk_of` 相同、幹線 x 相同、`lane_max == {1: 0}`、幹線 d 為 `M660,86 H720 M720,38 V134`）；兩個來源目標 y 範圍重疊 → 車道與幹線 x 不同、`lane_max == {1: 1}`；不重疊 → 都在車道 0、幹線 x 相同；單一目標同列 → 直線 `M660,38 L780,38`、無幹線、不占車道；反向邊從來源左緣出、走來源左側走道、進目標右緣，同欄 supersedes 走右側走道回右緣；同輸入兩次結果相等；上限＋1（14）條互相重疊的幹線 → `lane_max == {1: 13}`、`overflow == [1]`、幹線 x 只有 13 種（折回）；恰 13 條 → 不折回、車道 x 等距 8px 且都在走道內；Python／JS 版面常數（`NODE_W` 260、`COL_PITCH` 380、`ROW_GAP` 48、`GRAPH_PAD` 20、`LANE_GAP` 8）以正則從 `GRAPH_JS` 取出比對同值。
+- 對 v0.13 fixture 的可見邊：同一走道內任兩條垂直區間重疊的幹線 x 不同、無 overflow、每條可見非 sensitivity 邊都有 path；HTML 含 `<g id="graph-trunks">`、`class="trunk e-decomposes st-solid" data-trunk="q:main|1|decomposes|solid|fwd" data-gap="0" data-lane="0"`、`data-trunk="p:SQ1-v2|4|produces|solid|fwd"`、圖例「同來源的線合併成幹線＋分支」，sensitivity 邊不帶 `data-trunk`；有 headless Chrome（google-chrome／chromium）時以 `--dump-dom` 取 JS 重算後的 DOM，比對所有可見邊的 `d` 與幹線（key／gap／lane／d）與 Python 靜態產出逐字相同，無 Chrome 則印一句略過。`run_v0110` 的路徑格式斷言改為「M 開頭、含 H 或 L、無 C」。

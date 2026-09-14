@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -311,9 +312,156 @@ def test_main_question_own_column() -> None:
         rc, out, err = run(root)
         assert rc == 0, out + err
         html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        m = re.search(r'data-from="q:main" data-to="q:SQ1" data-type="decomposes" d="([^"]*)"', html_text)
+        m = re.search(r'data-from="q:main" data-to="q:SQ1" data-type="decomposes"[^>]*? d="([^"]*)"', html_text)
         assert m and m.group(1).startswith(f"M{main['x'] + 260},"), m.group(1) if m else None
         assert "欄序：主問題 → 問題（SQ／AQ）" in html_text
+
+
+def _load_renderer():
+    spec = importlib.util.spec_from_file_location("render_progress_routing", RENDERER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _node(nid, col, y, subtype=""):
+    return {"id": nid, "col": col, "x": 20 + col * 380 + (24 if subtype == "sensitivity" else 0), "y": y, "subtype": subtype}
+
+
+def _edge(a, b, t="produces", style="solid"):
+    return {"from": a, "to": b, "type": t, "style": style, "default_visible": True, "label": "", "source": "x", "meta": {}}
+
+
+def _trunk_x(d: str) -> float:
+    m = re.search(r" H(-?[\d.]+) M", d)
+    assert m, d
+    return float(m.group(1))
+
+
+def test_route_edges_bundling_and_lanes() -> None:
+    rp = _load_renderer()
+    # 一個來源連 3 個目標 → 3 條 path、同一條幹線（幹線 x 相同、trunk_of 相同）
+    nodes = {"s": _node("s", 1, 68), "t1": _node("t1", 2, 20), "t2": _node("t2", 2, 68), "t3": _node("t3", 2, 116)}
+    edges = [(0, _edge("s", "t1")), (1, _edge("s", "t2")), (2, _edge("s", "t3"))]
+    r = rp.route_edges(nodes, edges)
+    assert sorted(r["paths"]) == [0, 1, 2] and len(r["trunks"]) == 1 and r["trunks"][0]["key"] == "s|2|produces|solid|fwd"
+    assert {r["trunk_of"][i] for i in (0, 1, 2)} == {"s|2|produces|solid|fwd"}
+    tx = _trunk_x(r["trunks"][0]["d"])
+    for i in (0, 1, 2):
+        d = r["paths"][i]
+        assert d.startswith("M660,") and " C" not in d and (f"Q{tx:g}," in d or d.endswith("H780")), d
+    assert r["trunks"][0]["lane"] == 0 and r["lane_max"] == {1: 0} and r["overflow"] == []
+    assert r["trunks"][0]["span"] == [38, 134] and r["trunks"][0]["d"] == "M660,86 H720 M720,38 V134", r["trunks"][0]
+    # 兩個來源、目標 y 範圍重疊 → 幹線 x 不同；不重疊 → 可共用車道 0
+    nodes = {"a": _node("a", 1, 20), "b": _node("b", 1, 68), "t1": _node("t1", 2, 20), "t2": _node("t2", 2, 116), "t3": _node("t3", 2, 68)}
+    edges = [(0, _edge("a", "t1")), (1, _edge("a", "t2")), (2, _edge("b", "t3")), (3, _edge("b", "t2"))]
+    r = rp.route_edges(nodes, edges)
+    tk = {t["key"]: t for t in r["trunks"]}
+    assert len(tk) == 2 and tk["a|2|produces|solid|fwd"]["lane"] != tk["b|2|produces|solid|fwd"]["lane"]
+    assert _trunk_x(tk["a|2|produces|solid|fwd"]["d"]) != _trunk_x(tk["b|2|produces|solid|fwd"]["d"])
+    assert r["lane_max"] == {1: 1}
+    nodes = {"a": _node("a", 1, 20), "b": _node("b", 1, 260), "t1": _node("t1", 2, 20), "t2": _node("t2", 2, 68), "t3": _node("t3", 2, 260), "t4": _node("t4", 2, 308)}
+    edges = [(0, _edge("a", "t1")), (1, _edge("a", "t2")), (2, _edge("b", "t3")), (3, _edge("b", "t4"))]
+    r = rp.route_edges(nodes, edges)
+    assert all(t["lane"] == 0 for t in r["trunks"]) and len({_trunk_x(t["d"]) for t in r["trunks"]}) == 1, r["trunks"]
+    # 單一目標且同列 → 直線、不占車道、不建幹線
+    nodes = {"a": _node("a", 1, 20), "t1": _node("t1", 2, 20)}
+    r = rp.route_edges(nodes, [(0, _edge("a", "t1"))])
+    assert r["trunks"] == [] and r["trunk_of"][0] == "" and r["paths"][0] == "M660,38 L780,38" and r["lane_max"] == {}
+    # 反向邊走來源左側走道、進目標右緣；同欄邊走右側走道回到右緣
+    nodes = {"d": _node("d", 3, 20), "q": _node("q", 1, 20), "q2": _node("q2", 1, 116), "p1": _node("p1", 2, 20), "p2": _node("p2", 2, 116)}
+    r = rp.route_edges(nodes, [(0, _edge("d", "q", "refers")), (1, _edge("d", "q2", "refers")), (2, _edge("p1", "p2", "supersedes", "dashed"))])
+    tk = {t["key"]: t for t in r["trunks"]}
+    assert "d|1|refers|solid|back" in tk and tk["d|1|refers|solid|back"]["gap"] == 2 and r["paths"][0].startswith("M1160,")
+    assert r["paths"][1].endswith("H660") and "p1|2|supersedes|dashed|same" in tk and tk["p1|2|supersedes|dashed|same"]["gap"] == 2 and r["paths"][2].endswith("H1040")
+    # 決定性：同輸入兩次相同
+    assert rp.route_edges(nodes, [(0, _edge("d", "q", "refers")), (1, _edge("d", "q2", "refers")), (2, _edge("p1", "p2", "supersedes", "dashed"))]) == r
+    # 車道折回：同一走道 TRUNK_MAX_LANES+1 條互相重疊的幹線 → 最大車道＝上限、overflow 記走道、x 只有上限那麼多種
+    n_over = rp.TRUNK_MAX_LANES + 1
+    nodes = {f"s{i}": _node(f"s{i}", 1, 20 + 48 * i) for i in range(n_over)}
+    nodes.update({"t0": _node("t0", 2, 20), "t1": _node("t1", 2, 20 + 48 * (n_over + 2))})
+    edges = []
+    for i in range(n_over):
+        edges += [(2 * i, _edge(f"s{i}", "t0")), (2 * i + 1, _edge(f"s{i}", "t1"))]
+    r = rp.route_edges(nodes, edges)
+    assert r["lane_max"] == {1: rp.TRUNK_MAX_LANES} and r["overflow"] == [1] and len({_trunk_x(t["d"]) for t in r["trunks"]}) == rp.TRUNK_MAX_LANES
+    assert rp.TRUNK_MAX_LANES == 13 and rp.COL_PITCH - rp.NODE_W == 120, (rp.TRUNK_MAX_LANES, rp.COL_PITCH)
+    # 一條走道最多能容納 TRUNK_MAX_LANES 條重疊幹線而不折回
+    nodes = {f"s{i}": _node(f"s{i}", 1, 20 + 48 * i) for i in range(rp.TRUNK_MAX_LANES)}
+    nodes.update({"t0": _node("t0", 2, 20), "t1": _node("t1", 2, 20 + 48 * (rp.TRUNK_MAX_LANES + 2))})
+    edges = []
+    for i in range(rp.TRUNK_MAX_LANES):
+        edges += [(2 * i, _edge(f"s{i}", "t0")), (2 * i + 1, _edge(f"s{i}", "t1"))]
+    r = rp.route_edges(nodes, edges)
+    assert r["overflow"] == [] and r["lane_max"] == {1: rp.TRUNK_MAX_LANES - 1}
+    xs = sorted(_trunk_x(t["d"]) for t in r["trunks"])
+    assert len(set(xs)) == rp.TRUNK_MAX_LANES and max(xs) - min(xs) == 8 * (rp.TRUNK_MAX_LANES - 1) and min(xs) >= 660 + 12 and max(xs) <= 780 - 12
+
+
+def test_layout_constants_python_js_parity() -> None:
+    rp = _load_renderer()
+    js = rp.GRAPH_JS
+    m = re.search(r"var NODE_W=(\d+),NODE_H=(\d+),COL_PITCH=(\d+),ROW_GAP=(\d+),GRAPH_PAD=(\d+);", js)
+    assert m, "GRAPH_JS 缺同名常數宣告"
+    assert tuple(int(x) for x in m.groups()) == (rp.NODE_W, rp.NODE_H, rp.COL_PITCH, rp.ROW_GAP, rp.GRAPH_PAD), m.groups()
+    assert "GAP=COL_PITCH-NODE_W" in js and "LANE_GAP=8" in js and rp.LANE_GAP == 8
+    assert "TRUNK_MAX_SIDE=Math.floor((0.8*GAP/2)/LANE_GAP),TRUNK_MAX_LANES=2*TRUNK_MAX_SIDE+1" in js
+    assert (rp.NODE_W, rp.COL_PITCH, rp.TRUNK_MAX_LANES) == (260, 380, 13)
+
+
+def test_route_no_overlap_in_fixture_and_html() -> None:
+    rp = _load_renderer()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        g = ir["graph"]
+        by_id = {n["id"]: n for n in g["nodes"]}
+        shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
+        drawn = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown and e["to"] in shown]
+        r = rp.route_edges(by_id, drawn)
+        # 同一走道內，任兩條垂直區間重疊的幹線 x 不同
+        by_gap: dict = {}
+        for t in r["trunks"]:
+            by_gap.setdefault(t["gap"], []).append(t)
+        for gap, ts in by_gap.items():
+            for i in range(len(ts)):
+                for j in range(i + 1, len(ts)):
+                    a, b = ts[i], ts[j]
+                    if not (a["span"][1] < b["span"][0] or a["span"][0] > b["span"][1]):
+                        assert _trunk_x(a["d"]) != _trunk_x(b["d"]), (gap, a["key"], b["key"])
+        assert r["overflow"] == [] and all(v <= rp.TRUNK_MAX_LANES - 1 for v in r["lane_max"].values())
+        # 每條可見邊都有 path；同幹線的分支共用幹線 x
+        assert set(r["paths"]) == {i for i, e in drawn if e["type"] != "sensitivity"}
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert '<g id="graph-trunks">' in html_text and 'class="trunk e-plans st-solid" data-trunk="q:main|1|decomposes|solid|fwd"' not in html_text
+        assert 'class="trunk e-decomposes st-solid" data-trunk="q:main|1|decomposes|solid|fwd" data-gap="0" data-lane="0"' in html_text
+        assert 'data-trunk="p:SQ1-v2|4|produces|solid|fwd"' in html_text and "同來源的線合併成幹線＋分支" in html_text
+        assert 'class="edge e-sensitivity st-solid" data-idx=' in html_text
+        assert not re.search(r'class="edge e-sensitivity[^>]*data-trunk=', html_text), "sensitivity L 形線不併幹線"
+        # Python 靜態版與 JS 重算一致（有 headless Chrome 才比對，沒有就略過）
+        chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+        if not chrome:
+            print("  （無 headless Chrome，略過 Python／JS 路徑比對）")
+            return
+        proc = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000", "--dump-dom",
+                               f"file://{root / 'PROGRESS.html'}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
+        dom = proc.stdout
+        if "<svg" not in dom:
+            print("  （headless Chrome 未回 DOM，略過 Python／JS 路徑比對）")
+            return
+        def edge_ds(h):
+            return dict(re.findall(r'<path class="edge[^"]*" data-idx="(\d+)"[^>]*? d="([^"]*)"', h))
+        off = set(re.findall(r'<path class="edge[^"]*\boff\b[^"]*" data-idx="(\d+)"', html_text))
+        se, de = edge_ds(html_text), edge_ds(dom)
+        vis = [i for i in se if i not in off]
+        assert vis and all(se[i] == de.get(i) for i in vis), [(i, se[i], de.get(i)) for i in vis if se[i] != de.get(i)][:3]
+        st = sorted(re.findall(r'<path class="trunk[^"]*" data-trunk="([^"]*)" data-gap="(\d+)" data-lane="(\d+)" d="([^"]*)"', html_text))
+        dt = sorted(re.findall(r'<path class="trunk[^"]*" data-trunk="([^"]*)" data-gap="(\d+)" data-lane="(\d+)" d="([^"]*)"', dom))
+        assert st and st == dt, (len(st), len(dt))
 
 
 def test_validate_graph_subtype_rules() -> None:
@@ -354,6 +502,12 @@ def main() -> int:
     print("[regression] HTML：子節點縮排 24 寬減 24、父→子 L 形線、sub／unval 錨點、面板與導覽文字錨點、無「未驗證旁路」、自含、tag 平衡: pass")
     test_main_question_own_column()
     print("[regression] 主問題獨占最左一欄：q:main col 0、x 小於所有 SQ／AQ、SQ／AQ 同 x、垂直居中、decomposes 跨欄可見、type 與 by_type 不變: pass")
+    test_route_edges_bundling_and_lanes()
+    print("[regression] route_edges：同來源 3 目標併一條幹線、重疊區間不同車道、不重疊共用車道 0、同列單目標直線、反向／同欄走道、決定性、車道折回 overflow: pass")
+    test_layout_constants_python_js_parity()
+    print("[regression] Python／JS 版面常數同值：NODE_W 260、COL_PITCH 380（走道 120）、ROW_GAP 48、GRAPH_PAD 20、LANE_GAP 8、車道上限 13: pass")
+    test_route_no_overlap_in_fixture_and_html()
+    print("[regression] 走道內重疊幹線 x 皆不同、每條可見邊有 path、HTML 幹線群組與 data-trunk、圖例句、sensitivity 不併幹線、Python／JS 路徑一致（有 Chrome 時）: pass")
     test_validate_graph_subtype_rules()
     print("[regression] validate_ir：parent 不存在、subtype 非法或非 method、缺 stats.sensitivity_items: pass")
     test_docs_registered()
