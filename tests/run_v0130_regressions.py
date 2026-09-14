@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Regression tests for v0.13.0: 關聯圖把主要結果與次要結果（敏感性分析）分開。
+
+語意（來自 plan yaml）：一個分析＝一份 plan（現行版方法節點 `p:<pid>`）；`outputs[].key` 是主分析的產出＝主要結果；
+`robustness[]` 每項是這個分析底下的敏感性子分析（`p:<pid>#<Rid>`，`subtype: sensitivity`、`parent`），其
+`expected_keys` 是它的產出。結果分類：在 `outputs[]` → 主要；只在 `robustness[].expected_keys` → 次要；results.json
+掛在該 plan 但兩者都沒宣告 → 未宣告（虛線 produces、label「未宣告」）。每個有產出的分析都連到它的結果（produces 一律
+可見、實線）；驗證與否不再拿來分主次，改成結果節點的 `meta.validated` 與右端「未驗證」小標。契約：舊版 plan 的子節點
+隨父收合；`stats` 加 `secondary_result_keys`／`undeclared_result_keys`／`sensitivity_items`。fixture 以 tempfile 動態建立、
+斷言讀磁碟實際產出。
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from html.parser import HTMLParser
+from pathlib import Path
+
+PLUGIN = Path(__file__).resolve().parents[1]
+RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
+
+PROJECT = """pipeline:
+  version: "0.7.3"
+project:
+  title_zh: "敏感性測試專案"
+  research_question: "主問題一句"
+goals:
+  sub_questions:
+    - id: SQ1
+      question: "問題一"
+      status: addressed
+    - id: SQ2
+      question: "問題二"
+      status: open
+state:
+  next_stage: evaluate
+"""
+
+INDEX = """schema_version: 1
+active: {SQ1: SQ1-v2, SQ2: SQ2-v1}
+plans:
+  - {plan_id: SQ1-v1, path: analysis/plans/SQ1-v1.yaml, sq: SQ1, status: superseded, content_hash: aaaa, confirmed_at: "2026-07-10", replaced_by: SQ1-v2}
+  - {plan_id: SQ1-v2, path: analysis/plans/SQ1-v2.yaml, sq: SQ1, status: active, content_hash: bbbb, confirmed_at: "2026-07-12"}
+  - {plan_id: SQ2-v1, path: analysis/plans/SQ2-v1.yaml, sq: SQ2, status: active, content_hash: cccc, confirmed_at: "2026-07-13"}
+"""
+
+PLAN_SQ1_V1 = """plan_id: SQ1-v1
+sq: SQ1
+status: confirmed
+timing: prospective
+question: "問題一的舊計畫"
+primary_model: {id: M-old, method: "舊模型"}
+outputs:
+  - {key: k1, kind: inferential}
+robustness:
+  - {id: R1, change: "舊版的敏感性", expected_keys: [k1]}
+"""
+
+PLAN_SQ1_V2 = """plan_id: SQ1-v2
+sq: SQ1
+status: confirmed
+timing: post-hoc-amendment
+supersedes: SQ1-v1
+amendment_reason: "改用 shrinkage smooth"
+question: "問題一的計畫"
+primary_model: {id: M-a, method: "模型 A"}
+outputs:
+  - {key: k1, kind: inferential}
+  - {key: k2, kind: inferential}
+robustness:
+  - {id: R1, change: "換 block 尺度看主要鍵是否穩定——與主要重疊", expected_keys: [k2], executed: true, execution_note: "500 km 區塊"}
+  - {id: R2, change: "另一個分佈族", expected_keys: [k4]}
+  - {id: R3, change: "尚未執行的子分析", expected_keys: [k6, k7], executed: false}
+"""
+
+PLAN_SQ2_V1 = """plan_id: SQ2-v1
+sq: SQ2
+status: confirmed
+timing: prospective
+question: "問題二的計畫"
+primary_model: {id: M-b, method: "模型 B"}
+outputs:
+  - {key: k3, kind: table}
+"""
+
+RESULTS = {
+    "k1": {"plan_id": "SQ1-v2", "model_id": "M-a", "run_id": "run_2026-07-15", "script": "a.py", "data_fingerprint": "sha256:1", "description": "k1", "value": 1},
+    "k2": {"plan_id": "SQ1-v2", "model_id": "M-a", "run_id": "run_2026-07-15", "script": "a.py", "data_fingerprint": "sha256:1", "description": "k2", "value": 2},
+    "k4": {"plan_id": "SQ1-v2", "model_id": "M-a", "run_id": "run_2026-07-16", "script": "b.py", "data_fingerprint": "sha256:1", "description": "k4（次要）", "value": 4},
+    "k5": {"plan_id": "SQ1-v2", "model_id": "M-a", "run_id": "run_2026-07-16", "script": "c.py", "data_fingerprint": "sha256:1", "description": "k5（未宣告）", "value": 5},
+    "k6": {"plan_id": "SQ1-v2", "model_id": "M-a", "run_id": "run_2026-07-17", "script": "d.py", "data_fingerprint": "sha256:1", "description": "k6（R3 部分）", "value": 6},
+    "k3": {"plan_id": "SQ2-v1", "model_id": "M-b", "run_id": "run_2026-07-16", "script": "e.py", "data_fingerprint": "sha256:2", "description": "k3", "value": 3},
+}
+
+VALIDATION = """schema_version: 1
+results_fingerprint: rrrr
+source_fingerprint: ssss
+status: pass
+completed: true
+completed_at: "2026-07-18"
+report: reviews/validation-SQ1-1.md
+items:
+  - {id: V1, sq: SQ1, plan_id: SQ1-v2, status: pass, primary_results: [k1], robustness: [{name: alt, result_keys: [k4]}]}
+"""
+
+
+def write_fixture(root: Path, results: dict | None = None) -> None:
+    (root / "analysis/plans").mkdir(parents=True)
+    (root / "project.yaml").write_text(PROJECT, encoding="utf-8")
+    (root / "analysis/plans/index.yaml").write_text(INDEX, encoding="utf-8")
+    (root / "analysis/plans/SQ1-v1.yaml").write_text(PLAN_SQ1_V1, encoding="utf-8")
+    (root / "analysis/plans/SQ1-v2.yaml").write_text(PLAN_SQ1_V2, encoding="utf-8")
+    (root / "analysis/plans/SQ2-v1.yaml").write_text(PLAN_SQ2_V1, encoding="utf-8")
+    (root / "analysis/results.json").write_text(json.dumps(results if results is not None else RESULTS, ensure_ascii=False), encoding="utf-8")
+    (root / "analysis/validation.yaml").write_text(VALIDATION, encoding="utf-8")
+
+
+def run(root: Path, *flags: str) -> tuple[int, str, str]:
+    proc = subprocess.run([sys.executable, str(RENDERER), str(root), *flags], capture_output=True, text=True, encoding="utf-8")
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def graph_of(root: Path) -> dict:
+    rc, out, err = run(root, "--dry-run", "--json")
+    assert rc == 0, out + err
+    return json.loads(out)["graph"]
+
+
+def text(rel: str) -> str:
+    return (PLUGIN / rel).read_text(encoding="utf-8")
+
+
+def need(rel: str, *anchors: str) -> None:
+    body = text(rel)
+    for anchor in anchors:
+        assert anchor in body, f"{rel}: missing contract anchor: {anchor!r}"
+
+
+VOID_TAGS = {"meta", "input", "br", "hr", "img", "link", "col", "wbr", "area", "base", "embed", "param", "source", "track"}
+
+
+class TagBalance(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[str] = []
+        self.errors: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if not self.stack or self.stack[-1] != tag:
+            self.errors.append(f"{tag} at {self.getpos()}")
+        else:
+            self.stack.pop()
+
+
+def test_sensitivity_subnodes_and_result_kinds() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        g = graph_of(root)
+        nodes = {n["id"]: n for n in g["nodes"]}
+        edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "validated_by", "primary",
+                                                       "robustness", "produces", "depicts", "cites", "refers"]
+        labels = {t["id"]: t["label"] for t in g["edge_types"]}
+        assert labels["sensitivity"] == "敏感性" and labels["produces"] == "產出" and labels["primary"] == "驗證（主要）" and labels["robustness"] == "驗證（穩健性）"
+        # 子節點：type method、subtype sensitivity、parent、label／title／meta
+        for sid in ("p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ1-v1#R1"):
+            assert sid in nodes, sorted(k for k in nodes if k.startswith("p:"))
+            assert nodes[sid]["type"] == "method" and nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["col"] == 1
+        r1, r2, r3 = nodes["p:SQ1-v2#R1"], nodes["p:SQ1-v2#R2"], nodes["p:SQ1-v2#R3"]
+        assert r1["parent"] == "p:SQ1-v2" and r2["parent"] == "p:SQ1-v2" and nodes["p:SQ1-v1#R1"]["parent"] == "p:SQ1-v1"
+        assert r1["label"] == "R1：" + "換 block 尺度看主要鍵是否穩定——與主要重疊"[:24] + "…", r1["label"]
+        assert r2["label"] == "R2：另一個分佈族"
+        assert r1["title"] == "換 block 尺度看主要鍵是否穩定——與主要重疊" and r1["source"] == "analysis/plans/SQ1-v2.yaml#robustness[R1]"
+        assert r1["meta"] == {"change": "換 block 尺度看主要鍵是否穩定——與主要重疊", "expected_keys": ["k2"], "registered_keys": ["k2"],
+                              "executed": True, "execution_note": "500 km 區塊"}, r1["meta"]
+        assert r1["state"] == "done" and r1["badge"] == "" and r1["collapsed"] is False
+        assert r2["state"] == "done" and r2["meta"]["expected_keys"] == ["k4"] and r2["meta"]["executed"] is None and r2["meta"]["execution_note"] == ""
+        assert r3["state"] == "pending" and r3["badge"] == "部分" and r3["meta"]["registered_keys"] == ["k6"] and r3["meta"]["executed"] is False
+        cur = nodes["p:SQ1-v2"]
+        assert cur["subtype"] == "primary" and cur["meta"]["sensitivity_ids"] == ["p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3"]
+        assert nodes["p:SQ2-v1"]["subtype"] == "primary" and "sensitivity_ids" not in nodes["p:SQ2-v1"]["meta"]
+        # superseded 父的子節點：expired、collapsed、y 借用現行版
+        old_sub = nodes["p:SQ1-v1#R1"]
+        assert old_sub["state"] == "expired" and old_sub["collapsed"] is True and old_sub["y"] == nodes["p:SQ1-v2"]["y"]
+        assert nodes["p:SQ1-v1"]["collapsed"] is True and nodes["p:SQ1-v1"]["meta"]["sensitivity_ids"] == ["p:SQ1-v1#R1"]
+        # 結果分類：k1／k2 主要（k2 也在 R1 expected）、k4 次要、k5 未宣告、k3 主要、k6／k7 次要（k7 未登錄）
+        kinds = {k: nodes[f"r:{k}"]["meta"]["result_kind"] for k in ("k1", "k2", "k3", "k4", "k5", "k6", "k7")}
+        assert kinds == {"k1": "primary", "k2": "primary", "k3": "primary", "k4": "secondary", "k5": "undeclared", "k6": "secondary", "k7": "secondary"}, kinds
+        badges = {k: nodes[f"r:{k}"]["badge"] for k in ("k1", "k4", "k5")}
+        assert badges == {"k1": "主要", "k4": "次要", "k5": "未宣告"}, badges
+        assert nodes["r:k2"]["meta"]["declared_by"] == ["p:SQ1-v2", "p:SQ1-v2#R1"] and nodes["r:k4"]["meta"]["declared_by"] == ["p:SQ1-v2#R2"]
+        assert nodes["r:k5"]["meta"]["declared_by"] == [] and nodes["r:k1"]["meta"]["declared_by"] == ["p:SQ1-v1", "p:SQ1-v1#R1", "p:SQ1-v2"]
+        assert nodes["r:k7"]["state"] == "pending" and nodes["r:k7"]["title"] == "已宣告、results.json 尚無此鍵"
+        # 驗證標記獨立：k1 主要驗證、k4 穩健性驗證、其餘未驗證
+        assert nodes["r:k1"]["meta"]["validated"] is True and nodes["r:k1"]["meta"]["validation_kind"] == "primary"
+        assert nodes["r:k4"]["meta"]["validated"] is True and nodes["r:k4"]["meta"]["validation_kind"] == "robustness"
+        for k in ("k2", "k3", "k5", "k6"):
+            assert nodes[f"r:{k}"]["meta"]["validated"] is False and nodes[f"r:{k}"]["meta"]["validation_kind"] == "", k
+        assert "primary" not in nodes["r:k1"]["meta"], "舊的 meta.primary 布林已由 result_kind 取代"
+        # 邊：父→子 sensitivity；每個分析有產出都連到結果（visible、solid）；未宣告 dashed；舊版 hidden
+        def ev(key, visible, style, label):
+            assert key in edges, f"缺邊 {key}"
+            e = edges[key]
+            assert e["default_visible"] is visible and e["style"] == style and e["label"] == label, (key, e)
+        ev(("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")
+        ev(("p:SQ1-v2", "p:SQ1-v2#R3", "sensitivity"), True, "solid", "敏感性")
+        ev(("p:SQ1-v1", "p:SQ1-v1#R1", "sensitivity"), False, "solid", "敏感性")
+        ev(("p:SQ1-v2", "r:k1", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R1", "r:k2", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R2", "r:k4", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R3", "r:k6", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R3", "r:k7", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2", "r:k5", "produces"), True, "dashed", "未宣告")
+        ev(("p:SQ2-v1", "r:k3", "produces"), True, "solid", "")
+        ev(("p:SQ1-v1", "r:k1", "produces"), False, "solid", "")
+        ev(("p:SQ1-v1#R1", "r:k1", "produces"), False, "solid", "")
+        assert ("p:SQ1-v2", "r:k4", "produces") not in edges, "次要鍵只由子分析連出，主節點不直接連"
+        ev(("p:SQ1-v2", "v:V1", "validated_by"), True, "solid", "驗證")
+        ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
+        ev(("v:V1", "r:k4", "robustness"), True, "thin", "驗證（穩健性）")
+        # 列序：方法欄主節點後緊接子節點；結果欄 k1 < k2 < k4 < k6 < k7 < k5（主要依 outputs → 各子分析 → 未宣告）
+        order = {n["id"]: n["order"] for n in g["nodes"]}
+        assert [order[i] for i in ("p:SQ1-v1", "p:SQ1-v1#R1", "p:SQ1-v2", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ2-v1")] == list(range(7))
+        y = {n["id"]: n["y"] for n in g["nodes"]}
+        assert y["p:SQ1-v2"] == 20 and y["p:SQ1-v2#R1"] == 68 and y["p:SQ1-v2#R3"] == 164 and y["p:SQ2-v1"] == 212, y
+        assert nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2"]["x"] == nodes["p:SQ2-v1"]["x"]
+        assert y["r:k1"] < y["r:k2"] < y["r:k4"] < y["r:k6"] < y["r:k7"] < y["r:k5"] < y["r:k3"], {k: v for k, v in y.items() if k.startswith("r:")}
+        ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result")
+        assert ry == [20 + 48 * i for i in range(len(ry))]
+        # stats
+        st = g["stats"]
+        assert st["by_type"]["method"] == 7 and st["sensitivity_items"] == 4 and st["secondary_result_keys"] == 2 and st["undeclared_result_keys"] == 1, st
+        assert st["unvalidated_result_keys"] == 4, st   # k2、k3、k5、k6（k7 不在 results.json）
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        assert "次要 2、未宣告 1、敏感性子分析 4 項、" in out, out
+        # 把 k4 從 results.json 拿掉 → R2 pending（無徽章）、k4 節點 pending、次要計數少 1
+        results = dict(RESULTS)
+        del results["k4"]
+        (root / "analysis/results.json").write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+        g2 = graph_of(root)
+        n2 = {n["id"]: n for n in g2["nodes"]}
+        assert n2["p:SQ1-v2#R2"]["state"] == "pending" and n2["p:SQ1-v2#R2"]["badge"] == "" and n2["p:SQ1-v2#R2"]["meta"]["registered_keys"] == []
+        assert n2["r:k4"]["state"] == "pending" and n2["r:k4"]["meta"]["result_kind"] == "secondary" and n2["r:k4"]["badge"] == "次要"
+        assert g2["stats"]["secondary_result_keys"] == 1 and g2["stats"]["sensitivity_items"] == 4
+
+
+def test_html_subnodes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        for token in ('data-node-id="p:SQ1-v2#R1"', 'data-parent="p:SQ1-v2"', 'class="gnode t-method s-done sub"', 'class="gnode t-method s-pending sub"',
+                      'class="gnode t-method s-expired sub gone"', 'class="edge e-sensitivity st-solid" data-idx=', 'class="edge e-produces st-dashed" data-idx=',
+                      "敏感性子分析", "未宣告", '<text class="st unval"', "未驗證", "縮排子節點＝敏感性子分析", "虛線＝未宣告", "父分析",
+                      "expected_keys（", "result_kind", "declared_by", "敏感性 '+sc+' 項"):
+            assert token in html_text, f"HTML 缺 {token}"
+        assert "未驗證旁路" not in html_text
+        # 子節點寬度減 24、父→子 L 形線（M x,y L x,y Q … L …，起點在父節點左緣下方）
+        m = re.search(r'data-node-id="p:SQ1-v2#R1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
+        assert m and int(m.group(3)) == 260 - 24, m.group(0) if m else None
+        sx, sy = int(m.group(1)), int(m.group(2))
+        m2 = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ1-v2" data-to="p:SQ1-v2#R1" data-type="sensitivity" d="([^"]*)"', html_text)
+        assert m2, "缺父→子 L 形線"
+        d = m2.group(1)
+        assert d.startswith("M") and " C" not in d and d.endswith(f"L{sx},{sy + 18}"), d
+        m3 = re.search(r'data-node-id="p:SQ1-v2"[^>]*transform="translate\((\d+),(\d+)\)"', html_text)
+        assert m3 and d.startswith(f"M{int(m3.group(1)) + 12},{int(m3.group(2)) + 36} L{int(m3.group(1)) + 12},"), d
+        # 未驗證小標只在未驗證的結果節點上：k2、k3、k5、k6、k7（k1 主要驗證、k4 穩健性驗證）
+        assert html_text.count('<text class="st unval"') == 5, html_text.count('<text class="st unval"')
+        for token in ("http://", "https://", "<link ", 'src="http'):
+            assert token not in html_text
+        parser = TagBalance()
+        parser.feed(html_text)
+        parser.close()
+        assert parser.errors == [] and parser.stack == []
+
+
+def test_validate_graph_subtype_rules() -> None:
+    spec = importlib.util.spec_from_file_location("render_progress", RENDERER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        good = module.build_ir(root.resolve(), module.Sources(root.resolve()), "2026-09-14T00:00:00+08:00")
+        assert module.validate_ir(good) == [], module.validate_ir(good)
+        bad = json.loads(json.dumps(good))
+        sub = [n for n in bad["graph"]["nodes"] if n["id"] == "p:SQ1-v2#R1"][0]
+        sub["parent"] = "p:NOPE"
+        q = [n for n in bad["graph"]["nodes"] if n["id"] == "q:SQ1"][0]
+        q["subtype"] = "sensitivity"
+        res = [n for n in bad["graph"]["nodes"] if n["id"] == "r:k1"][0]
+        res["subtype"] = "weird"
+        del bad["graph"]["stats"]["sensitivity_items"]
+        errors = module.validate_ir(bad)
+        assert any(e.endswith(".parent") for e in errors) and sum(1 for e in errors if e.endswith(".subtype")) == 2, errors
+        assert "IR-14 graph.stats" in errors, errors
+
+
+def test_docs_registered() -> None:
+    need("CHANGELOG.md", "## 0.13.0", "sensitivity", "secondary_result_keys", "undeclared_result_keys", "敏感性子分析")
+    need("skills/status/SKILL.md", "敏感性子分析", "次要", "未宣告")
+    need("tests/README.md", "run_v0130_regressions.py", "敏感性")
+    need("README.md", "run_v0130_regressions.py", "敏感性")
+    assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
+
+
+def main() -> int:
+    test_sensitivity_subnodes_and_result_kinds()
+    print("[regression] 敏感性子節點（subtype／parent／state／部分／隨父收合）、結果 result_kind 主要／次要／未宣告、declared_by、validated 獨立標記、produces 一律可見（未宣告 dashed）、列序、stats、拿掉 k4 → R2 pending: pass")
+    test_html_subnodes()
+    print("[regression] HTML：子節點縮排 24 寬減 24、父→子 L 形線、sub／unval 錨點、面板與導覽文字錨點、無「未驗證旁路」、自含、tag 平衡: pass")
+    test_validate_graph_subtype_rules()
+    print("[regression] validate_ir：parent 不存在、subtype 非法或非 method、缺 stats.sensitivity_items: pass")
+    test_docs_registered()
+    print("[regression] 登記：CHANGELOG 0.13.0／status SKILL／tests README／README: pass")
+    print("PASS v0.13.0 regressions")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

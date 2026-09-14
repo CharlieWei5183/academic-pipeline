@@ -229,3 +229,16 @@ v0.12.0 為關聯圖加第五欄「圖表」與結果節點面板的表／圖，
 - `check_inbox.py`：缺檔 → INFO exit 0、此時 `--resolve` → BLOCKER 找不到；有 fixture 收件匣（IN-001 pending、IN-002 done）→ 列出 pending 一筆與 `pending 1／done 1／dismissed 0`、無 WARNING；`--resolve IN-001 --by D-051 --note …` → 只有 IN-001 的 status／resolved_by／resolved_at／note 四行改變、其餘行逐行相同、`resolved_at` 為含時區的 ISO 時間；`--dismiss IN-002` → dismissed；`--resolve` 缺 `--by`、找不到 id → exit 2；id 跳號／status 非法／target 不在 IR → WARNING 仍 exit 0；無法解析 → exit 2。
 - renderer：無收件匣 → IR `inbox == {present: false, pending: 0, items: []}`、`stats.inbox_pending == 0`、HTML 無橫幅、stdout 句尾「收件匣待處理 0。」；有收件匣 → `inbox.pending == 1`、items 逐欄原樣、`q:SQ2` 的 `meta.inbox == ["IN-001"]` 與 badge「收件 1」、其他節點無 `meta.inbox`、HTML 含「收件匣待處理 1 筆」／`id="inbox-banner"`／可點的 target／`api/ping`／「＋ 新問題／新分析」／「＋ 意見」／「用 progress_server.py 開啟才能送出」／`id="inbox-new" disabled`，仍自含、tag 平衡；收件匣無法解析 → WARNING、視為無；`validate_ir` 的 IR-15（pending 數不符）與 IR-01（缺 inbox）。
 - 登記錨點：README、`status` SKILL.md（含 `--resolve`／`--dismiss`／loopback）、`project-init` 樹、CHANGELOG、本檔含 `PROGRESS.inbox.yaml`／`progress_server.py`／`check_inbox.py`。
+
+## run_v0130_regressions.py
+
+v0.13.0 為關聯圖把主要結果與次要結果（敏感性分析）分開，fixture 以 tempfile 動態建（SQ1-v1 superseded 帶 R1；SQ1-v2 active、outputs [k1, k2]、R1 expected [k2]（與主要重疊，executed true）、R2 expected [k4]（只在 robustness）、R3 expected [k6, k7]（k7 未登錄，executed false）；results.json 有 k1、k2、k4、k6、k3 與掛在 SQ1-v2 但未宣告的 k5；validation V1 primary [k1]、robustness result_keys [k4]），讀磁碟實際產出斷言：
+
+- 敏感性子節點：`p:SQ1-v2#R1`／`#R2`／`#R3` 與 `p:SQ1-v1#R1` 存在，type method、`subtype: sensitivity`、col 1、`parent` 正確、label「R1：<change 前 24 字>…」、title＝change、meta（change／expected_keys／registered_keys／executed 原值／execution_note）、source `analysis/plans/SQ1-v2.yaml#robustness[R1]`；R1／R2 done、R3 pending 且徽章「部分」；主節點 `subtype: primary` 與 `meta.sensitivity_ids`；superseded 父的子節點 expired、`collapsed: true`、y 借用現行版。
+- 結果分類與驗證標記：k1／k2／k3 主要（k2 也在 R1 expected）、k4／k6／k7 次要、k5 未宣告，徽章「主要」「次要」「未宣告」；`meta.declared_by` 列出宣告節點（k2 為 `["p:SQ1-v2", "p:SQ1-v2#R1"]`、k1 含舊版）；k7 未登錄 → pending；`meta.validated`／`validation_kind` 獨立（k1 primary、k4 robustness、其餘 false）；舊的 `meta.primary` 不存在。
+- 邊：父→子 `sensitivity`（label「敏感性」，舊版隱藏）；`produces` 主節點→outputs 鍵、子節點→expected 鍵一律可見實線 label 空（含子分析連到主要鍵 k2）；未宣告 k5 → dashed「未宣告」；舊版 plan 與其子節點的 produces 隱藏；次要鍵不由主節點直連；`validated_by`「驗證」、`primary`「驗證（主要）」、`robustness`「驗證（穩健性）」thin。
+- 列序：方法欄 SQ1-v1、#R1、SQ1-v2、#R1、#R2、#R3、SQ2-v1 依序 0–6，子節點 x 縮排 24、y 連續；結果欄 k1 < k2 < k4 < k6 < k7 < k5 < k3、y 連續。
+- stats：`by_type.method == 7`、`sensitivity_items == 4`、`secondary_result_keys == 2`、`undeclared_result_keys == 1`、`unvalidated_result_keys == 4`；stdout 含「次要 2、未宣告 1、敏感性子分析 4 項、」；把 k4 從 results.json 拿掉 → R2 pending 無徽章、k4 節點 pending 仍「次要」、次要計數變 1。
+- HTML：子節點 `data-node-id="p:SQ1-v2#R1"`、`data-parent`、`sub` class 三種 state、寬度 236、父→子 L 形線的 d 從父節點左緣下方（x+12, y+36）垂下、以子節點左緣中線結束、無貝茲；`e-sensitivity`／`e-produces st-dashed`、「敏感性子分析」「未宣告」「未驗證」「縮排子節點＝敏感性子分析」「虛線＝未宣告」「父分析」「expected_keys（」「result_kind」「declared_by」與導覽文字的「敏感性 '+sc+' 項」錨點；「未驗證」小標恰 5 個（k2、k3、k5、k6、k7）；無「未驗證旁路」；自含、tag 平衡。
+- `validate_ir`：`parent` 不存在、`subtype` 非法或掛在非 method 節點、缺 `stats.sensitivity_items` → 各自的 `IR-12`／`IR-14`。
+- 登記錨點：CHANGELOG `## 0.13.0` 含 sensitivity／secondary_result_keys／undeclared_result_keys／敏感性子分析；`status` SKILL.md 含敏感性子分析／次要／未宣告（frontmatter 未動）；本檔與 README 含 `run_v0130_regressions.py`。

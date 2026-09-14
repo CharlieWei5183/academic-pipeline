@@ -30,6 +30,9 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 
 關聯圖（IR 的 graph 鍵、HTML 的「關聯」分頁）: 節點＝問題 q:／方法 p:（＝計畫版本，label 帶 model_id）／
 驗證 v:／結果 r:／決策 d:，邊＝decomposes／plans／supersedes／validated_by／primary／produces／cites／refers，
+方法節點下掛敏感性子分析（plan yaml robustness[] → p:<pid>#<Rid>，subtype sensitivity、parent、L 形父子線）；
+結果依宣告分主要（outputs）／次要（只在 robustness expected_keys）／未宣告（results.json 掛此 plan 但沒宣告，虛線），
+驗證與否改為結果節點的獨立標記（meta.validated、右端「未驗證」小標）。
 再加第五欄圖表 f:（analysis/figures/manifest.json，r → f depicts「呈現於」；state 依 status 與檔案存在與否；
 results_keys 指到不在圖裡的鍵不建邊、徽章「無對應結果鍵」並 WARNING），結果節點 meta 帶表（columns／rows 最多
 200 列／n_rows／truncated）或 value／display／unit，面板可直接看表與圖。
@@ -926,14 +929,17 @@ def attach_annotations(src: Sources, lanes: list[dict]) -> None:
 
 NODE_TYPES = (('question', '問題'), ('method', '方法'), ('validation', '驗證'), ('result', '結果'),
               ('figure', '圖表'), ('decision', '決策'))  # 順序＝關聯圖欄序（問題 → 方法 → 驗證 → 主要結果 → 圖表 → 決策）
-EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('validated_by', '驗證'),
-              ('primary', '主要結果'), ('robustness', '穩健性'), ('produces', '未驗證旁路'), ('depicts', '呈現於'),
-              ('cites', '引為證據'), ('refers', '決策關聯'))
+EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('sensitivity', '敏感性'),
+              ('validated_by', '驗證'), ('primary', '驗證（主要）'), ('robustness', '驗證（穩健性）'), ('produces', '產出'),
+              ('depicts', '呈現於'), ('cites', '引為證據'), ('refers', '決策關聯'))
+SUBTYPES = ('', 'primary', 'sensitivity')
+SUB_INDENT = 24
+RESULT_KIND_ZH = {'primary': '主要', 'secondary': '次要', 'undeclared': '未宣告'}
 EDGE_STYLES = ('solid', 'dashed', 'thin')
 NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'figure': 'f:', 'decision': 'd:'}
 GRAPH_COL = {t: i for i, (t, _) in enumerate(NODE_TYPES)}
 NODE_W, NODE_H, COL_GAP, ROW_GAP, GRAPH_PAD = 260, 36, 330, 48, 20
-DOWNSTREAM_TYPES = ('plans', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
+DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
 TABLE_ROWS_MAX = 200
 EMBED_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
@@ -963,7 +969,7 @@ class Graph:
         if n is None:
             n = {'id': nid, 'type': ntype, 'label': _text(label), 'title': _text(title), 'state': state,
                  'meta': dict(meta or {}), 'source': source, 'x': 0, 'y': 0, 'col': GRAPH_COL[ntype],
-                 'order': 0, 'collapsed': False, 'badge': ''}
+                 'order': 0, 'collapsed': False, 'badge': '', 'subtype': '', 'parent': ''}
             self.nodes[nid] = n
         return n
 
@@ -1065,6 +1071,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         n = g.add_node(f'p:{pid}', 'method', pid, _text(doc.get('question')) if doc else '',
                        'expired' if not is_active else 'pending', meta, f'{REL["index"]}#plans[{pid}]')
         n['collapsed'] = not is_active
+        n['subtype'] = 'primary'
         if sq:
             ensure_question(sq, f'{REL["index"]}#plans[{pid}].sq')
             g.add_edge(f'q:{sq}', f'p:{pid}', 'plans', f'{REL["index"]}#plans[{pid}].sq', visible=is_active)
@@ -1112,14 +1119,14 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                     if _text(key) and vid not in validated_by.setdefault(_text(key), []):
                         validated_by[_text(key)].append(vid)
 
-    def result_node(key: str, source: str, missing_title: str, missing_state: str, declared_by: str = '') -> str:
+    def result_node(key: str, source: str, missing_title: str, missing_state: str) -> str:
         nid = f'r:{key}'
         if nid in g.nodes:
             return nid
         obj = result_objs.get(key)
         vids = validated_by.get(key, [])
         kind = 'primary' if key in primary_keys else ('robustness' if vids else '')
-        base_meta = {'primary': key in primary_keys, 'validated_by': list(vids), 'validation_kind': kind}
+        base_meta = {'validated': bool(vids), 'validated_by': list(vids), 'validation_kind': kind, 'declared_by': []}
         if obj is not None:
             pid = _text(obj.get('plan_id'))
             pstate = g.nodes.get(f'p:{pid}', {}).get('state', '')
@@ -1140,58 +1147,77 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             n = g.add_node(nid, 'result', key, _text(obj.get('description')) or key,
                            'expired' if pstate == 'expired' else 'done', meta, f'{REL["results"]}#{key}')
         else:
-            meta = dict(base_meta)
-            if declared_by:
-                meta['declared_by'] = declared_by
-            n = g.add_node(nid, 'result', key, missing_title, missing_state, meta, source)
-        n['badge'] = {'primary': '主要', 'robustness': '穩健性'}.get(kind, '其他')
+            g.add_node(nid, 'result', key, missing_title, missing_state, dict(base_meta), source)
         return nid
 
+    out_index: dict[tuple[str, str], int] = {}          # (plan_id, key) → outputs 序
+    rob_index: dict[tuple[str, str], tuple[int, int]] = {}   # (plan_id, key) → (子分析序, expected 序)
+    sens_of: dict[str, list[str]] = {}                  # plan_id → 子節點 id（R 序）
     for pid, doc in plan_docs.items():
         if not doc:
             continue
-        for item in _list(doc.get('outputs')):
+        active = plan_active[pid]
+        for oi, item in enumerate(_list(doc.get('outputs'))):
             if isinstance(item, dict) and _text(item.get('key')):
                 key = _text(item.get('key'))
+                out_index.setdefault((pid, key), oi)
                 decl_order.setdefault((pid, key), len(decl_order))
                 source = f'analysis/plans/{pid}.yaml#outputs[{key}]'
-                nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending', pid)
-                unval = key not in validated_by
-                vis = plan_active[pid] and unval
-                g.add_edge(f'p:{pid}', nid, 'produces', source, '未驗證' if vis else '', None,
-                           visible=vis, style='dashed' if unval else 'solid')
-        for item in _list(doc.get('robustness')):
+                nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending')
+                g.nodes[nid]['meta']['declared_by'].append(f'p:{pid}')
+                g.add_edge(f'p:{pid}', nid, 'produces', source, visible=active)
+        for ri, item in enumerate(_list(doc.get('robustness'))):
             if not isinstance(item, dict):
                 continue
-            rid = _text(item.get('id'))
-            for key in _list(item.get('expected_keys')):
-                key = _text(key)
-                if not key:
-                    continue
-                decl_order.setdefault((pid, key), len(decl_order))
+            rid = _text(item.get('id')) or f'R{ri + 1}'
+            sub = f'p:{pid}#{rid}'
+            change = _text(item.get('change'))
+            expected = [_text(k) for k in _list(item.get('expected_keys')) if _text(k)]
+            registered = [k for k in expected if k in result_objs]
+            executed = item.get('executed')
+            meta = {'change': change, 'expected_keys': expected, 'registered_keys': registered,
+                    'executed': executed if isinstance(executed, (bool, int, float, str)) or executed is None else _text(executed),
+                    'execution_note': _text(item.get('execution_note'))}
+            if not active:
+                state, badge = 'expired', ''
+            elif expected and len(registered) == len(expected):
+                state, badge = 'done', ''
+            elif registered:
+                state, badge = 'pending', '部分'
+            else:
+                state, badge = 'pending', ''
+            n = g.add_node(sub, 'method', f'{rid}：{_clip(change, 24)}' if change else rid, change or rid, state, meta,
+                           f'analysis/plans/{pid}.yaml#robustness[{rid}]')
+            n['subtype'] = 'sensitivity'
+            n['parent'] = f'p:{pid}'
+            n['collapsed'] = not active
+            n['badge'] = badge
+            sens_of.setdefault(pid, []).append(sub)
+            g.add_edge(f'p:{pid}', sub, 'sensitivity', f'analysis/plans/{pid}.yaml#robustness[{rid}]', '敏感性', visible=active)
+            for ki, key in enumerate(expected):
+                rob_index.setdefault((pid, key), (ri, ki))
                 robustness_of.setdefault((pid, key), rid)
+                decl_order.setdefault((pid, key), len(decl_order))
                 source = f'analysis/plans/{pid}.yaml#robustness[{rid}].expected_keys'
-                nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending', pid)
-                unval = key not in validated_by
-                vis = plan_active[pid] and unval
-                meta = {'robustness_id': rid}
-                if _text(item.get('change')):
-                    meta['change'] = _clip(_text(item.get('change')), 120)
-                g.add_edge(f'p:{pid}', nid, 'produces', source, '未驗證' if vis else '', meta,
-                           visible=vis, style='dashed' if unval else 'solid')
+                nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending')
+                g.nodes[nid]['meta']['declared_by'].append(sub)
+                g.add_edge(sub, nid, 'produces', source, visible=active)
+    for pid, subs in sens_of.items():
+        g.nodes[f'p:{pid}']['meta']['sensitivity_ids'] = list(subs)
     for key, obj in result_objs.items():
         nid = result_node(key, f'{REL["results"]}#{key}', '', 'done')
         pid = _text(obj.get('plan_id'))
         if pid:
             if f'p:{pid}' not in g.nodes:
-                g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': []}, f'{REL["results"]}#{key}.plan_id')
+                n = g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': []}, f'{REL["results"]}#{key}.plan_id')
+                n['subtype'] = 'primary'
                 plan_sq[pid] = ''
                 plan_active[pid] = False
-            decl_order.setdefault((pid, key), len(decl_order))
-            unval = key not in validated_by
-            vis = plan_active.get(pid, False) and unval
-            g.add_edge(f'p:{pid}', nid, 'produces', f'{REL["results"]}#{key}.plan_id', '未驗證' if vis else '', None,
-                       visible=vis, style='dashed' if unval else 'solid')
+            if (pid, key) not in out_index and (pid, key) not in rob_index:
+                # 掛在該 plan 但 outputs／robustness 都沒宣告 → 未宣告（虛線）
+                decl_order.setdefault((pid, key), len(decl_order))
+                g.add_edge(f'p:{pid}', nid, 'produces', f'{REL["results"]}#{key}.plan_id', '未宣告',
+                           visible=plan_active.get(pid, False), style='dashed')
             mid = _text(obj.get('model_id'))
             models = g.nodes[f'p:{pid}']['meta'].setdefault('models', [])
             if mid and mid not in models:
@@ -1216,12 +1242,28 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 n['title'] = (n['title'] + '（方法尚未執行）') if n['title'] else '方法尚未執行'
         else:
             n['state'] = 'expired'
+    primary_declared = {k for (_p, k) in out_index}
+    secondary_declared = {k for (_p, k) in rob_index} - primary_declared
     for nid, n in g.nodes.items():
-        if n['type'] == 'result':
-            pid = _text(n['meta'].get('plan_id')) or _text(n['meta'].get('declared_by'))
-            rid = robustness_of.get((pid, nid[2:]))
-            if rid:
-                n['meta']['robustness_id'] = rid
+        if n['type'] != 'result':
+            continue
+        key = nid[2:]
+        owner = _text(n['meta'].get('plan_id'))
+        if (owner, key) in out_index or (owner not in plan_sq and key in primary_declared):
+            kind = 'primary'
+        elif (owner, key) in rob_index or (owner not in plan_sq and key in secondary_declared):
+            kind = 'secondary'
+        elif key in primary_declared:
+            kind = 'primary'
+        elif key in secondary_declared:
+            kind = 'secondary'
+        else:
+            kind = 'undeclared'
+        n['meta']['result_kind'] = kind
+        n['badge'] = RESULT_KIND_ZH[kind]
+        rid = robustness_of.get((owner, key)) or next((r for (pp, kk), r in robustness_of.items() if kk == key), '')
+        if rid:
+            n['meta']['robustness_id'] = rid
 
     # validation items：p → v（validated_by）、v → r（primary）
     top_expired = _text(vdoc.get('status')).lower() == 'expired'
@@ -1249,12 +1291,12 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             g.add_edge(f'p:{pid}', f'v:{vid}', 'validated_by', f'{source}.plan_id', '驗證')
         for key in meta['primary_results']:
             nid = result_node(key, f'{source}.primary_results', 'validation 指向的鍵不在 results.json', 'unknown')
-            g.add_edge(f'v:{vid}', nid, 'primary', f'{source}.primary_results', '主要結果')
+            g.add_edge(f'v:{vid}', nid, 'primary', f'{source}.primary_results', '驗證（主要）')
         for key in meta['robustness_keys']:
             if key in meta['primary_results']:
                 continue  # 同一 item 同一鍵：只畫 primary，不重複
             nid = result_node(key, f'{source}.robustness[].result_keys', 'validation 指向的鍵不在 results.json', 'unknown')
-            g.add_edge(f'v:{vid}', nid, 'robustness', f'{source}.robustness[].result_keys', '穩健性', style='thin')
+            g.add_edge(f'v:{vid}', nid, 'robustness', f'{source}.robustness[].result_keys', '驗證（穩健性）', style='thin')
         sq = _text(item.get('sq')) or plan_sq.get(pid, '')
         vrank[f'v:{vid}'] = (question_order.index(f'q:{sq}') if f'q:{sq}' in question_order else BIG, i)
 
@@ -1268,30 +1310,41 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             dangling.add(key)
         cite_rank.setdefault(nid, (question_order.index(qid), 2, BIG, ci))
 
-    # 結果節點的列序提示（供圖表欄跟著第一個相連結果排）
+    for nid, n in g.nodes.items():   # validation／goals 才建的結果節點：補 result_kind 與徽章
+        if n['type'] == 'result' and 'result_kind' not in n['meta']:
+            n['meta']['result_kind'] = 'undeclared'
+            n['badge'] = RESULT_KIND_ZH['undeclared']
+
+    # 結果節點的列序提示：（問題順序, plan 版本序, 主要鍵依 outputs 序 → 各子分析依 R 序及 expected 序 → 未宣告 → goals 引用）
     q_index = {qid: i for i, qid in enumerate(question_order)}
     active_of_sq: dict[str, str] = {sq: pid for pid, sq in plan_sq.items() if plan_active.get(pid)}
-    producers: dict[str, list[str]] = {}
-    for e in g.edges:
-        if e['type'] == 'produces':
-            producers.setdefault(e['to'], []).append(e['from'][2:])
     rank_hint: dict[str, tuple] = {}
     for nid, n in g.nodes.items():
         if n['type'] != 'result':
             continue
-        owner = _text(n['meta'].get('plan_id'))
-        pids = producers.get(nid, [])
-        pid = owner if owner and f'p:{owner}' in g.nodes else (pids[0] if pids else '')
         key = nid[2:]
-        if pid:
-            sq = plan_sq.get(pid, '')
-            cur = active_of_sq.get(sq, pid)
-            decl = decl_order.get((cur, key), decl_order.get((pid, key), BIG))
-            rank_hint[nid] = (q_index.get(f'q:{sq}', BIG), 0 if n['meta'].get('primary') else 1, decl, key)
+        owner = _text(n['meta'].get('plan_id'))
+        if not (owner and f'p:{owner}' in g.nodes):
+            decl = n['meta'].get('declared_by') or []
+            owner = decl[0][2:].split('#')[0] if decl else ''
+        if owner:
+            sq = plan_sq.get(owner, '')
+            cur = active_of_sq.get(sq, owner)
+            ver = g.nodes[f'p:{cur}']['meta'].get('version', BIG) if f'p:{cur}' in g.nodes else BIG
+            for pid in (cur, owner):
+                if (pid, key) in out_index:
+                    rank_hint[nid] = (q_index.get(f'q:{sq}', BIG), ver, 0, out_index[(pid, key)], 0, key)
+                    break
+                if (pid, key) in rob_index:
+                    ri, ki = rob_index[(pid, key)]
+                    rank_hint[nid] = (q_index.get(f'q:{sq}', BIG), ver, 1, ri, ki, key)
+                    break
+            else:
+                rank_hint[nid] = (q_index.get(f'q:{sq}', BIG), ver, 2, BIG, 0, key)
         elif nid in cite_rank:
-            rank_hint[nid] = cite_rank[nid] + (key,)
+            rank_hint[nid] = (cite_rank[nid][0], BIG, 3, cite_rank[nid][3], 0, key)
         else:
-            rank_hint[nid] = (BIG, 3, BIG, key)
+            rank_hint[nid] = (BIG, BIG, 4, BIG, 0, key)
 
     # 圖表節點（analysis/figures/manifest.json）：r → f depicts
     manifest = src.data('manifest') if src.status('manifest') == 'ok' else {}
@@ -1444,7 +1497,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     for i, qid in enumerate(question_order):
         rank[qid] = (i,)
     for pid in plan_sq:
-        rank[f'p:{pid}'] = plan_rank(pid)
+        rank[f'p:{pid}'] = plan_rank(pid) + (0, 0)
+        for si, sub in enumerate(sens_of.get(pid, [])):
+            rank[sub] = plan_rank(pid) + (1, si)
     rank.update(vrank)
     rank.update(rank_hint)
     rank.update(fig_rank)   # 圖表依（第一個相連結果的列序, manifest 序）
@@ -1458,6 +1513,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         by_type[n['type']] += 1
     unvalidated = sum(1 for key in result_objs if key not in validated_by)
     figures_unreviewed = sum(1 for n in g.nodes.values() if n['type'] == 'figure' and n['state'] != 'done')
+    secondary = sum(1 for key in result_objs if g.nodes[f'r:{key}']['meta'].get('result_kind') == 'secondary')
+    undeclared = sum(1 for key in result_objs if g.nodes[f'r:{key}']['meta'].get('result_kind') == 'undeclared')
+    sensitivity_items = sum(1 for n in g.nodes.values() if n.get('subtype') == 'sensitivity')
     return {
         'node_types': [{'id': t, 'label': lbl} for t, lbl in NODE_TYPES],
         'edge_types': [{'id': t, 'label': lbl} for t, lbl in EDGE_TYPES],
@@ -1466,7 +1524,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         'shared': shared,
         'stats': {'nodes': len(g.nodes), 'edges': len(g.edges), 'by_type': by_type,
                   'shared_pairs': len(shared), 'dangling_result_keys': len(dangling),
-                  'unvalidated_result_keys': unvalidated, 'figures_unreviewed': figures_unreviewed},
+                  'unvalidated_result_keys': unvalidated, 'figures_unreviewed': figures_unreviewed,
+                  'secondary_result_keys': secondary, 'undeclared_result_keys': undeclared,
+                  'sensitivity_items': sensitivity_items},
     }
 
 
@@ -1483,7 +1543,7 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         for i, nid in enumerate(ids):
             n = g.nodes[nid]
             n['order'] = i
-            n['x'] = GRAPH_PAD + c * COL_GAP
+            n['x'] = GRAPH_PAD + c * COL_GAP + (SUB_INDENT if n.get('subtype') == 'sensitivity' else 0)
             if n['collapsed']:
                 n['y'] = last_y
             else:
@@ -1499,6 +1559,9 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
     for old, cur in current_of.items():
         if old in g.nodes:
             g.nodes[old]['y'] = g.nodes[cur]['y']
+    for nid, n in g.nodes.items():   # 收合舊版的子節點跟著父節點借位
+        if n['collapsed'] and n.get('parent') in current_of:
+            n['y'] = g.nodes[current_of[n['parent']]]['y']
 
 
 def validate_graph(graph) -> list[str]:
@@ -1558,6 +1621,13 @@ def validate_graph(graph) -> list[str]:
             errors.append(f'IR-12 {sub}.col')
         if not isinstance(n.get('collapsed'), bool):
             errors.append(f'IR-12 {sub}.collapsed')
+        if n.get('subtype') not in SUBTYPES or (n.get('subtype') and n.get('type') != 'method'):
+            errors.append(f'IR-12 {sub}.subtype')
+        if not isinstance(n.get('parent'), str):
+            errors.append(f'IR-12 {sub}.parent')
+    for i, n in enumerate(graph['nodes'] if isinstance(graph['nodes'], list) else []):
+        if isinstance(n, dict) and n.get('parent') and n.get('parent') not in ids:
+            errors.append(f'IR-12 graph.nodes[{i}].parent')
     for i, e in enumerate(graph['edges'] if isinstance(graph['edges'], list) else []):
         sub = f'graph.edges[{i}]'
         if not isinstance(e, dict):
@@ -1592,7 +1662,8 @@ def validate_graph(graph) -> list[str]:
     if not isinstance(stats, dict) or stats.get('nodes') != len(ids) or stats.get('edges') != n_edges or \
             stats.get('shared_pairs') != n_shared or not isinstance(stats.get('by_type'), dict) or \
             not isinstance(stats.get('dangling_result_keys'), int) or not isinstance(stats.get('unvalidated_result_keys'), int) \
-            or not isinstance(stats.get('figures_unreviewed'), int):
+            or not isinstance(stats.get('figures_unreviewed'), int) \
+            or any(not isinstance(stats.get(k), int) for k in ('secondary_result_keys', 'undeclared_result_keys', 'sensitivity_items')):
         errors.append('IR-14 graph.stats')
     return errors
 
@@ -1779,10 +1850,10 @@ CSS = """
 :root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
 --done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
 --badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;
---t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;}
+--t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
 @media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
 --done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;
---t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;}}
+--t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px}
@@ -1979,6 +2050,10 @@ path.edge.up{stroke:var(--up);stroke-width:2.2;opacity:1;marker-end:url(#arrow-u
 path.edge.down{stroke:var(--down);stroke-width:2.2;opacity:1;marker-end:url(#arrow-down)}
 path.edge.onpath{stroke:var(--path);stroke-width:3;opacity:1;marker-end:url(#arrow-path)}
 path.edge.own{opacity:.9}
+.gnode.sub .box{fill:var(--bg-sub)}.gnode.sub.s-done .box{fill:var(--bg-sub-done)}.gnode.sub.s-expired .box{fill:var(--bg-sub-expired)}
+.gnode.sub text.lbl{font-size:11px}
+#graph-svg text.st.unval{fill:var(--expired);font-weight:700}
+path.edge.e-sensitivity{stroke:var(--t-method);opacity:.8;marker-end:none;stroke-width:1.6}
 .gnode.dim{opacity:.15}path.edge.dim{opacity:.08}
 .gnode.filtered{opacity:.15}path.edge.filtered{opacity:.15}
 #gdetail{position:fixed;right:16px;bottom:16px;width:min(460px,calc(100vw - 32px));max-height:72vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:10}
@@ -2051,7 +2126,9 @@ GRAPH_JS = """
   showTab((location.hash||'').replace('#','')||'milestones',false);
   // ---- 可見性與版面 ----
   var expanded={},selected=null,pathEdges={},pathNodes=null,tour=null,stateOff={};
-  function nodeVisible(id){var n=nodes[id];if(!n)return false;if(n.type==='decision')return boxDec.checked;if(n.collapsed)return boxOld.checked||!!expanded[currentOf[id]];return true;}
+  function nodeVisible(id){var n=nodes[id];if(!n)return false;if(n.type==='decision')return boxDec.checked;if(n.parent)return nodeVisible(n.parent);if(n.collapsed)return boxOld.checked||!!expanded[currentOf[id]];return true;}
+  function nodeW(n){return n.subtype==='sensitivity'?W-24:W;}
+  function lPath(a,b){var x0=a.x+12,y0=a.y+H,yc=b.y+H/2,x2=b.x;var r=Math.min(6,Math.max(0,(yc-y0)/2),Math.max(0,(x2-x0)/2));return 'M'+x0+','+y0+' L'+x0+','+(yc-r)+' Q'+x0+','+yc+' '+(x0+r)+','+yc+' L'+x2+','+yc;}
   function edgeDrawn(i){var e=G.edges[i];if(!nodeVisible(e.from)||!nodeVisible(e.to))return false;if(pathEdges[i])return true;if(selected&&(e.from===selected||e.to===selected))return true;return boxAll.checked||e.default_visible;}
   function relayout(){
     var cols={};G.nodes.forEach(function(n){(cols[n.col]=cols[n.col]||[]).push(n);});var maxY=0;
@@ -2061,10 +2138,10 @@ GRAPH_JS = """
     redrawEdges();
   }
   function edgePath(a,b,py1,py2,lane){
-    var x1,x2,xm,fwd;
-    if(a.col<b.col){x1=a.x+W;x2=b.x;xm=b.x-GAP+12+lane*((GAP-24)/7);fwd=1;}
-    else if(a.col>b.col){x1=a.x;x2=b.x+W;xm=b.x+W+12+lane*((GAP-24)/7);fwd=-1;}
-    else{x1=a.x+W;x2=a.x+W;xm=a.x+W+12+lane*((GAP-24)/7);fwd=1;}
+    var x1,x2,xm,fwd,ar=a.x+nodeW(a),br=b.x+nodeW(b),colb=b.x-(b.subtype==='sensitivity'?24:0);
+    if(a.col<b.col){x1=ar;x2=b.x;xm=colb-GAP+12+lane*((GAP-24)/7);fwd=1;}
+    else if(a.col>b.col){x1=a.x;x2=br;xm=br+12+lane*((GAP-24)/7);fwd=-1;}
+    else{x1=ar;x2=ar;xm=ar+12+lane*((GAP-24)/7);fwd=1;}
     if(py1===py2&&a.col!==b.col)return 'M'+x1+','+py1+' L'+x2+','+py2;
     var dy=py2-py1,vd=dy>0?1:-1,r=Math.min(10,Math.abs(dy)/2,Math.abs(xm-x1),Math.abs(x2-xm));
     var d2=(x2-xm)>0?1:-1;
@@ -2072,11 +2149,11 @@ GRAPH_JS = """
   }
   function redrawEdges(){
     var drawn=[];G.edges.forEach(function(e,i){var ok=edgeDrawn(i);edgeEls[i].classList.toggle('off',!ok);if(ok)drawn.push(i);});
-    var outs={},ins={};drawn.forEach(function(i){var e=G.edges[i];(outs[e.from]=outs[e.from]||[]).push(i);(ins[e.to]=ins[e.to]||[]).push(i);});
+    var outs={},ins={};drawn.forEach(function(i){var e=G.edges[i];if(e.type==='sensitivity')return;(outs[e.from]=outs[e.from]||[]).push(i);(ins[e.to]=ins[e.to]||[]).push(i);});
     var py1={},py2={};
     Object.keys(outs).forEach(function(id){var l=outs[id].slice().sort(function(i,j){return (nodes[G.edges[i].to].y-nodes[G.edges[j].to].y)||(i-j);});l.forEach(function(i,k){py1[i]=nodes[id].y+H*(k+1)/(l.length+1);});});
     Object.keys(ins).forEach(function(id){var l=ins[id].slice().sort(function(i,j){return (nodes[G.edges[i].from].y-nodes[G.edges[j].from].y)||(i-j);});l.forEach(function(i,k){py2[i]=nodes[id].y+H*(k+1)/(l.length+1);});});
-    drawn.forEach(function(i,k){var e=G.edges[i];edgeEls[i].setAttribute('d',edgePath(nodes[e.from],nodes[e.to],py1[i],py2[i],k%8));});
+    drawn.forEach(function(i,k){var e=G.edges[i];if(e.type==='sensitivity'){edgeEls[i].setAttribute('d',lPath(nodes[e.from],nodes[e.to]));return;}edgeEls[i].setAttribute('d',edgePath(nodes[e.from],nodes[e.to],py1[i],py2[i],k%8));});
   }
   boxOld.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
   boxDec.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
@@ -2156,13 +2233,23 @@ GRAPH_JS = """
     h+='<dt>state</dt><dd>'+esc(stateZh[n.state]||n.state)+'</dd>';
     h+='<dt>source</dt><dd><span class="src">'+esc(n.source)+'</span></dd>';
     var skip=[];
-    if(n.type==='method'){skip=['models','superseded_versions','amendment_reason'];
+    if(n.type==='method'&&n.subtype==='sensitivity'){skip=['change','expected_keys','registered_keys','executed','execution_note'];
+      h+='<dt>父分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span></dd>';
+      h+='<dt>change</dt><dd>'+esc(n.meta.change||'—')+'</dd>';
+      var reg={};(n.meta.registered_keys||[]).forEach(function(k){reg[k]=true;});
+      h+='<dt>expected_keys（'+(n.meta.expected_keys||[]).length+'）</dt><dd>'+((n.meta.expected_keys||[]).length?'<ul>'+n.meta.expected_keys.map(function(k){return '<li>'+(nodes['r:'+k]?'<span class="goto" data-goto="r:'+esc(k)+'">'+esc(k)+'</span>':esc(k))+'（'+(reg[k]?'已登錄':'未登錄')+'）</li>';}).join('')+'</ul>':'—')+'</dd>';
+      h+='<dt>executed</dt><dd>'+esc(n.meta.executed===null||n.meta.executed===undefined?'—':String(n.meta.executed))+'</dd>';
+      if(n.meta.execution_note)h+='<dt>execution_note</dt><dd>'+esc(n.meta.execution_note)+'</dd>';}
+    else if(n.type==='method'){skip=['models','superseded_versions','amendment_reason','sensitivity_ids'];
       h+='<dt>models</dt><dd>'+esc((n.meta.models||[]).join('、')||'—')+'</dd>';
+      var sids=n.meta.sensitivity_ids||[];h+='<dt>敏感性子分析（'+sids.length+'）</dt><dd>'+(sids.length?'<ul>'+sids.map(function(sid){var sn=nodes[sid];return '<li><span class="goto" data-goto="'+esc(sid)+'">'+esc(sn?sn.label:sid)+'</span>'+(sn?'：'+esc(stateZh[sn.state]||sn.state)+(sn.badge?'（'+esc(sn.badge)+'）':''):'')+'</li>';}).join('')+'</ul>':'無')+'</dd>';
       var sv=n.meta.superseded_versions||[];h+='<dt>superseded_versions（'+sv.length+'）</dt><dd>'+(sv.length?sv.map(function(p){return '<span class="goto" data-goto="p:'+esc(p)+'">'+esc(p)+'</span>';}).join('、')+' <span class="expand" data-expand="'+esc(id)+'">'+(expanded[id]?'收合舊版':'展開舊版')+'</span>':'無')+'</dd>';
       if(n.meta.amendment_reason)h+='<dt>amendment_reason</dt><dd>'+esc(n.meta.amendment_reason)+'</dd>';}
-    if(n.type==='result'){skip=['primary','validated_by','robustness_id','validation_kind','table','description'];
-      var vk=n.meta.validation_kind||'';h+='<dt>validation_kind</dt><dd>'+(vk==='primary'?'primary（主要結果）':vk==='robustness'?'robustness（只在穩健性 result_keys）':'—（未經任何驗證 item）')+'</dd>';
-      h+='<dt>primary</dt><dd>'+(n.meta.primary?'是':'否')+'</dd>';
+    if(n.type==='result'){skip=['validated','validated_by','robustness_id','validation_kind','table','description','result_kind','declared_by'];
+      var rk=n.meta.result_kind||'';h+='<dt>result_kind</dt><dd>'+esc(rk==='primary'?'primary（主要結果：在 plan outputs）':rk==='secondary'?'secondary（次要結果：只在敏感性子分析的 expected_keys）':'undeclared（未宣告）')+'</dd>';
+      h+='<dt>declared_by</dt><dd>'+((n.meta.declared_by||[]).length?n.meta.declared_by.map(function(d){return '<span class="goto" data-goto="'+esc(d)+'">'+esc(nodes[d]?nodes[d].label:d)+'</span>';}).join('、'):'無')+'</dd>';
+      h+='<dt>validated</dt><dd>'+(n.meta.validated?'是':'<b>否（未驗證）</b>')+'</dd>';
+      var vk=n.meta.validation_kind||'';h+='<dt>validation_kind</dt><dd>'+(vk==='primary'?'primary（在 validation item 的 primary_results）':vk==='robustness'?'robustness（只在 robustness result_keys）':'—')+'</dd>';
       h+='<dt>validated_by</dt><dd>'+((n.meta.validated_by||[]).length?n.meta.validated_by.map(function(v){return '<span class="goto" data-goto="v:'+esc(v)+'">'+esc(v)+'</span>';}).join('、'):'無')+'</dd>';
       if(n.meta.robustness_id)h+='<dt>robustness_id</dt><dd>'+esc(n.meta.robustness_id)+'</dd>';
       if(n.meta.description)h+='<dt>description</dt><dd>'+esc(n.meta.description)+'</dd>';}
@@ -2188,7 +2275,7 @@ GRAPH_JS = """
       h+='</dd>';}
     h+='</dl>';body.innerHTML=h;panel.hidden=false;bindImages();
   }
-  body.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&t.getAttribute('data-goto')){var id=t.getAttribute('data-goto');if(nodes[id]&&!nodeVisible(id)&&nodes[id].collapsed){expanded[currentOf[id]]=true;relayout();}select(id,true);return;}
+  body.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&t.getAttribute('data-goto')){var id=t.getAttribute('data-goto');if(nodes[id]&&!nodeVisible(id)&&(nodes[id].collapsed||nodes[id].parent)){var top=nodes[id].parent||id;expanded[currentOf[top]||currentOf[id]]=true;relayout();}select(id,true);return;}
     var x=e.target.closest('.expand');if(x){expandChain(x.getAttribute('data-expand'));}});
   document.getElementById('gdetail-close').addEventListener('click',clearAll);
   Object.keys(nodeEls).forEach(function(id){var el=nodeEls[id];el.addEventListener('click',function(e){if(moved)return;e.stopPropagation();if(e.target.classList&&e.target.classList.contains('badge')&&nodes[id].type==='method'){expandChain(id);return;}if(e.shiftKey&&selected&&selected!==id)showPath(selected,id);else select(id,false);});});
@@ -2209,12 +2296,11 @@ GRAPH_JS = """
     if(!curP)return n.label+' ｜ 方法 無（'+plans.length+' 個舊版，無現行版）';
     var down=walk(id,1).nodes;
     var vids=[],vst={};(outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='validated_by'){vids.push(nodes[e.to].label);vst[nodes[e.to].meta.status||'unknown']=true;}});
-    var prim={},rob={},unval=0;vids.forEach(function(v){(outE['v:'+v]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='primary')prim[e.to]=true;if(e.type==='robustness')rob[e.to]=true;});});
-    Object.keys(prim).forEach(function(k){delete rob[k];});
-    (outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='produces'&&e.default_visible)unval++;});
-    var models=(curP.meta.models||[]).join('、')||'無 model';var k=(curP.meta.superseded_versions||[]).length;
+    var kinds={primary:0,secondary:0,undeclared:0},unval=0;
+    Object.keys(down).forEach(function(kk){var m=nodes[kk];if(m.type==='result'){kinds[m.meta.result_kind||'undeclared']=(kinds[m.meta.result_kind||'undeclared']||0)+1;if(m.meta.validated===false)unval++;}});
+    var models=(curP.meta.models||[]).join('、')||'無 model';var k=(curP.meta.superseded_versions||[]).length;var sc=(curP.meta.sensitivity_ids||[]).length;
     var figs={},fu=0;Object.keys(down).forEach(function(kk){var m=nodes[kk];if(m.type==='figure'){figs[kk]=true;if(m.state!=='done')fu++;}});
-    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+Object.keys(prim).length+' 鍵、穩健性 '+Object.keys(rob).length+' 鍵、未驗證 '+unval+' 鍵 → 圖表 '+Object.keys(figs).length+' 張（未審 '+fu+'）';
+    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版；敏感性 '+sc+' 項）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+kinds.primary+' 鍵、次要 '+kinds.secondary+' 鍵、未宣告 '+kinds.undeclared+' 鍵（未驗證 '+unval+'）→ 圖表 '+Object.keys(figs).length+' 張（未審 '+fu+'）';
   }
   function tourLine(){return '<div class="tour">第 '+(tour+1)+'／'+chapters.length+' 章：'+esc(chapterSummary(chapters[tour]))+'<br><span class="src">← → 換章，Esc 離開</span></div>';}
   function tourGo(i){if(!chapters.length)return;tour=((i%chapters.length)+chapters.length)%chapters.length;select(chapters[tour],true);}
@@ -2279,17 +2365,35 @@ def _fit(text: str, max_px: float, size: float = 12.0) -> str:
     return out + '…'
 
 
+def _node_w(n: dict) -> int:
+    return NODE_W - SUB_INDENT if n.get('subtype') == 'sensitivity' else NODE_W
+
+
+def _l_path(a: dict, b: dict) -> str:
+    """父→子的 L 形短線：從父節點左緣下方垂下，到子節點中線再右轉進子節點左緣（不走欄間折線、不占出入口）。"""
+    x0 = a['x'] + 12
+    y0 = a['y'] + NODE_H
+    yc = b['y'] + NODE_H / 2
+    x2 = b['x']
+    r = min(6, max(0, (yc - y0) / 2), max(0, (x2 - x0) / 2))
+    return f'M{x0:g},{y0:g} L{x0:g},{yc - r:g} Q{x0:g},{yc:g} {x0 + r:g},{yc:g} L{x2:g},{yc:g}'
+
+
 def _edge_path(a: dict, b: dict, py1: float, py2: float, lane: int) -> str:
     """直角折線（與 GRAPH_JS 的 edgePath 同一套幾何）：源節點右緣出發，水平到目標欄前的間隙、垂直、再水平進入
-    目標左緣；轉角以 Q 小弧圓角；lane（0–7）把垂直段散開在間隙裡，避免重疊。反向邊從左緣出、由右緣進。"""
+    目標左緣；轉角以 Q 小弧圓角；lane（0–7）把垂直段散開在間隙裡，避免重疊。反向邊從左緣出、由右緣進。
+    子節點的右緣與父節點對齊（x 縮排 24、寬度減 24），左緣則在縮排後的位置。"""
     gap = COL_GAP - NODE_W
     step = (gap - 24) / 7
+    ax_right = a['x'] + _node_w(a)
+    bx_right = b['x'] + _node_w(b)
+    col_b = b['x'] - (SUB_INDENT if b.get('subtype') == 'sensitivity' else 0)
     if a['col'] < b['col']:
-        x1, x2, xm, fwd = a['x'] + NODE_W, b['x'], b['x'] - gap + 12 + lane * step, 1
+        x1, x2, xm, fwd = ax_right, b['x'], col_b - gap + 12 + lane * step, 1
     elif a['col'] > b['col']:
-        x1, x2, xm, fwd = a['x'], b['x'] + NODE_W, b['x'] + NODE_W + 12 + lane * step, -1
+        x1, x2, xm, fwd = a['x'], bx_right, bx_right + 12 + lane * step, -1
     else:
-        x1, x2, xm, fwd = a['x'] + NODE_W, a['x'] + NODE_W, a['x'] + NODE_W + 12 + lane * step, 1
+        x1, x2, xm, fwd = ax_right, ax_right, ax_right + 12 + lane * step, 1
     if py1 == py2 and a['col'] != b['col']:
         return f'M{x1:g},{py1:g} L{x2:g},{py2:g}'
     dy = py2 - py1
@@ -2309,6 +2413,8 @@ def _svg_graph(graph: dict) -> str:
     ins: dict[str, list[int]] = {}
     for i in drawn:
         e = graph['edges'][i]
+        if e['type'] == 'sensitivity':
+            continue   # 父子連接線走 L 形，不占出入口
         outs.setdefault(e['from'], []).append(i)
         ins.setdefault(e['to'], []).append(i)
     py1: dict[int, float] = {}
@@ -2333,7 +2439,10 @@ def _svg_graph(graph: dict) -> str:
     out.append('</defs><g id="graph-root"><g id="graph-edges">')
     for i, e in enumerate(graph['edges']):
         a, b = by_id[e['from']], by_id[e['to']]
-        if i in lane_of:
+        if e['type'] == 'sensitivity':
+            d = _l_path(a, b)
+            off = '' if i in lane_of else ' off'
+        elif i in lane_of:
             d = _edge_path(a, b, py1[i], py2[i], lane_of[i])
             off = ''
         else:
@@ -2347,20 +2456,29 @@ def _svg_graph(graph: dict) -> str:
     for n in nodes:
         gone = ' gone' if n['id'] not in shown else ''
         dec = ' dec' if n['type'] == 'decision' else ''
+        sub = n.get('subtype') == 'sensitivity'
+        w = _node_w(n)
         state_zh = STATE_ZH.get(n['state'], '—') if n['state'] else '—'
         st_w = _tw(state_zh, 11)
+        unval = n['type'] == 'result' and n['meta'].get('validated') is False
+        unval_w = _tw('未驗證', 11) + 6 if unval else 0
         badge_w = _tw(n['badge'], 10) + 6 if n['badge'] else 0
-        label_max = NODE_W - 30 - st_w - 8 - badge_w - 8
-        label = _fit(n['label'], label_max)
-        badge_x = NODE_W - 8 - st_w - 6
-        out.append(f'<g class="gnode t-{n["type"]} s-{n["state"] or "none"}{dec}{gone}" data-node-id="{_h(n["id"])}" data-type="{n["type"]}" '
-                   f'data-state="{n["state"]}" data-col="{n["col"]}" data-order="{n["order"]}" transform="translate({n["x"]:g},{n["y"]:g})" tabindex="0">'
-                   f'<rect class="box" width="{NODE_W}" height="{NODE_H}" rx="6"></rect>'
+        label_max = w - 30 - st_w - unval_w - 8 - badge_w - 8
+        label = _fit(n['label'], label_max, 11 if sub else 12)
+        st_x = w - 8
+        unval_x = st_x - st_w - 6
+        badge_x = (unval_x - unval_w + 6 if unval else st_x - st_w) - 6
+        cls = f'gnode t-{n["type"]} s-{n["state"] or "none"}{" sub" if sub else ""}{dec}{gone}'
+        out.append(f'<g class="{cls}" data-node-id="{_h(n["id"])}" data-type="{n["type"]}" data-state="{n["state"]}" '
+                   f'data-col="{n["col"]}" data-order="{n["order"]}"' + (f' data-parent="{_h(n["parent"])}"' if n.get('parent') else '') +
+                   f' transform="translate({n["x"]:g},{n["y"]:g})" tabindex="0">'
+                   f'<rect class="box" width="{w}" height="{NODE_H}" rx="6"></rect>'
                    f'<rect class="tbar" x="3" y="3" width="5" height="{NODE_H - 6}" rx="2"></rect>'
                    f'<text class="sym" x="13" y="24">{_h(STATE_SYMBOL.get(n["state"], ""))}</text>'
                    f'<text class="lbl" x="30" y="23">{_h(label)}</text>'
                    + (f'<text class="badge" x="{badge_x:g}" y="23" text-anchor="end">{_h(n["badge"])}</text>' if n['badge'] else '')
-                   + f'<text class="st" x="{NODE_W - 8}" y="23" text-anchor="end">{_h(state_zh)}</text>'
+                   + (f'<text class="st unval" x="{unval_x:g}" y="23" text-anchor="end">未驗證</text>' if unval else '')
+                   + f'<text class="st" x="{st_x}" y="23" text-anchor="end">{_h(state_zh)}</text>'
                    f'<title>{_h(n["title"] or n["label"])}</title></g>')
     out.append('</g></g></svg>')
     return '\n'.join(out)
@@ -2394,16 +2512,18 @@ def _relations_tab(ir: dict) -> list[str]:
         '<span>｜</span>',
         '<span>● 完成</span><span>◐ 過期</span><span>✖ 受阻</span><span>○ 未到</span><span>◌ 不明</span>',
         '<span>｜</span>',
-        '<span><span class="esw"></span>主幹（規劃／驗證／主要結果）</span>',
-        '<span><span class="esw dashed"></span>未驗證旁路</span>',
-        '<span><span class="esw thin"></span>細線＝穩健性</span>',
+        '<span><span class="esw"></span>主幹（規劃／產出／驗證）</span>',
+        '<span>縮排子節點＝敏感性子分析（父→子 L 形線）</span>',
+        '<span><span class="esw dashed"></span>虛線＝未宣告（results.json 掛在此 plan 但 outputs／robustness 都沒宣告）</span>',
+        '<span><span class="esw thin"></span>細線＝驗證（穩健性）</span>',
+        '<span><span class="st unval" style="color:var(--expired);font-weight:700">未驗證</span>＝結果沒有任何驗證邊</span>',
         '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、未驗證的結果鍵 {st["unvalidated_result_keys"]}、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：問題 → 方法（計畫版本）→ 驗證 → 結果 → 圖表 → 決策；舊版計畫預設收合，虛線＝繞過驗證的旁路。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：問題 → 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
@@ -2511,7 +2631,7 @@ def render_html(ir: dict, root: Path) -> str:
     lines += [
         '<footer>',
         f'<p>泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。</p>',
-        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。</p>',
+        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。</p>',
         '<p>資料維護狀況：</p><ul>',
     ]
     for lane in ir['lanes']:
@@ -2541,6 +2661,7 @@ def stats_line(ir: dict) -> str:
             f'受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。'
             f'關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、'
             f'goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、'
+            f'次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、'
             f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）。'
             f'收件匣待處理 {ir["inbox"]["pending"]}。')
 
