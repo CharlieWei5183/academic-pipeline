@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.14.0（未發布）
+## 0.14.0（2026-09-14）
 
 關聯圖分成上下兩個區帶：**Main**（主結果鏈）與 **Supplementary**（敏感性分析與附錄問題），每一組敏感性分析只留一條線連回它所屬分析的主要結果。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位、一種節點 subtype 與一種邊）。
 
