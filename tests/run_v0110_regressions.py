@@ -11,11 +11,16 @@ WARNING／INFO，`check_decisions.py` 維持「exit 0；檔案無法解析才 ex
 下列斷言同時以錨點字串與實際執行 checker 驗證此契約；暫存專案用 tempfile 建立、
 測試結束自動清除。
 
-階段 2 追加 `render_progress.py`（單一專案進度時間軸 renderer）的測試：只讀
-`project.yaml`／`decisions.yaml`／`analysis/results.json`、只寫 `<root>/PROGRESS.md`；
-缺欄位、缺 `decisions.yaml`、空 `decisions: []`、缺 `project.yaml`／`results.json`
-一律 exit 0 並產出，缺漏值顯示 `unknown`；只有根目錄不存在與 `decisions.yaml` 無法解析
-才 exit 2。斷言一律讀磁碟上實際產出的 `PROGRESS.md`，並逐檔比對 sha256 確認 SSOT 未被碰。
+階段 2 追加 `render_decisions_timeline.py`（單一專案決策時間軸 renderer，原名 `render_progress.py`）
+的測試：只讀 `project.yaml`／`decisions.yaml`／`analysis/results.json`、只寫
+`<root>/DECISIONS-TIMELINE.md`；缺欄位、缺 `decisions.yaml`、空 `decisions: []`、缺
+`project.yaml`／`results.json` 一律 exit 0 並產出，缺漏值顯示 `unknown`；只有根目錄不存在與
+`decisions.yaml` 無法解析才 exit 2。斷言一律讀磁碟上實際產出的 `DECISIONS-TIMELINE.md`，並逐檔
+比對 sha256 確認 SSOT 未被碰。
+
+階段 3 追加新的 `render_progress.py`（研究問題里程圖：唯讀 SSOT → `PROGRESS.ir.json` →
+schema 驗證 → 自含 `PROGRESS.html`）的測試：完整 fixture 的逐站判定、空 fixture、無法解析
+→ unknown、雜湊紅線、旗標正交、HTML 自含與逸出、確定性、IR 驗證關卡與登記錨點。
 """
 from __future__ import annotations
 
@@ -30,6 +35,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 CHECKER = PLUGIN / "skills/status/scripts/check_decisions.py"
+TIMELINE = PLUGIN / "skills/status/scripts/render_decisions_timeline.py"
 RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
 STATS_RE = re.compile(r"共 (\d+) 筆記錄，其中 (\d+) 筆有完整四軸")
 LEGACY_FIELD = "prob" + "lem"  # 已停用的舊欄位名，拆開寫以免 git grep 誤中
@@ -321,11 +327,11 @@ def test_docs_synced() -> None:
     need("tests/README.md", "run_v0110_regressions.py", "STATE_COVERAGE")
 
 
-# ---------- 階段 2：render_progress.py ----------
+# ---------- 階段 2：render_decisions_timeline.py（原 render_progress.py） ----------
 
 def run_renderer(root: Path, *flags: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, str(RENDERER), str(root), *flags],
+        [sys.executable, str(TIMELINE), str(root), *flags],
         capture_output=True, text=True, encoding="utf-8",
     )
     return proc.returncode, proc.stdout, proc.stderr
@@ -516,18 +522,18 @@ def test_render_full_project() -> None:
         before = _sha_tree(root)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        assert "PROGRESS.md 已寫入" in out and "結果: 完成" in out, out
+        assert "DECISIONS-TIMELINE.md 已寫入" in out and "結果: 完成" in out, out
         after = _sha_tree(root)
-        # 雜湊紅線：fixture 內所有檔案執行前後逐檔相同，只多出 PROGRESS.md
-        assert set(after) - set(before) == {"PROGRESS.md"}, (before, after)
+        # 雜湊紅線：fixture 內所有檔案執行前後逐檔相同，只多出 DECISIONS-TIMELINE.md
+        assert set(after) - set(before) == {"DECISIONS-TIMELINE.md"}, (before, after)
         for rel, digest in before.items():
             assert after[rel] == digest, f"SSOT 被改動: {rel}"
-        raw = (root / "PROGRESS.md").read_bytes()
+        raw = (root / "DECISIONS-TIMELINE.md").read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf"), "產出檔開頭是 BOM"
         assert b"\r" not in raw, "產出檔含 CR"
         assert raw.endswith(b"\n") and not raw.endswith(b"\n\n"), "檔尾須恰一個換行"
         progress = raw.decode("utf-8")
-        assert progress.startswith("# 渲染測試專案 進度時間軸\n"), progress[:80]
+        assert progress.startswith("# 渲染測試專案 決策時間軸\n"), progress[:80]
         assert "請勿手動編輯" in progress and "來源專案：" in progress, progress
         assert "| 編號 | 日期 | 階段 | 方法 | 問題 | 執行憑據 |" in progress, progress
         rows = _table_rows(progress)
@@ -554,7 +560,7 @@ def test_render_full_project() -> None:
         # 冪等：再跑一次，除產生時間外相同
         rc2, _, _ = run_renderer(root)
         assert rc2 == 0
-        second = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        second = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("產生時間："))
         assert strip(progress) == strip(second), "重跑後內容不冪等"
 
@@ -565,7 +571,7 @@ def test_render_old_format_project() -> None:
         _write_render_project(root, RENDER_OLD)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         rows = _table_rows(progress)
         assert len(rows) == 3, rows
         ids = [r.split(" | ")[0].lstrip("| ") for r in rows]
@@ -595,14 +601,14 @@ def test_render_empty_and_missing_decisions() -> None:
             assert rc == 0, out + err
             if variant == "missing":
                 assert "INFO decisions.yaml 不存在，視為 0 筆" in out, out
-            progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+            progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
             assert _stats(progress) == (0, 0), progress
             assert "| 編號 | 日期 | 階段 | 方法 | 問題 | 執行憑據 |" in progress, progress
             assert _table_rows(progress) == [], progress
             assert "```mermaid" not in progress, progress
             assert "無記錄" in progress, progress
             # 缺 project.yaml → 標題退回根目錄名；缺 results.json 不是錯誤
-            assert progress.startswith(f"# {root.name} 進度時間軸\n"), progress[:80]
+            assert progress.startswith(f"# {root.name} 決策時間軸\n"), progress[:80]
             assert "project.yaml（無）" in progress and "analysis/results.json（無）" in progress, progress
 
 
@@ -614,7 +620,7 @@ def test_render_dry_run_touches_nothing() -> None:
         rc, out, err = run_renderer(root, "--dry-run")
         assert rc == 0, out + err
         assert _sha_tree(root) == before, "dry-run 改動了目錄"
-        assert not (root / "PROGRESS.md").exists(), "dry-run 不得落 PROGRESS.md"
+        assert not (root / "DECISIONS-TIMELINE.md").exists(), "dry-run 不得落 DECISIONS-TIMELINE.md"
         assert "## 記錄表" in out and "## 統計" in out, out
         assert len(_table_rows(out)) == 3, out
         # dry-run + json：只印 JSON、不寫
@@ -645,7 +651,7 @@ def test_render_json_output() -> None:
         assert data["rows"][0]["question"] == "main" and data["rows"][0]["exec_issue"] == ""
         assert data["rows"][1]["id"] == "D-003" and data["rows"][1]["exec_issue"].startswith("封存前")
         # --json 單獨用仍寫檔
-        assert (root / "PROGRESS.md").exists(), "--json 單獨使用時仍須寫檔"
+        assert (root / "DECISIONS-TIMELINE.md").exists(), "--json 單獨使用時仍須寫檔"
 
 
 def test_render_mermaid_unsafe_skips_block() -> None:
@@ -655,7 +661,7 @@ def test_render_mermaid_unsafe_skips_block() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING 時間軸略過" in out and "D-001" in out, out
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         rows = _table_rows(progress)
         assert len(rows) == 2, rows
         assert "| D-001 | 2026-07-10 | analyze-data | GLMM: 負二項 | SQ1 | a.py |" in progress, progress
@@ -674,7 +680,7 @@ def test_render_gantt_section_order_and_undated() -> None:
         _write_render_project(root, RENDER_SECTIONS)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 8, progress
         # section 順序：main → SQ2 → SQ10（整數序，非字串序）→ AQ1 → 自由文字 → unknown
         assert _sections(progress) == ["main", "SQ2", "SQ10", "AQ1", "其他", "unknown"], _sections(progress)
@@ -697,7 +703,7 @@ def test_render_gantt_all_undated() -> None:
         _write_render_project(root, RENDER_ALL_UNDATED)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 2, progress
         assert "```mermaid" not in progress, progress
         assert "無已知日期的記錄，略過時間軸。" in progress, progress
@@ -716,7 +722,7 @@ def test_render_gantt_unsafe_section_skips_block() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING 時間軸略過：section「SQ1: 主結果」" in out, out
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 1, progress
         assert "| D-001 | 2026-07-10 | analyze-data | m | SQ1: 主結果 |  |" in progress, progress
         assert "```mermaid" not in progress, progress
@@ -730,14 +736,14 @@ def test_render_results_link_missing() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING D-001" in out and "results.nope" in out, out
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "results.nope（analysis/results.json 無此鍵）" in progress, progress
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write_render_project(root, RENDER_MISSING_KEY, results=False)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "results.nope（無 analysis/results.json）" in progress, progress
         assert "analysis/results.json（無）" in progress, progress
 
@@ -748,7 +754,7 @@ def test_render_exec_issue_without_question() -> None:
         _write_render_project(root, RENDER_EXEC_ISSUE_NO_QUESTION)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "| D-001 | 2026-07-10 | analyze-data | 清快取後重跑 | unknown › rerun 讀到舊快取 | a.py |" in progress, progress
         # question 缺 → 問題軸不算有值、不算完整四軸
         assert _stats(progress) == (1, 0), progress
@@ -770,21 +776,413 @@ def test_render_blockers() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 2 and "BLOCKER decisions.yaml 無法解析" in out + err, out + err
         assert "Traceback" not in out + err
-        assert _sha_tree(root) == before and not (root / "PROGRESS.md").exists()
+        assert _sha_tree(root) == before and not (root / "DECISIONS-TIMELINE.md").exists()
 
 
 def test_render_docs_registered() -> None:
-    need("README.md", "PROGRESS.md", "render_progress.py")
+    files = ("DECISIONS-TIMELINE.md", "PROGRESS.ir.json", "PROGRESS.html")
+    scripts = ("render_progress.py", "render_decisions_timeline.py")
+    need("README.md", *files, *scripts)
+    assert "`PROGRESS.md`" not in text("README.md"), "README 不得再登記舊檔名 PROGRESS.md"
     body = text("skills/project-init/SKILL.md")
     tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
-    assert "PROGRESS.md" in tree, "project-init 步驟 4 的資料夾樹缺 PROGRESS.md"
-    need("skills/status/SKILL.md", "render_progress.py", "PROGRESS.md")
+    for f in files:
+        assert f in tree, f"project-init 步驟 4 的資料夾樹缺 {f}"
+    assert "PROGRESS.md " not in tree and "PROGRESS.md\n" not in tree, "project-init 樹不得再列舊檔名 PROGRESS.md"
+    need("skills/status/SKILL.md", *files, *scripts)
     changelog = text("CHANGELOG.md")
     section = changelog[changelog.index("## 0.11.0"):changelog.index("## 0.10.0")]
-    assert "render_progress.py" in section, "CHANGELOG 0.11.0 段缺 render_progress.py"
-    need("tests/README.md", "render_progress.py")
+    for token in files + scripts:
+        assert token in section, f"CHANGELOG 0.11.0 段缺 {token}"
+    need("tests/README.md", *files, *scripts)
     # frontmatter 未動
     assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
+    assert text("skills/project-init/SKILL.md").startswith("---\nname: project-init\n")
+    # 22 個 stage skill 收尾句「這一筆是進度時間軸的資料來源」與 check_decisions.py 註解不因改名而動
+    for skill in TARGETS:
+        assert "這一筆是進度時間軸的資料來源" in text(f"skills/{skill}/SKILL.md"), f"{skill}: 收尾句被改動"
+    assert "進度時間軸" in text("skills/status/scripts/check_decisions.py"), "check_decisions.py 不得改動"
+
+
+# ---------- 階段 3：render_progress.py（研究問題里程圖 IR ＋ HTML） ----------
+
+def run_progress(root: Path, *flags: str) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        [sys.executable, str(RENDERER), str(root), *flags],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def load_progress_module():
+    spec = importlib.util.spec_from_file_location("render_progress", RENDERER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+IR_PROJECT = """pipeline:
+  version: "0.7.3"
+project:
+  title_zh: "里程圖測試專案"
+  research_question: "主問題一句"
+goals:
+  sub_questions:
+    - id: SQ1
+      question: "問題一 <script>alert(1)</script>"
+      status: addressed
+    - id: SQ2
+      question: "問題二"
+      status: blocked
+      status_reason: "資料不足，等待補測"
+  appendix_questions:
+    - id: AQ1
+      question: "附錄問題一"
+      status: open
+state:
+  next_stage: evaluate
+  methodology: {result: pass, route: quantitative-inference, at: "2026-07-05"}
+  review: {round: 1, decision: major}
+  claims: {version: 0, confirmed: false}
+"""
+
+IR_INDEX = """schema_version: 1
+active: {SQ1: SQ1-v2, SQ2: SQ2-v1}
+plans:
+  - {plan_id: SQ1-v1, path: analysis/plans/SQ1-v1.yaml, sq: SQ1, status: superseded, content_hash: aaaa1111, confirmed_at: "2026-07-10", replaced_by: SQ1-v2}
+  - {plan_id: SQ1-v2, path: analysis/plans/SQ1-v2.yaml, sq: SQ1, status: active, content_hash: bbbb2222, confirmed_at: "2026-07-12"}
+  - {plan_id: SQ2-v1, path: analysis/plans/SQ2-v1.yaml, sq: SQ2, status: active, content_hash: cccc3333, confirmed_at: "2026-07-11"}
+"""
+
+IR_RESULTS = {
+    "k1": {"plan_id": "SQ1-v2", "run_id": "run_2026-07-15", "script": "analysis/scripts/a.py",
+           "data_fingerprint": "sha256:1111", "description": "x"},
+    "k2": {"plan_id": "SQ1-v2", "run_id": "run_2026-07-16", "script": "analysis/scripts/b.py",
+           "data_fingerprint": "sha256:1111", "description": "y"},
+    "k3": {"plan_id": "SQ2-v1", "run_id": "nodate", "script": "analysis/scripts/c.py",
+           "data_fingerprint": "sha256:2222", "description": "z"},
+}
+
+IR_VALIDATION = """schema_version: 1
+results_fingerprint: rrrr
+source_fingerprint: ssss
+status: expired
+completed: false
+completed_at: "2026-07-18"
+expired_at: "2026-07-20"
+report: reviews/validation-SQ1-1.md
+items:
+  - {id: V1, sq: SQ1, plan_id: SQ1-v2, status: pass}
+"""
+
+IR_DECISIONS = """decisions:
+  - {id: D-001, date: "2026-07-01", stage: project-init, checkpoint: c, decision: 建案並拆解, reason: r, question: SQ1}
+  - {id: D-002, date: "2026-07-02", stage: analyze-data, checkpoint: c, decision: 依 plan 跑分析, reason: r, question: main, links: [SQ2], method: GLMM, exec_issue: 快取}
+  - {id: D-003, date: "2026-07-03", stage: evaluate, checkpoint: c, decision: 整體評估, reason: r}
+"""
+
+
+def _write_ir_project(root: Path) -> None:
+    (root / "analysis/plans").mkdir(parents=True)
+    (root / "evaluations").mkdir()
+    (root / "project.yaml").write_text(IR_PROJECT, encoding="utf-8")
+    (root / "analysis/plans/index.yaml").write_text(IR_INDEX, encoding="utf-8")
+    (root / "analysis/results.json").write_text(json.dumps(IR_RESULTS, ensure_ascii=False, indent=2), encoding="utf-8")
+    (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
+    (root / "decisions.yaml").write_text(IR_DECISIONS, encoding="utf-8")
+    (root / "evaluations/lightweight-SQ2-1.md").write_text("# 評估\n", encoding="utf-8")
+
+
+def _embedded_ir(html_text: str) -> dict:
+    m = re.search(r'<script id="progress-ir" type="application/json">\n(.*?)\n</script>', html_text, re.S)
+    assert m, "HTML 缺內嵌 IR"
+    return json.loads(m.group(1))
+
+
+def _nodes(lane: dict) -> dict[str, dict]:
+    return {n["stage"]: n for n in lane["nodes"]}
+
+
+def test_timeline_renamed() -> None:
+    assert TIMELINE.is_file(), "render_decisions_timeline.py 不存在"
+    assert not (PLUGIN / "skills/status/scripts/render_progress.py.bak").exists()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_FULL)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        assert "=== render_decisions_timeline:" in out and "DECISIONS-TIMELINE.md 已寫入" in out, out
+        assert (root / "DECISIONS-TIMELINE.md").is_file() and not (root / "PROGRESS.md").exists()
+        body = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        assert body.startswith("# 渲染測試專案 決策時間軸\n"), body[:60]
+        assert "進度時間軸" not in body, "決策時間軸檔內不得再出現舊標題"
+        assert "skills/status/scripts/render_decisions_timeline.py" in body, body[:300]
+    src = TIMELINE.read_text(encoding="utf-8")
+    assert "PROGRESS.md" not in src and "進度時間軸" not in src and "render_progress" not in src, "舊 renderer 內殘留舊名"
+
+
+def test_progress_full_fixture() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        before = _sha_tree(root)
+        rc, out, err = run_progress(root)
+        assert rc == 0, out + err
+        assert out.startswith("=== render_progress: "), out
+        assert "PROGRESS.ir.json 已寫入" in out and "PROGRESS.html 已寫入" in out and "結果: 完成" in out, out
+        assert "Traceback" not in out + err
+        after = _sha_tree(root)
+        # 雜湊紅線：fixture 內所有檔執行前後逐檔相同，只多出兩個產出檔
+        assert set(after) - set(before) == {"PROGRESS.ir.json", "PROGRESS.html"}, (before, after)
+        for rel, digest in before.items():
+            assert after[rel] == digest, f"SSOT 被改動: {rel}"
+        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert _embedded_ir(html_text) == ir, "HTML 內嵌 IR 與 PROGRESS.ir.json 不一致"
+        assert ir["schema_version"] == 1 and ir["project_root"] == str(root.resolve())
+        assert ir["project"]["title"] == "里程圖測試專案" and ir["project"]["current_stage"] == "evaluate"
+        assert [l["id"] for l in ir["lanes"]] == ["project", "SQ1", "SQ2", "AQ1"], [l["id"] for l in ir["lanes"]]
+        assert [l["kind"] for l in ir["lanes"]] == ["project", "sq", "sq", "aq"]
+        stage_ids = [s["id"] for s in ir["stages"]]
+        assert stage_ids[:6] == ["study-design", "analyze-data", "validate-results", "evaluate", "interpret-results", "claim-audit"]
+        assert "analyze-data:rerun" in stage_ids and "evaluate:full" in stage_ids and len(stage_ids) == len(set(stage_ids))
+        project, sq1, sq2, aq1 = ir["lanes"]
+        # SQ1
+        n = _nodes(sq1)
+        assert n["study-design"]["state"] == "done" and n["study-design"]["date"] == "2026-07-12", n["study-design"]
+        assert "SQ1-v2" in n["study-design"]["summary"] and "第 2 版" in n["study-design"]["summary"]
+        assert len(n["study-design"]["history"]) == 1 and "SQ1-v1" in n["study-design"]["history"][0]["summary"], n["study-design"]["history"]
+        assert n["study-design"]["history"][0]["date"] == "2026-07-10"
+        kinds = {(e["kind"], e["value"]) for e in n["study-design"]["evidence"]}
+        assert ("path", "analysis/plans/SQ1-v2.yaml") in kinds and ("hash", "bbbb2222") in kinds, kinds
+        assert all(e["source"].startswith("analysis/plans/index.yaml#") for e in n["study-design"]["evidence"])
+        assert n["analyze-data"]["state"] == "done" and n["analyze-data"]["date"] == "2026-07-16", n["analyze-data"]
+        assert n["analyze-data"]["summary"].startswith("2 個結果鍵，run run_2026-07-15、run_2026-07-16"), n["analyze-data"]["summary"]
+        ev = n["analyze-data"]["evidence"]
+        assert {e["value"] for e in ev if e["kind"] == "run"} == {"run_2026-07-15", "run_2026-07-16"}
+        assert {e["value"] for e in ev if e["kind"] == "path"} == {"analysis/scripts/a.py", "analysis/scripts/b.py"}
+        assert [e["value"] for e in ev if e["kind"] == "hash"] == ["sha256:1111"], "data_fingerprint 須去重"
+        assert any("日期取自 run_id" in e["value"] for e in ev), ev
+        assert n["validate-results"]["state"] == "expired" and n["validate-results"]["date"] == "2026-07-18"
+        assert "2026-07-20 過期" in n["validate-results"]["summary"] and "pass" in n["validate-results"]["summary"]
+        assert {e["value"] for e in n["validate-results"]["evidence"] if e["kind"] == "hash"} == {"rrrr", "ssss"}
+        assert n["evaluate"]["state"] == "done" and n["evaluate"]["date"] == ""
+        assert n["evaluate"]["evidence"][0]["source"] == "project.yaml#goals.sub_questions[SQ1].status"
+        assert n["interpret-results"]["state"] == "pending" and n["claim-audit"]["state"] == "pending"
+        assert all(not x["current"] for x in sq1["nodes"])
+        # SQ2
+        n = _nodes(sq2)
+        assert n["study-design"]["state"] == "done" and n["study-design"]["history"] == []
+        assert n["analyze-data"]["state"] == "done" and n["analyze-data"]["date"] == "", n["analyze-data"]
+        assert n["validate-results"]["state"] == "pending"
+        assert n["evaluate"]["state"] == "blocked" and "資料不足，等待補測" in n["evaluate"]["summary"], n["evaluate"]
+        assert any(e["value"] == "evaluations/lightweight-SQ2-1.md" for e in n["evaluate"]["evidence"]), n["evaluate"]["evidence"]
+        assert sq2["status"] == "blocked" and sq2["status_reason"] == "資料不足，等待補測"
+        # AQ1：六站全 pending
+        assert [x["state"] for x in aq1["nodes"]] == ["pending"] * 6, aq1["nodes"]
+        assert aq1["question"] == "附錄問題一" and aq1["status"] == "open"
+        # 專案層
+        n = _nodes(project)
+        assert len(project["nodes"]) == 17
+        assert n["project-init"]["state"] == "done" and n["project-init"]["date"] == "2026-07-01"
+        # 無 route.yaml 但 state.methodology.route 有值 → 依 state 判 done，evidence 註明檔案不存在
+        assert n["methodology-router"]["state"] == "done" and n["methodology-router"]["date"] == "2026-07-05", n["methodology-router"]
+        assert any("檔案不存在" in e["value"] for e in n["methodology-router"]["evidence"]), n["methodology-router"]["evidence"]
+        assert n["evaluate:full"]["current"] is True and n["evaluate:full"]["state"] == "pending"
+        assert sum(1 for x in project["nodes"] if x["current"]) == 1
+        assert n["peer-review"]["state"] == "done" and n["peer-review"]["summary"] == "第 1 輪，major"
+        for sid in ("integrity-check", "data-audit", "lit-review", "evidence-synthesis", "analyze-data:rerun", "figure-design",
+                    "write-manuscript", "write-supplementary", "check-consistency", "revise", "translate-en", "submission-prep", "typeset"):
+            assert n[sid]["state"] == "pending", (sid, n[sid])
+        # 決策註記分配：question SQ1 → SQ1；question main + links [SQ2] → SQ2；都沒有 → 專案層
+        assert [a["id"] for a in sq1["annotations"]] == ["D-001"]
+        assert [a["id"] for a in sq2["annotations"]] == ["D-002"]
+        assert [a["id"] for a in project["annotations"]] == ["D-003"]
+        assert aq1["annotations"] == []
+        a = sq2["annotations"][0]
+        assert a == {"id": "D-002", "date": "2026-07-02", "stage": "analyze-data", "summary": "依 plan 跑分析",
+                     "exec_issue": "快取", "method": "GLMM"}, a
+        # stats
+        assert ir["stats"] == {"lanes": 4, "nodes": 17 + 18, "annotations": 3,
+                               "by_state": {"done": 8, "expired": 1, "blocked": 1, "pending": 25, "unknown": 0}}, ir["stats"]
+        assert "泳道 4、節點 35：完成 8、過期 1、受阻 1、未到 25、不明 0；決策註記 3。" in out, out
+        # HTML 檔頭與頁尾
+        assert "<title>里程圖測試專案 研究問題里程圖</title>" in html_text
+        assert "請勿手動編輯" in html_text and "目前站：整體評估（evaluate）" in html_text, html_text[:1500]
+        assert "SQ1：完成 3／6 站" in html_text and "專案層：完成 3／17 站" in html_text and "AQ1：完成 0／6 站" in html_text
+
+
+def test_progress_methodology_from_route_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        (root / "methodology").mkdir()
+        (root / "methodology/route.yaml").write_text("primary: qualitative\nconfirmed: true\nconfirmed_at: 2026-07-06\n", encoding="utf-8")
+        rc, out, err = run_progress(root, "--dry-run", "--json")
+        assert rc == 0, out + err
+        n = _nodes(json.loads(out)["lanes"][0])["methodology-router"]
+        # state.methodology.at 優先於 route.yaml 的 confirmed_at；route 名以 state 為準
+        assert n["state"] == "done" and n["date"] == "2026-07-05" and "quantitative-inference" in n["summary"], n
+        assert any(e["value"] == "methodology/route.yaml" and e["kind"] == "path" for e in n["evidence"]), n["evidence"]
+
+
+def test_progress_empty_fixture() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "project.yaml").write_text("project:\n  title_zh: 空專案\n", encoding="utf-8")
+        rc, out, err = run_progress(root)
+        assert rc == 0, out + err
+        assert "WARNING project.yaml 無 goals，只有專案層泳道" in out, out
+        assert "INFO decisions.yaml 不存在" in out, out
+        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        assert [l["id"] for l in ir["lanes"]] == ["project"]
+        states = {n["stage"]: n["state"] for n in ir["lanes"][0]["nodes"]}
+        assert states["project-init"] == "done" and states["project-init"] != ""
+        assert all(v == "pending" for k, v in states.items() if k != "project-init"), states
+        assert ir["stats"]["by_state"] == {"done": 1, "expired": 0, "blocked": 0, "pending": 16, "unknown": 0}
+        assert ir["project"]["current_stage"] == "" and not any(n["current"] for n in ir["lanes"][0]["nodes"])
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert "無研究問題泳道" in html_text and "（state.next_stage 未填）" in html_text
+    # 完全空目錄（連 project.yaml 都沒有）也 exit 0
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        rc, out, err = run_progress(root, "--dry-run", "--json")
+        assert rc == 0, out + err
+        ir = json.loads(out)
+        assert _nodes(ir["lanes"][0])["project-init"]["state"] == "pending"
+        assert "WARNING project.yaml 不存在，只有專案層泳道" in err, err
+
+
+def test_progress_unparseable_is_unknown() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        (root / "analysis/plans/index.yaml").write_text(": : :\n", encoding="utf-8")
+        (root / "analysis/validation.yaml").write_text("items: [\n", encoding="utf-8")
+        before = _sha_tree(root)
+        rc, out, err = run_progress(root)
+        assert rc == 0, out + err
+        assert "WARNING analysis/plans/index.yaml 無法解析" in out and "WARNING analysis/validation.yaml 無法解析" in out, out
+        assert "Traceback" not in out + err
+        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        for lane in ir["lanes"][1:]:
+            n = _nodes(lane)
+            assert n["study-design"]["state"] == "unknown" and "無法解析" in n["study-design"]["summary"], n["study-design"]
+            assert n["validate-results"]["state"] == "unknown"
+        # index 壞掉 → results 鍵的 plan 歸屬無法判定 → unknown，而非 done
+        assert _nodes(ir["lanes"][1])["analyze-data"]["state"] == "unknown"
+        assert ir["stats"]["by_state"]["unknown"] == 3 + 3 + 2
+        for rel, digest in before.items():
+            assert _sha_tree(root)[rel] == digest, f"SSOT 被改動: {rel}"
+
+
+def test_progress_flags_orthogonal() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        before = _sha_tree(root)
+        rc, out, err = run_progress(root, "--dry-run")
+        assert rc == 0, out + err
+        assert _sha_tree(root) == before, "dry-run 改動了目錄"
+        assert "<html" in out and "<title>里程圖測試專案 研究問題里程圖</title>" in out, out[:300]
+        assert "=== render_progress" not in out and "已寫入" not in out, out[:300]
+        rc, out, err = run_progress(root, "--dry-run", "--json")
+        assert rc == 0, out + err
+        assert _sha_tree(root) == before
+        data = json.loads(out)
+        assert data["schema_version"] == 1 and data["stats"]["lanes"] == 4
+        assert "<html" not in out
+        rc, out, err = run_progress(root, "--ir-only")
+        assert rc == 0, out + err
+        assert set(_sha_tree(root)) - set(before) == {"PROGRESS.ir.json"}, "--ir-only 只得多出 IR 檔"
+        assert "PROGRESS.ir.json 已寫入" in out and "PROGRESS.html 已寫入" not in out and "結果: 完成" in out, out
+        # --json 單獨用仍寫檔、stdout 只有 JSON、診斷走 stderr
+        (root / "PROGRESS.ir.json").unlink()
+        rc, out, err = run_progress(root, "--json")
+        assert rc == 0, out + err
+        assert json.loads(out)["stats"]["lanes"] == 4 and (root / "PROGRESS.html").is_file() and (root / "PROGRESS.ir.json").is_file()
+        assert "=== render_progress" not in out
+
+
+def test_progress_html_self_contained_and_escaped() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        rc, out, err = run_progress(root)
+        assert rc == 0, out + err
+        raw = (root / "PROGRESS.html").read_bytes()
+        assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw, "HTML 有 BOM 或 CR"
+        html_text = raw.decode("utf-8")
+        for token in ("http://", "https://", "<link ", "src="):
+            assert token not in html_text, f"HTML 不得含 {token}"
+        assert html_text.count("<script") == 2, "只允許內嵌 IR 與內嵌 JS 兩個 script"
+        assert '<script id="progress-ir" type="application/json">' in html_text
+        assert "@media (prefers-color-scheme: dark)" in html_text and "font:" in html_text
+        # 逸出：SQ1 question 含 <script>alert(1)</script>
+        assert "<script>alert" not in html_text, "SSOT 字串未逸出"
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_text, "靜態表格須 html.escape"
+        assert "\\u003cscript>alert(1)\\u003c/script>" in html_text, "內嵌 JSON 的 < 須逸出成 \\u003c"
+        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        assert ir["lanes"][1]["question"] == "問題一 <script>alert(1)</script>", "IR 內原文須保留"
+        assert _embedded_ir(html_text)["lanes"][1]["question"] == "問題一 <script>alert(1)</script>"
+        ir_raw = (root / "PROGRESS.ir.json").read_bytes()
+        assert not ir_raw.startswith(b"\xef\xbb\xbf") and b"\r" not in ir_raw and ir_raw.endswith(b"}\n")
+
+
+def test_progress_deterministic() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        rc, _, _ = run_progress(root)
+        assert rc == 0
+        first_html = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        first_ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        rc, _, _ = run_progress(root)
+        assert rc == 0
+        second_html = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        second_ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        g1, g2 = first_ir["generated_at"], second_ir["generated_at"]
+        strip = lambda t, g: [l for l in t.splitlines() if g not in l]
+        assert strip(first_html, g1) == strip(second_html, g2), "重跑後 HTML 除 generated_at 外不相同"
+        assert sum(1 for l in first_html.splitlines() if g1 in l) == 2, "generated_at 只出現在檔頭與內嵌 IR 各一行"
+        first_ir.pop("generated_at"); second_ir.pop("generated_at")
+        assert first_ir == second_ir
+
+
+def test_progress_ir_validation_gate() -> None:
+    module = load_progress_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_ir_project(root)
+        src = module.Sources(root.resolve())
+        good = module.build_ir(root.resolve(), src, "2026-09-14T00:00:00+08:00")
+        assert module.validate_ir(good) == [], module.validate_ir(good)
+        bad = json.loads(json.dumps(good))
+        bad["lanes"][2]["nodes"][3]["state"] = "finished"
+        errors = module.validate_ir(bad)
+        assert errors and all(e.startswith("IR-") for e in errors), errors
+        assert "IR-05 lanes[2].nodes[3].state" in errors, errors
+        bad2 = json.loads(json.dumps(good))
+        bad2["lanes"][1]["nodes"][0]["date"] = "2026/07/12"
+        bad2["lanes"][1]["nodes"][0]["evidence"] = [{"kind": "path"}]
+        bad2["stages"] = []
+        errors = module.validate_ir(bad2)
+        assert "IR-06 lanes[1].nodes[0].date" in errors and "IR-07 lanes[1].nodes[0].evidence[0]" in errors and "IR-02 stages" in errors, errors
+        # 主程式：build_ir 被換成壞 IR → exit 2、不落檔
+        before = _sha_tree(root)
+        module.build_ir = lambda root, src, generated_at: bad
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = module.main([str(root)])
+        assert rc == 2, buf.getvalue()
+        assert "BLOCKER IR 驗證失敗: IR-05 lanes[2].nodes[3].state" in buf.getvalue(), buf.getvalue()
+        assert _sha_tree(root) == before and not (root / "PROGRESS.ir.json").exists() and not (root / "PROGRESS.html").exists()
+    # 根目錄不存在 → exit 2
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out, err = run_progress(Path(tmp) / "nope")
+        assert rc == 2 and "BLOCKER 專案根目錄不存在" in out + err and "Traceback" not in out + err, out + err
 
 
 def main() -> int:
@@ -809,31 +1207,49 @@ def main() -> int:
     test_docs_synced()
     print("[regression] README/CHANGELOG/tests README 同步: pass")
     test_render_full_project()
-    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、question › exec_issue、results.k1 反查、gantt section／milestone、雜湊紅線、無 BOM／CR、冪等: pass")
+    print("[regression] render_decisions_timeline 欄位完整專案：3 列、3 筆完整四軸、question › exec_issue、results.k1 反查、gantt section／milestone、雜湊紅線、無 BOM／CR、冪等: pass")
     test_render_old_format_project()
-    print("[regression] render_progress 舊格式專案：unknown 補位、缺日期排最後且不入圖、0 筆完整四軸: pass")
+    print("[regression] render_decisions_timeline 舊格式專案：unknown 補位、缺日期排最後且不入圖、0 筆完整四軸: pass")
     test_render_empty_and_missing_decisions()
-    print("[regression] render_progress decisions: [] 與無 decisions.yaml：0 筆、表頭在、無 gantt: pass")
+    print("[regression] render_decisions_timeline decisions: [] 與無 decisions.yaml：0 筆、表頭在、無 gantt: pass")
     test_render_dry_run_touches_nothing()
-    print("[regression] render_progress --dry-run 目錄不變、無 PROGRESS.md、stdout 含記錄表: pass")
+    print("[regression] render_decisions_timeline --dry-run 目錄不變、無 DECISIONS-TIMELINE.md、stdout 含記錄表: pass")
     test_render_json_output()
-    print("[regression] render_progress --json 結構與筆數: pass")
+    print("[regression] render_decisions_timeline --json 結構與筆數: pass")
     test_render_mermaid_unsafe_skips_block()
-    print("[regression] render_progress 列標籤含半形冒號 → 略過 gantt 區塊、表格仍全列: pass")
+    print("[regression] render_decisions_timeline 列標籤含半形冒號 → 略過 gantt 區塊、表格仍全列: pass")
     test_render_gantt_section_order_and_undated()
-    print("[regression] render_progress gantt section 順序 main→SQ2→SQ10→AQ1→自由文字→unknown、無日期列未入圖: pass")
+    print("[regression] render_decisions_timeline gantt section 順序 main→SQ2→SQ10→AQ1→自由文字→unknown、無日期列未入圖: pass")
     test_render_gantt_all_undated()
-    print("[regression] render_progress 全部無已知日期 → 無 gantt、一句略過: pass")
+    print("[regression] render_decisions_timeline 全部無已知日期 → 無 gantt、一句略過: pass")
     test_render_gantt_unsafe_section_skips_block()
-    print("[regression] render_progress section 名含半形冒號 → 略過 gantt 區塊: pass")
+    print("[regression] render_decisions_timeline section 名含半形冒號 → 略過 gantt 區塊: pass")
     test_render_results_link_missing()
-    print("[regression] render_progress results.<key> 無此鍵／無 results.json: pass")
+    print("[regression] render_decisions_timeline results.<key> 無此鍵／無 results.json: pass")
     test_render_exec_issue_without_question()
-    print("[regression] render_progress exec_issue 無 question → 「unknown › exec_issue」、問題軸不計: pass")
+    print("[regression] render_decisions_timeline exec_issue 無 question → 「unknown › exec_issue」、問題軸不計: pass")
     test_render_blockers()
-    print("[regression] render_progress 根目錄不存在／decisions.yaml 無法解析 → exit 2 無 traceback: pass")
+    print("[regression] render_decisions_timeline 根目錄不存在／decisions.yaml 無法解析 → exit 2 無 traceback: pass")
     test_render_docs_registered()
-    print("[regression] render_progress 登記：README／project-init 樹／status SKILL／CHANGELOG／tests README: pass")
+    print("[regression] 登記：README／project-init 樹／status SKILL／CHANGELOG／tests README 含三個產出檔名與兩支腳本名: pass")
+    test_timeline_renamed()
+    print("[regression] 改名：render_decisions_timeline.py 產出 DECISIONS-TIMELINE.md、標題含「決策時間軸」、檔內無舊名: pass")
+    test_progress_full_fixture()
+    print("[regression] render_progress 完整 fixture：泳道順序、SQ1 六站判定與 history、SQ2 blocked 帶 status_reason、AQ1 全 pending、專案層 current／peer-review、註記分配、stats、IR＝HTML 內嵌、雜湊紅線: pass")
+    test_progress_methodology_from_route_file()
+    print("[regression] render_progress methodology-router：route.yaml 存在 → done，date 以 state.methodology.at 優先: pass")
+    test_progress_empty_fixture()
+    print("[regression] render_progress 空 fixture：只有專案層、除 project-init 外全 pending、WARNING goals 缺；空目錄亦 exit 0: pass")
+    test_progress_unparseable_is_unknown()
+    print("[regression] render_progress index.yaml／validation.yaml 無法解析 → unknown、WARNING、exit 0、SSOT 未動: pass")
+    test_progress_flags_orthogonal()
+    print("[regression] render_progress --dry-run 印 HTML 不落檔、--dry-run --json 印 IR、--ir-only 只多 IR 檔、--json 單獨仍寫檔: pass")
+    test_progress_html_self_contained_and_escaped()
+    print("[regression] render_progress HTML 自含（無 http／https／<link／src=、無 BOM／CR）、SSOT 字串逸出、IR 原文保留: pass")
+    test_progress_deterministic()
+    print("[regression] render_progress 同一 fixture 跑兩次除 generated_at 外逐行相同: pass")
+    test_progress_ir_validation_gate()
+    print("[regression] render_progress validate_ir 回 IR- 代碼；壞 IR → 主程式 exit 2 不落檔；根目錄不存在 → exit 2: pass")
     print("PASS v0.11.0 regressions")
     return 0
 

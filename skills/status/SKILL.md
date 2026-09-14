@@ -31,13 +31,16 @@ metadata:
 
 對 v0.7.x 專案執行適用 checker；state 與 artifact 衝突時以 checker 為準並修復快取。決策日誌 warning 不擋路，但 gate blocker 不能跳過。
 
-重算進度時間軸 PROGRESS.md（唯讀 SSOT，只寫該檔）：
+重算兩份自動產生的進度檔（兩支腳本都唯讀 SSOT，只寫各自的產出）：
 
 ```bash
-python3 <skill路徑>/scripts/render_progress.py <root>
+python3 <skill路徑>/scripts/render_progress.py <root>             # PROGRESS.ir.json ＋ PROGRESS.html
+python3 <skill路徑>/scripts/render_decisions_timeline.py <root>   # DECISIONS-TIMELINE.md
 ```
 
-renderer 只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/PROGRESS.md`（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section、一筆一個 milestone，無日期的列不入圖而列於圖下）；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
+`render_progress.py` 是研究問題里程圖：唯讀 `project.yaml`、`decisions.yaml`、`analysis/plans/index.yaml`、`analysis/results.json`、`analysis/validation.yaml`、`analysis/claims.yaml`、`analysis/claim-audit.yaml`、`methodology/route.yaml` 等 SSOT，建出 typed JSON IR（`PROGRESS.ir.json`，`schema_version: 1`）、通過自身 schema 驗證後再確定性渲染成單一自含 HTML（`PROGRESS.html`，無外部資源、`file://` 直接開）；泳道＝專案層（17 站）與每個 SQ／AQ（6 站：study-design → analyze-data → validate-results → evaluate → interpret-results → claim-audit），每站一個節點，state 為 done／expired／blocked／pending／unknown，缺檔缺欄位一律 pending、檔存在但無法解析一律 unknown 並 WARNING，不過濾任何泳道或站；決策註記依 `question`／`links` 掛到泳道，預設收合。旗標：`--dry-run` 不寫檔並印 HTML、`--json` 印 IR、`--ir-only` 只寫 IR。只有根目錄不存在或 IR 未通過驗證才 exit 2（後者不落檔）。
+
+`render_decisions_timeline.py` 是決策時間軸：只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/DECISIONS-TIMELINE.md`（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section、一筆一個 milestone，無日期的列不入圖而列於圖下）；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
 
 ## v0.7.1 主流程
 

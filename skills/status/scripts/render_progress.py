@@ -1,40 +1,34 @@
 #!/usr/bin/env python3
-"""進度時間軸 renderer（確定性）: 把 decisions.yaml 渲染成專案根目錄的 PROGRESS.md。
+"""研究問題里程圖 renderer（確定性）: 唯讀 SSOT → typed JSON IR → schema 驗證 → 自含 HTML。
 
-用法: python3 render_progress.py <project-root> [--dry-run] [--json]
+用法: python3 render_progress.py <project-root> [--dry-run] [--json] [--ir-only]
 
-讀取（只讀）: <root>/project.yaml、<root>/decisions.yaml、<root>/analysis/results.json
-寫入: 只寫 <root>/PROGRESS.md（一張記錄表＋一個 mermaid gantt 里程碑圖＋統計）
+讀取（只讀）: <root>/project.yaml、decisions.yaml、analysis/plans/index.yaml、
+analysis/results.json、analysis/validation.yaml、analysis/claims.yaml、analysis/claim-audit.yaml、
+methodology/route.yaml、integrity/register.yaml、analysis/data-audit.yaml、literature/*、
+analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger.yaml、evaluations/*.md
+寫入: 只寫 <root>/PROGRESS.ir.json（IR）與 <root>/PROGRESS.html（自含 HTML）
 
 旗標:
-- --dry-run  不寫檔；單獨使用時把整份 PROGRESS.md 印到 stdout
-- --json     stdout 改印機器可讀 JSON（schema_version 1），不印 markdown；
-             與 --dry-run 正交（單獨用仍寫檔；兩者同時 = 只印 JSON、不寫）
+- --dry-run  不寫檔；單獨使用時把整份 HTML 印到 stdout
+- --json     stdout 改印 IR（ensure_ascii=False, indent=2）；與 --dry-run 正交
+             （單獨用仍寫檔；兩者同時 = 只印 IR、不寫）
+- --ir-only  只寫 PROGRESS.ir.json、不寫 PROGRESS.html
 
-每筆決策一列，欄位: 編號、日期、階段、方法、問題、執行憑據。缺漏值一律顯示 unknown，
-不代填、不猜; 執行憑據缺漏留白。問題欄 = question（決策落在哪一層: main／SQ#／AQ#
-或自由文字）; exec_issue 非空時寫成「<question> › <exec_issue>」（question 缺時「unknown › <exec_issue>」）。
-執行憑據 = evidence 清單 ＋ links 裡 results.<key>
-反查 results.json（script／run_id／data_fingerprint）。已知日期（YYYY-MM-DD）升冪，
-同日依檔案順序; 日期缺或非 ISO 的列放最後、依檔案順序。不過濾任何記錄。
+泳道: 專案層（17 站，含 clean rerun 與整體評估兩個專案級關卡）最上，接著 goals.sub_questions
+（kind sq）、goals.appendix_questions（kind aq）各 6 站。每站從對應 SSOT 檔判定 done／expired／blocked／pending／unknown，
+判定規則見 SQ_RULES／PROJECT_RULES 與各 judge_* 函式；每個節點的 evidence[].source 寫出
+實際讀的檔與欄位。決策註記（decisions.yaml）依 question／links 掛到泳道，預設收合。
+缺檔、缺欄位一律 pending；檔存在但無法解析一律 unknown 並 WARNING；不過濾任何泳道或站。
 
-mermaid gantt 里程碑圖: 一筆一列（milestone, <YYYY-MM-DD>, 0d），section 為 question——
-順序 main → SQ#／AQ# 依整數自然序（先 SQ 後 AQ）→ 其他自由文字依字串序 → unknown 最後;
-section 內依已知日期升冪、同日依檔案順序。列標籤「<id> <stage>：<method>」（截 40 字），
-exec_issue 不進圖。日期未知或非 ISO 的列不入圖，圖下另列「無日期未入圖：<id>…」;
-全部列都無已知日期則不產圖。專案標題、section 名或列標籤含 mermaid 不安全字元
-（半形 : ; # % ` " < > { } \\ 與換行）時整個區塊不產出，改為一句說明並印 WARNING;
-不為此改動或過濾任何列。
-
-exit code: 0 完成（缺欄位、缺 decisions.yaml、空 decisions、缺 project.yaml、
-缺 results.json 都不是錯誤）; 2 BLOCKER（專案根目錄不存在、decisions.yaml 存在但
-無法解析）。診斷訊息（BLOCKER／WARNING／INFO）在無旗標時印到 stdout，
---dry-run 或 --json 時改印 stderr，讓 stdout 保持乾淨的 markdown 或 JSON。
+exit code: 0 完成; 2 BLOCKER（專案根目錄不存在、IR 未通過自身 schema 驗證——後者不落檔）。
+診斷訊息（BLOCKER／WARNING／INFO）在無旗標時印到 stdout，--dry-run 或 --json 時改印 stderr。
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import re
 import sys
@@ -47,345 +41,1219 @@ except ImportError:
     sys.exit(2)
 
 SCRIPT_REL = 'skills/status/scripts/render_progress.py'
-UNKNOWN = 'unknown'
+IR_NAME = 'PROGRESS.ir.json'
+HTML_NAME = 'PROGRESS.html'
+SCHEMA_VERSION = 1
+STATES = ('done', 'expired', 'blocked', 'pending', 'unknown')
+STATE_ZH = {'done': '完成', 'expired': '過期', 'blocked': '受阻', 'pending': '未到', 'unknown': '不明'}
 DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
-MERMAID_UNSAFE = (':', ';', '#', '%', '`', '"', '<', '>', '{', '}', '\\', '\n', '\r')
-LABEL_MAX = 40
-TABLE_HEADER = ('編號', '日期', '階段', '方法', '問題', '執行憑據')
-RESULTS_REL = 'analysis/results.json'
+SUMMARY_MAX = 120
+CELL_MAX = 24
+
+# ---------- 站（stage）定義 ----------
+
+SQ_STAGES = (
+    ('study-design', '研究設計'),
+    ('analyze-data', '正式分析'),
+    ('validate-results', '結果驗證'),
+    ('evaluate', '目標評估'),
+    ('interpret-results', '結果判讀'),
+    ('claim-audit', '主張審查'),
+)
+PROJECT_STAGES = (
+    ('project-init', '專案初始化'),
+    ('methodology-router', '方法路由'),
+    ('integrity-check', '完整性檢查'),
+    ('data-audit', '資料稽核'),
+    ('lit-review', '文獻回顧'),
+    ('evidence-synthesis', '證據綜整'),
+    ('analyze-data:rerun', 'clean rerun'),
+    ('evaluate:full', '整體評估'),
+    ('figure-design', '圖表設計'),
+    ('write-manuscript', '中文稿'),
+    ('write-supplementary', '補充材料'),
+    ('check-consistency', '一致性檢核'),
+    ('peer-review', '虛擬審稿'),
+    ('revise', '修訂'),
+    ('translate-en', '英文稿'),
+    ('submission-prep', '投稿準備'),
+    ('typeset', '排版'),
+)
+
+# 判定規則表: stage id → (讀的檔, 判定摘要)。判定函式為 judge_<stage>（冒號後綴改底線）。
+SQ_RULES = {
+    'study-design': ('analysis/plans/index.yaml', 'plans[] 篩 sq；active → done、只剩 superseded → expired、無版本 → pending'),
+    'analyze-data': ('analysis/results.json', '鍵篩 plan_id 屬該 SQ；掛 active plan → done、只掛 superseded → expired、無鍵 → pending'),
+    'validate-results': ('analysis/validation.yaml', 'items[] 篩 sq；頂層 status expired → expired、item pass／qualified → done、fail → blocked、無 item → pending'),
+    'evaluate': ('project.yaml', 'goals 該問題 status：addressed → done、blocked／dropped → blocked、open／缺 → pending'),
+    'interpret-results': ('analysis/claims.yaml', 'claims[] 篩 sq；有 → done、無 → pending'),
+    'claim-audit': ('analysis/claim-audit.yaml', '檔存在且 state.claim_audit.result 非空：pass → done、其他 → blocked；否則 pending（專案級結果套到每條問題）'),
+}
+PROJECT_RULES = {
+    'project-init': ('project.yaml', '存在 → done；date 取 decisions.yaml 中 stage project-init 最早日期'),
+    'methodology-router': ('methodology/route.yaml', '存在 → done；date 取 state.methodology.at 或 route.yaml 的 routed_at／confirmed_at／at'),
+    'integrity-check': ('project.yaml / integrity/register.yaml', 'state.integrity.prestudy 非空 → done；否則 register.yaml 存在 → done'),
+    'data-audit': ('project.yaml / analysis/data-audit.yaml', 'state.data_audit.result 非空 → done；否則 data-audit.yaml 存在 → done'),
+    'lit-review': ('project.yaml / literature/', 'state.literature.updated_at 非空 → done；否則 references.bib 或 matrix 檔存在 → done'),
+    'evidence-synthesis': ('project.yaml / literature/evidence-synthesis.yaml', 'state.evidence_synthesis.result 非空或檔存在 → done'),
+    'analyze-data:rerun': ('project.yaml', 'state.analysis.rerun 非空：pass／waived → done、其他 → blocked'),
+    'evaluate:full': ('project.yaml', 'state.last_full_evaluation.result：pass → done、fail → blocked、空 → pending（開寫關卡的完整評估）'),
+    'figure-design': ('analysis/figures/manifest.json', '存在 → done（summary 帶筆數）'),
+    'write-manuscript': ('project.yaml / manuscript/zh/', 'state.zh_latest 非空 → done；否則 v*.md 存在 → done'),
+    'write-supplementary': ('project.yaml', 'state.si_latest 非空 → done'),
+    'check-consistency': ('project.yaml', 'state.last_consistency.result：pass → done、fail → blocked'),
+    'peer-review': ('project.yaml', 'state.review.round > 0 → done'),
+    'revise': ('reviews/issue-ledger.yaml', '存在 → done（summary 帶 issues 筆數）'),
+    'translate-en': ('project.yaml / manuscript/en/', 'state.en_final.version 非空 → done；否則 v*.md 存在 → done'),
+    'submission-prep': ('project.yaml', 'state.submission.prep 非空 → done'),
+    'typeset': ('project.yaml', 'state.submission.build 非空 → done'),
+}
+
+# 各來源檔的相對路徑
+REL = {
+    'project': 'project.yaml',
+    'decisions': 'decisions.yaml',
+    'index': 'analysis/plans/index.yaml',
+    'results': 'analysis/results.json',
+    'validation': 'analysis/validation.yaml',
+    'claims': 'analysis/claims.yaml',
+    'claim_audit': 'analysis/claim-audit.yaml',
+    'route': 'methodology/route.yaml',
+    'register': 'integrity/register.yaml',
+    'data_audit': 'analysis/data-audit.yaml',
+    'evidence_synthesis': 'literature/evidence-synthesis.yaml',
+    'manifest': 'analysis/figures/manifest.json',
+    'ledger': 'reviews/issue-ledger.yaml',
+}
 
 
-# ---------- 讀檔 ----------
+# ---------- 讀檔（唯讀） ----------
 
 def _one_line(exc: BaseException) -> str:
     return ' '.join(str(exc).split()) or type(exc).__name__
 
 
-def load_decisions(root: Path):
-    """回傳 (decisions 清單, 檔案是否存在, blocker 原因或 None)。"""
-    path = root / 'decisions.yaml'
-    if not path.exists():
-        return [], False, None
-    try:
-        data = yaml.safe_load(path.read_text(encoding='utf-8'))
-    except Exception as exc:  # YAMLError / UnicodeDecodeError / OSError
-        return [], True, _one_line(exc)
-    if data is None:
-        return [], True, None
-    if not isinstance(data, dict):
-        return [], True, f'頂層不是 mapping（實際 {type(data).__name__}）'
-    decisions = data.get('decisions')
-    if decisions is None:
-        return [], True, None
-    if not isinstance(decisions, list):
-        return [], True, f'decisions 不是清單（實際 {type(decisions).__name__}）'
-    return decisions, True, None
+class Sources:
+    """把每個 SSOT 檔讀一次、記住狀態：ok（dict）／missing／broken（附原因）。只讀不寫。"""
 
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._cache: dict[str, tuple[str, dict | None, str]] = {}
+        self.warnings: list[str] = []
+        self.infos: list[str] = []
 
-def load_project(root: Path):
-    """回傳 (project dict 或 None, 檔案是否存在, warning 或 None)。"""
-    path = root / 'project.yaml'
-    if not path.exists():
-        return None, False, None
-    try:
-        data = yaml.safe_load(path.read_text(encoding='utf-8'))
-    except Exception as exc:
-        return None, True, f'project.yaml 無法解析: {_one_line(exc)}'
-    if data is None:
-        return {}, True, None
-    if not isinstance(data, dict):
-        return None, True, f'project.yaml 頂層不是 mapping（實際 {type(data).__name__}）'
-    return data, True, None
+    def _load(self, key: str) -> tuple[str, dict | None, str]:
+        if key in self._cache:
+            return self._cache[key]
+        rel = REL[key]
+        path = self.root / rel
+        if not path.is_file():
+            out = ('missing', None, '')
+        else:
+            try:
+                text = path.read_text(encoding='utf-8')
+                data = json.loads(text) if rel.endswith('.json') else yaml.safe_load(text)
+                if data is None:
+                    data = {}
+                if not isinstance(data, dict):
+                    raise ValueError(f'頂層不是 mapping（實際 {type(data).__name__}）')
+                out = ('ok', data, '')
+            except Exception as exc:  # YAMLError / JSONDecodeError / UnicodeDecodeError / OSError
+                out = ('broken', None, _one_line(exc))
+                self.warnings.append(f'{rel} 無法解析: {_one_line(exc)}')
+        self._cache[key] = out
+        return out
 
+    def status(self, key: str) -> str:
+        return self._load(key)[0]
 
-def load_results(root: Path):
-    """回傳 (results dict 或 None, 檔案是否存在, warning 或 None)。"""
-    path = root / RESULTS_REL
-    if not path.exists():
-        return None, False, None
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception as exc:
-        return None, True, f'{RESULTS_REL} 無法解析: {_one_line(exc)}'
-    if not isinstance(data, dict):
-        return None, True, f'{RESULTS_REL} 頂層不是 object（實際 {type(data).__name__}）'
-    return data, True, None
+    def data(self, key: str) -> dict:
+        return self._load(key)[1] or {}
+
+    def exists(self, rel: str) -> bool:
+        return (self.root / rel).is_file()
+
+    def glob(self, rel_dir: str, pattern: str) -> list[str]:
+        d = self.root / rel_dir
+        if not d.is_dir():
+            return []
+        return sorted(p.name for p in d.glob(pattern) if p.is_file())
 
 
 # ---------- 欄位取值 ----------
 
 def _text(value) -> str:
-    return '' if value is None else str(value).strip()
+    return '' if value is None else ' '.join(str(value).split())
 
 
-def _or_unknown(value) -> str:
-    return _text(value) or UNKNOWN
+def _date(value) -> str:
+    """回傳 YYYY-MM-DD 或 ''（bare date、ISO datetime 字串都取前十碼）。"""
+    s = _text(value)
+    m = DATE_RE.match(s)
+    return m.group(0) if m else ''
 
 
-def _project_title(proj, root: Path) -> str:
-    meta = proj.get('project') if isinstance(proj, dict) else None
-    if isinstance(meta, dict):
-        for key in ('title_zh', 'title_en'):
-            if _text(meta.get(key)):
-                return _text(meta.get(key))
-    return root.name or str(root)
+def _dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
-def _results_entry(results: dict, key: str):
-    """比照 check_decisions.py: 先找完整鍵, 再找第一段（results.<key>.<sub>）。"""
-    if key in results:
-        return results[key]
-    head = key.split('.')[0]
-    if head in results:
-        return results[head]
-    return None
+def _list(value) -> list:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
 
 
-def _format_results_link(key: str, results, results_present: bool,
-                         results_ok: bool, warnings: list[str], did: str) -> str:
-    label = f'results.{key}'
-    if not results_present:
-        return f'{label}（無 {RESULTS_REL}）'
-    if not results_ok:
-        return f'{label}（{RESULTS_REL} 無法解析）'
-    entry = _results_entry(results, key)
-    if entry is None:
-        warnings.append(f'{did}: link {label} 在 {RESULTS_REL} 找不到此鍵')
-        return f'{label}（{RESULTS_REL} 無此鍵）'
-    if not isinstance(entry, dict):
-        return label
-    script = _text(entry.get('script'))
-    run_id = _text(entry.get('run_id'))
-    fp = _text(entry.get('data_fingerprint'))
-    out = label
-    if script:
-        out += f' → {script}'
-    paren = [p for p in (f'run {run_id}' if run_id else '', fp) if p]
-    if paren:
-        out += '（' + '；'.join(paren) + '）'
-    return out
+def _clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n] + '…'
 
 
-def _evidence_items(d: dict, results, results_present: bool, results_ok: bool,
-                    warnings: list[str], did: str) -> list[str]:
-    items: list[str] = []
-    ev = d.get('evidence')
-    if isinstance(ev, list):
-        items.extend(s for s in (_text(x) for x in ev) if s)
-    elif _text(ev):
-        items.append(_text(ev))
-    links = d.get('links')
-    if links is None:
-        links = []
-    elif not isinstance(links, list):
-        links = [links]
-    for link in links:
-        link_s = _text(link)
-        if link_s.startswith('results.') and len(link_s) > len('results.'):
-            items.append(_format_results_link(link_s[len('results.'):], results,
-                                              results_present, results_ok, warnings, did))
-    return items
+def _get(d, *keys):
+    cur = d
+    for k in keys:
+        cur = _dict(cur).get(k)
+        if cur is None:
+            return None
+    return cur
 
 
-def build_rows(decisions: list, results, results_present: bool, results_ok: bool,
-               warnings: list[str]) -> list[dict]:
-    rows = []
-    for idx, d in enumerate(decisions):
-        if not isinstance(d, dict):
-            warnings.append(f'第 {idx + 1} 筆記錄不是 mapping（實際 {type(d).__name__}），各欄以 unknown 顯示')
-            d = {}
-        did = _or_unknown(d.get('id'))
-        date_s = _text(d.get('date'))
-        date_known = bool(date_s) and DATE_RE.fullmatch(date_s) is not None
-        method = _or_unknown(d.get('method'))
-        question = _or_unknown(d.get('question'))
-        exec_issue = _text(d.get('exec_issue'))
-        evidence = _evidence_items(d, results, results_present, results_ok, warnings, did)
-        rows.append({
-            'id': did,
-            'date': date_s or UNKNOWN,
-            'date_known': date_known,
-            'stage': _or_unknown(d.get('stage')),
-            'method': method,
-            'question': question,
-            'exec_issue': exec_issue,
-            'evidence': evidence,
-            'checkpoint': _text(d.get('checkpoint')),
-            'complete': date_known and method != UNKNOWN and question != UNKNOWN
-            and len(evidence) > 0,
-        })
-    # 已知日期升冪、同日依檔案順序; unknown／非 ISO 放最後依檔案順序（stable sort）
-    rows.sort(key=lambda r: (0, r['date']) if r['date_known'] else (1, ''))
-    return rows
+def ev(kind: str, value, source: str) -> dict:
+    return {'kind': kind, 'value': _text(value), 'source': source}
 
 
-# ---------- 渲染 ----------
-
-def _question_cell(row: dict) -> str:
-    """問題欄: question; exec_issue 非空時「<question> › <exec_issue>」。"""
-    return f"{row['question']} › {row['exec_issue']}" if row['exec_issue'] else row['question']
-
-
-def _cell(text: str) -> str:
-    """表格 cell 逸出: 換行與連續空白壓成一個空格, | 逸出成 \\|。"""
-    return re.sub(r'\s+', ' ', text).strip().replace('|', '\\|')
-
-
-def _label(row: dict) -> str:
-    """gantt 列標籤「<id> <stage>：<method>」, 超過 LABEL_MAX 字截斷加「…」。"""
-    text = f"{row['id']} {row['stage']}：{row['method']}"
-    return text[:LABEL_MAX] + '…' if len(text) > LABEL_MAX else text
-
-
-def _section_key(name: str):
-    """section 排序: main → SQ#（整數）→ AQ#（整數）→ 其他自由文字（字串序）→ unknown。"""
-    if name == 'main':
-        return (0, 0, '')
-    m = re.fullmatch(r'(SQ|AQ)(\d+)', name)
-    if m:
-        return (1 if m.group(1) == 'SQ' else 2, int(m.group(2)), '')
-    if name == UNKNOWN:
-        return (4, 0, '')
-    return (3, 0, name)
-
-
-def _unsafe_char(text: str):
-    for ch in MERMAID_UNSAFE:
-        if ch in text:
-            return ch
-    return None
-
-
-def _char_display(ch: str) -> str:
-    return '換行' if ch in ('\n', '\r') else ch
-
-
-def build_gantt(rows: list[dict], title: str):
-    """回傳 (mermaid 區塊文字或 None, 略過原因或 '', 無日期未入圖的 id 清單)。
-
-    rows 須已依「已知日期升冪、同日依檔案順序、無日期列殿後依檔案順序」排好。
-    """
-    undated = [r['id'] for r in rows if not r['date_known']]
-    if not rows:
-        return None, '無記錄，略過時間軸。', undated
-    dated = [r for r in rows if r['date_known']]
-    if not dated:
-        return None, '無已知日期的記錄，略過時間軸。', undated
-    bad = _unsafe_char(title)
-    if bad is not None:
-        return None, f'時間軸略過：專案標題含 mermaid 不安全字元「{_char_display(bad)}」。', undated
-    sections: dict[str, list[dict]] = {}
-    for row in dated:
-        sections.setdefault(row['question'], []).append(row)
-    lines = ['```mermaid', 'gantt', f'    title {title}', '    dateFormat YYYY-MM-DD',
-             '    axisFormat %m-%d', '    todayMarker off']
-    for name in sorted(sections, key=_section_key):
-        bad = _unsafe_char(name)
-        if bad is not None:
-            shown = re.sub(r'\s+', ' ', name)
-            return None, (f'時間軸略過：section「{shown}」含 mermaid 不安全字元'
-                          f'「{_char_display(bad)}」。'), undated
-        lines.append(f'    section {name}')
-        for row in sections[name]:
-            label = _label(row)
-            bad = _unsafe_char(label)
-            if bad is not None:
-                return None, (f"時間軸略過：第 {row['id']} 筆的標籤含 mermaid 不安全字元"
-                              f'「{_char_display(bad)}」。'), undated
-            lines.append(f"    {label} : milestone, {row['date']}, 0d")
-    lines.append('```')
-    return '\n'.join(lines), '', undated
-
-
-def _stats_line(rows: list[dict]) -> str:
-    n_total = len(rows)
-    n_complete = sum(1 for r in rows if r['complete'])
-    axes = _axes(rows)
-    return (f'共 {n_total} 筆記錄，其中 {n_complete} 筆有完整四軸（方法、問題、日期、執行憑據）；'
-            f"各軸有值：日期 {axes['date']}、方法 {axes['method']}、問題 {axes['question']}、"
-            f"執行憑據 {axes['evidence']}。")
-
-
-def _axes(rows: list[dict]) -> dict:
+def node(stage: str, state: str, date: str = '', summary: str = '',
+         evidence: list | None = None, history: list | None = None) -> dict:
     return {
-        'date': sum(1 for r in rows if r['date_known']),
-        'method': sum(1 for r in rows if r['method'] != UNKNOWN),
-        'question': sum(1 for r in rows if r['question'] != UNKNOWN),
-        'evidence': sum(1 for r in rows if r['evidence']),
+        'stage': stage, 'state': state, 'date': _date(date), 'summary': _text(summary),
+        'evidence': evidence or [], 'history': history or [], 'current': False,
     }
 
 
-def render_markdown(rows: list[dict], title: str, root: Path, generated_at: str,
-                    sources: dict, n_decisions: int, gantt) -> str:
-    block, reason, undated = gantt
-    def presence(key: str) -> str:
-        if sources[key] == 'ok':
-            return '有'
-        if sources[key] == 'broken':
-            return '無法解析'
-        return '無'
+def _unknown(stage: str, rel: str, reason: str = '') -> dict:
+    return node(stage, 'unknown', summary=f'{rel} 無法解析' + (f'：{reason}' if reason else ''),
+                evidence=[ev('path', rel, rel)])
 
-    dec_src = f'decisions.yaml（{n_decisions} 筆）' if sources['decisions'] != 'missing' \
-        else f'decisions.yaml（無，{n_decisions} 筆）'
-    out = [
-        f'# {title} 進度時間軸',
-        '',
-        f'本檔由 `{SCRIPT_REL}` 自動產生，請勿手動編輯；要改內容請改 `decisions.yaml`。',
-        f'產生時間：{generated_at}；來源專案：{root}。',
-        f"資料來源：{dec_src}、project.yaml（{presence('project')}）、"
-        f"{RESULTS_REL}（{presence('results')}）。",
-        '欄位缺漏顯示 `unknown`；執行憑據缺漏留白。',
-        '問題欄＝question；有執行問題時寫成「question › exec_issue」。',
-        '',
-        '## 記錄表',
-        '',
-        '| ' + ' | '.join(TABLE_HEADER) + ' |',
-        '|' + '---|' * len(TABLE_HEADER),
+
+# ---------- SQ／AQ 泳道判定 ----------
+
+def _sq_plans(src: Sources, lane_id: str) -> tuple[dict | None, list[dict], list[dict]]:
+    """回傳 (active plan entry 或 None, superseded 清單, 其他狀態清單)，皆依 index 檔案順序。"""
+    index = src.data('index')
+    active_map = _dict(index.get('active'))
+    active_id = _text(active_map.get(lane_id))
+    entries = [p for p in _list(index.get('plans')) if isinstance(p, dict) and _text(p.get('sq')) == lane_id]
+    # active map 是權威來源；map 缺或指到不存在的 plan_id 時退回 status == active 的第一筆
+    active = None
+    if active_id:
+        active = next((p for p in entries if _text(p.get('plan_id')) == active_id), None)
+    if active is None:
+        active = next((p for p in entries if _text(p.get('status')).lower() == 'active'), None)
+    superseded: list[dict] = []
+    others: list[dict] = []
+    for p in entries:
+        if p is active:
+            continue
+        status = _text(p.get('status')).lower()
+        if status in ('superseded', 'active'):  # 第二個 active 是殘留標記，視同已被取代
+            superseded.append(p)
+        else:
+            others.append(p)
+    return active, superseded, others
+
+
+def _plan_version(plan_id: str, fallback: int) -> int:
+    m = re.search(r'-v(\d+)$', plan_id)
+    return int(m.group(1)) if m else fallback
+
+
+def judge_study_design(src: Sources, lane: dict) -> dict:
+    stage, rel, lane_id = 'study-design', REL['index'], lane['id']
+    st = src.status('index')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無 plan（無 index.yaml）',
+                    evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    active, superseded, others = _sq_plans(src, lane_id)
+    history = []
+    for p in superseded:
+        pid = _text(p.get('plan_id'))
+        rb = _text(p.get('replaced_by'))
+        history.append({'date': _date(p.get('confirmed_at')),
+                        'summary': f'{pid} 封版，已被 {rb} 取代' if rb else f'{pid} 封版，已被取代'})
+    if active is not None:
+        pid = _text(active.get('plan_id'))
+        ver = _plan_version(pid, len(superseded) + 1)
+        evidence = [
+            ev('path', active.get('path') or f'analysis/plans/{pid}.yaml', f'{rel}#plans[{pid}].path'),
+            ev('hash', active.get('content_hash'), f'{rel}#plans[{pid}].content_hash'),
+            ev('value', f'status={_text(active.get("status")) or "active"}', f'{rel}#plans[{pid}].status'),
+        ]
+        return node(stage, 'done', active.get('confirmed_at'), f'plan {pid} 封版（第 {ver} 版）', evidence, history)
+    if superseded:
+        latest = max((_date(p.get('confirmed_at')) for p in superseded), default='')
+        ids = '、'.join(_text(p.get('plan_id')) for p in superseded)
+        return node(stage, 'expired', latest, f'{len(superseded)} 版皆已被取代，無 active plan（{ids}）',
+                    [ev('value', ids, f'{rel}#plans[sq={lane_id}].status')], history)
+    if others:
+        ids = '、'.join(_text(p.get('plan_id')) for p in others)
+        return node(stage, 'pending', summary=f'plan 尚未封版（{ids}）',
+                    evidence=[ev('value', ids, f'{rel}#plans[sq={lane_id}].status')])
+    return node(stage, 'pending', summary='尚無 plan', evidence=[ev('value', f'plans[] 無 sq={lane_id}', f'{rel}#plans[]')])
+
+
+def judge_analyze_data(src: Sources, lane: dict) -> dict:
+    stage, rel, lane_id = 'analyze-data', REL['results'], lane['id']
+    st = src.status('results')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無結果鍵（無 results.json）', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    index_ok = src.status('index') == 'ok'
+    active, superseded, others = _sq_plans(src, lane_id) if index_ok else (None, [], [])
+    active_ids = {_text(active.get('plan_id'))} if active else set()
+    superseded_ids = {_text(p.get('plan_id')) for p in superseded}
+    listed_ids = active_ids | superseded_ids | {_text(p.get('plan_id')) for p in others}
+    pat = re.compile(re.escape(lane_id) + r'-v\d+$')
+    keys_active: list[str] = []
+    keys_superseded: list[str] = []
+    keys_orphan: list[str] = []
+    entries: dict[str, dict] = {}
+    for key, obj in src.data('results').items():
+        if not isinstance(obj, dict):
+            continue
+        pid = _text(obj.get('plan_id'))
+        if not pid:
+            continue
+        if pid in active_ids:
+            keys_active.append(str(key))
+        elif pid in superseded_ids:
+            keys_superseded.append(str(key))
+        elif pid not in listed_ids and pat.fullmatch(pid):
+            keys_orphan.append(str(key))
+        else:
+            continue
+        entries[str(key)] = obj
+
+    def collect(keys: list[str]) -> tuple[list[dict], str]:
+        evidence: list[dict] = []
+        seen_run: dict[str, str] = {}
+        seen_script: set[str] = set()
+        seen_fp: set[str] = set()
+        for k in keys:
+            obj = entries[k]
+            run_id = _text(obj.get('run_id'))
+            if run_id and run_id not in seen_run:
+                seen_run[run_id] = k
+                evidence.append(ev('run', run_id, f'{rel}#{k}.run_id'))
+            script = _text(obj.get('script'))
+            if script and script not in seen_script:
+                seen_script.add(script)
+                evidence.append(ev('path', script, f'{rel}#{k}.script'))
+            fp = _text(obj.get('data_fingerprint'))
+            if fp and fp not in seen_fp:
+                seen_fp.add(fp)
+                evidence.append(ev('hash', fp, f'{rel}#{k}.data_fingerprint'))
+        dates = [m.group(0) for r in seen_run for m in [DATE_RE.search(r)] if m]
+        date = max(dates) if dates else ''
+        if seen_run:
+            note = f'日期取自 run_id（{date}）' if date else 'run_id 無 YYYY-MM-DD 日期，date 留空'
+            evidence.append(ev('value', note, f'{rel}#<key>.run_id'))
+        return evidence, date
+
+    if keys_active:
+        evidence, date = collect(keys_active)
+        runs = '、'.join(dict.fromkeys(_text(entries[k].get('run_id')) or 'unknown' for k in keys_active))
+        return node(stage, 'done', date, f'{len(keys_active)} 個結果鍵，run {runs}', evidence)
+    if keys_superseded:
+        evidence, date = collect(keys_superseded)
+        pids = '、'.join(dict.fromkeys(_text(entries[k].get('plan_id')) for k in keys_superseded))
+        return node(stage, 'expired', date, f'{len(keys_superseded)} 個結果鍵只掛在已取代的 plan（{pids}）', evidence)
+    if keys_orphan:
+        evidence, date = collect(keys_orphan)
+        pids = '、'.join(dict.fromkeys(_text(entries[k].get('plan_id')) for k in keys_orphan))
+        why = 'index.yaml 無法解析或不存在' if not index_ok else 'index.yaml 未登錄'
+        return node(stage, 'unknown', date, f'{len(keys_orphan)} 個結果鍵掛在 {pids}，但 {why}，無法判定 plan 歸屬', evidence)
+    return node(stage, 'pending', summary='尚無結果鍵', evidence=[ev('value', f'無 plan_id 屬 {lane_id} 的鍵', f'{rel}#<key>.plan_id')])
+
+
+def judge_validate_results(src: Sources, lane: dict) -> dict:
+    stage, rel, lane_id = 'validate-results', REL['validation'], lane['id']
+    st = src.status('validation')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無驗證（無 validation.yaml）', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    doc = src.data('validation')
+    top_status = _text(doc.get('status')).lower()
+    completed_at = _date(doc.get('completed_at'))
+    expired_at = _date(doc.get('expired_at'))
+    items = [it for it in _list(doc.get('items')) if isinstance(it, dict) and _text(it.get('sq')) == lane_id]
+    if not items:
+        return node(stage, 'pending', summary='無 validation item',
+                    evidence=[ev('value', f'items[] 無 sq={lane_id}', f'{rel}#items[]'),
+                              ev('value', f'頂層 status={top_status or "unknown"}', f'{rel}#status')])
+    statuses = list(dict.fromkeys(_text(it.get('status')).lower() or 'unknown' for it in items))
+    label = '／'.join(statuses)
+    evidence = [
+        ev('hash', doc.get('results_fingerprint'), f'{rel}#results_fingerprint'),
+        ev('hash', doc.get('source_fingerprint'), f'{rel}#source_fingerprint'),
+        ev('path', doc.get('report'), f'{rel}#report'),
+        ev('value', f'頂層 status={top_status or "unknown"}', f'{rel}#status'),
     ]
-    for r in rows:
-        cells = (r['id'], r['date'], r['stage'], r['method'], _question_cell(r),
-                 '；'.join(r['evidence']))
-        out.append('| ' + ' | '.join(_cell(c) for c in cells) + ' |')
-    out += ['', '## 時間軸', '']
-    if block is None:
-        out.append(reason)
+    for it in items:
+        iid = _text(it.get('id')) or '?'
+        evidence.append(ev('value', f'{iid}: {_text(it.get("status")) or "unknown"}（plan {_text(it.get("plan_id")) or "unknown"}）',
+                           f'{rel}#items[{iid}].status'))
+    if top_status == 'expired':
+        summary = f'驗證 {label}，{completed_at or "unknown"} 完成，{expired_at or "unknown"} 過期'
+        return node(stage, 'expired', completed_at, summary, evidence)
+    if any(s == 'fail' for s in statuses):
+        return node(stage, 'blocked', completed_at, f'驗證 {label}（{len(items)} 項），{completed_at or "unknown"} 完成', evidence)
+    if all(s in ('pass', 'qualified') for s in statuses):
+        return node(stage, 'done', completed_at, f'驗證 {label}（{len(items)} 項），{completed_at or "unknown"} 完成', evidence)
+    return node(stage, 'unknown', completed_at, f'驗證 item status 不在 pass／qualified／fail 之內（{label}）', evidence)
+
+
+def judge_evaluate(src: Sources, lane: dict) -> dict:
+    stage, rel, lane_id = 'evaluate', REL['project'], lane['id']
+    goal_path = f'{rel}#goals.{lane["goal_list"]}[{lane_id}]'
+    status = _text(lane.get('status')).lower()
+    reason = _clip(_text(lane.get('status_reason')), SUMMARY_MAX)
+    evidence = [ev('value', f'status={status or "（缺）"}', f'{goal_path}.status')]
+    for name in src.glob('evaluations', '*.md'):
+        if lane_id in name:
+            evidence.append(ev('path', f'evaluations/{name}', 'evaluations/'))
+    if status == 'addressed':
+        return node(stage, 'done', summary='addressed' + (f'：{reason}' if reason else ''), evidence=evidence)
+    if status == 'blocked':
+        return node(stage, 'blocked', summary='blocked' + (f'：{reason}' if reason else ''), evidence=evidence)
+    if status == 'dropped':
+        return node(stage, 'blocked', summary='dropped' + (f'：{reason}' if reason else ''), evidence=evidence)
+    if status in ('', 'open'):
+        return node(stage, 'pending', summary='open' if status else 'status 缺，視為 open', evidence=evidence)
+    return node(stage, 'unknown', summary=f'status 值不在 open／addressed／blocked／dropped 之內（{status}）', evidence=evidence)
+
+
+def judge_interpret_results(src: Sources, lane: dict) -> dict:
+    stage, rel, lane_id = 'interpret-results', REL['claims'], lane['id']
+    st = src.status('claims')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無主張（無 claims.yaml）', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    doc = src.data('claims')
+    claims = [c for c in _list(doc.get('claims')) if isinstance(c, dict) and _text(c.get('sq')) == lane_id]
+    if not claims:
+        return node(stage, 'pending', summary='無主張', evidence=[ev('value', f'claims[] 無 sq={lane_id}', f'{rel}#claims[]')])
+    state_claims = _dict(_get(src.data('project'), 'state', 'claims'))
+    version = _text(state_claims.get('version')) or _text(doc.get('version')) or 'unknown'
+    confirmed = state_claims.get('confirmed') if 'confirmed' in state_claims else doc.get('confirmed')
+    confirmed_s = 'unknown' if confirmed is None else str(bool(confirmed)).lower()
+    evidence = [ev('path', rel, rel),
+                ev('value', f'version={version}', f'{REL["project"]}#state.claims.version'),
+                ev('value', f'confirmed={confirmed_s}', f'{REL["project"]}#state.claims.confirmed')]
+    for c in claims:
+        cid = _text(c.get('id')) or '?'
+        evidence.append(ev('value', f'{cid}: {_clip(_text(c.get("claim")), 60)}', f'{rel}#claims[{cid}].sq'))
+    return node(stage, 'done', summary=f'{len(claims)} 條主張（claims v{version}，confirmed={confirmed_s}）', evidence=evidence)
+
+
+def judge_claim_audit(src: Sources, lane: dict) -> dict:
+    stage, rel = 'claim-audit', REL['claim_audit']
+    audit = _dict(_get(src.data('project'), 'state', 'claim_audit'))
+    result = _text(audit.get('result')).lower()
+    exists = src.exists(rel)
+    evidence = [ev('value', f'result={result or "（空）"}', f'{REL["project"]}#state.claim_audit.result'),
+                ev('value', '檔案存在' if exists else '檔案不存在', rel)]
+    if exists and result:
+        evidence.append(ev('path', rel, rel))
+        if _text(audit.get('report')):
+            evidence.append(ev('path', audit.get('report'), f'{REL["project"]}#state.claim_audit.report'))
+        note = f'專案級主張審查 {result}，套用到本問題'
+        return node(stage, 'done' if result == 'pass' else 'blocked', audit.get('at'), note, evidence)
+    return node(stage, 'pending', summary='尚無主張審查', evidence=evidence)
+
+
+SQ_JUDGES = {
+    'study-design': judge_study_design,
+    'analyze-data': judge_analyze_data,
+    'validate-results': judge_validate_results,
+    'evaluate': judge_evaluate,
+    'interpret-results': judge_interpret_results,
+    'claim-audit': judge_claim_audit,
+}
+
+
+# ---------- 專案層泳道判定 ----------
+
+def _state(src: Sources, *keys):
+    return _get(src.data('project'), 'state', *keys)
+
+
+def judge_project_init(src: Sources, lane: dict) -> dict:
+    stage, rel = 'project-init', REL['project']
+    st = src.status('project')
+    if st == 'missing':
+        return node(stage, 'pending', summary='無 project.yaml', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    dates = []
+    ids = []
+    if src.status('decisions') == 'ok':
+        for d in _list(src.data('decisions').get('decisions')):
+            if isinstance(d, dict) and _text(d.get('stage')) == 'project-init':
+                dd = _date(d.get('date'))
+                if dd:
+                    dates.append(dd)
+                    ids.append(_text(d.get('id')) or '?')
+    date = min(dates) if dates else ''
+    evidence = [ev('path', rel, rel)]
+    if date:
+        evidence.append(ev('value', f'最早 project-init 決策 {ids[dates.index(date)]}（{date}）', f'{REL["decisions"]}#decisions[stage=project-init].date'))
+    title = _text(_get(src.data('project'), 'project', 'title_zh')) or _text(_get(src.data('project'), 'project', 'title_en'))
+    return node(stage, 'done', date, f'project.yaml 已建立' + (f'：{_clip(title, 40)}' if title else ''), evidence)
+
+
+def judge_methodology_router(src: Sources, lane: dict) -> dict:
+    stage, rel = 'methodology-router', REL['route']
+    st = src.status('route')
+    meth_state = _dict(_state(src, 'methodology'))
+    meth_top = _dict(_get(src.data('project'), 'methodology'))
+    if st == 'broken':
+        return _unknown(stage, rel)
+    if st == 'missing' and not _text(meth_state.get('route')):
+        return node(stage, 'pending', summary='尚無 route（無 route.yaml）', evidence=[ev('value', '檔案不存在', rel)])
+    route = src.data('route') if st == 'ok' else {}
+    name = _text(meth_state.get('route')) or _text(route.get('primary')) or _text(meth_top.get('primary')) or 'unknown'
+    candidates = (
+        (meth_state.get('at'), f'{REL["project"]}#state.methodology.at'),
+        (meth_top.get('routed_at'), f'{REL["project"]}#methodology.routed_at'),
+        (route.get('routed_at'), f'{rel}#routed_at'),
+        (route.get('confirmed_at'), f'{rel}#confirmed_at'),
+        (route.get('at'), f'{rel}#at'),
+    )
+    date, date_src = '', ''
+    for value, source in candidates:
+        if _date(value):
+            date, date_src = _date(value), source
+            break
+    evidence = [ev('path', rel, rel)] if st == 'ok' else [ev('value', '檔案不存在，依 state.methodology 判定', rel)]
+    evidence.append(ev('value', f'route={name}', f'{REL["project"]}#state.methodology.route' if _text(meth_state.get('route')) else f'{rel}#primary'))
+    if date:
+        evidence.append(ev('value', f'date 取自 {date_src}', date_src))
+    confirmed = route.get('confirmed') if st == 'ok' else meth_top.get('confirmed')
+    if confirmed is not None:
+        evidence.append(ev('value', f'confirmed={str(bool(confirmed)).lower()}', f'{rel}#confirmed' if st == 'ok' else f'{REL["project"]}#methodology.confirmed'))
+    return node(stage, 'done', date, f'route {name}', evidence)
+
+
+def _state_or_file(src: Sources, stage: str, state_keys: tuple, state_field: str, rel: str,
+                   label: str) -> dict:
+    """state.<keys>.<field> 非空 → done（date=at）；否則 rel 檔存在 → done；否則 pending。"""
+    block = _dict(_state(src, *state_keys))
+    value = block.get(state_field)
+    state_path = f'{REL["project"]}#state.{".".join(state_keys)}.{state_field}'
+    if isinstance(value, dict):
+        nonempty = bool(value)
+        shown = _text(value.get('result')) or f'{len(value)} 欄'
     else:
-        out += ['以 gantt 里程碑呈現：一筆一列，section 為 question（main／子問題 id／unknown），'
-                f'列標籤「D-編號 stage：method」（超過 {LABEL_MAX} 字截斷加「…」）；完整內容見上表。',
-                '', block]
-        if undated:
-            out += ['', '無日期未入圖：' + '、'.join(undated) + '。']
-    out += ['', '## 統計', '', _stats_line(rows), '']
+        nonempty = bool(_text(value))
+        shown = _text(value)
+    if nonempty:
+        evidence = [ev('value', f'{state_field}={shown}', state_path)]
+        if isinstance(value, dict) and _text(value.get('report')):
+            evidence.append(ev('path', value.get('report'), f'{state_path}.report'))
+        elif _text(block.get('report')):
+            evidence.append(ev('path', block.get('report'), state_path.rsplit('.', 1)[0] + '.report'))
+        at = (value.get('at') if isinstance(value, dict) else None) or block.get('at')
+        return node(stage, 'done', at, f'{label} {shown}', evidence)
+    if src.exists(rel):
+        return node(stage, 'done', summary=f'{label}（{rel} 存在，state 未記）', evidence=[ev('path', rel, rel), ev('value', 'state 為空', state_path)])
+    return node(stage, 'pending', summary=f'尚無{label}', evidence=[ev('value', 'state 為空', state_path), ev('value', '檔案不存在', rel)])
+
+
+def judge_integrity_check(src: Sources, lane: dict) -> dict:
+    return _state_or_file(src, 'integrity-check', ('integrity',), 'prestudy', REL['register'], '完整性檢查 prestudy')
+
+
+def judge_data_audit(src: Sources, lane: dict) -> dict:
+    return _state_or_file(src, 'data-audit', ('data_audit',), 'result', REL['data_audit'], '資料稽核')
+
+
+def judge_lit_review(src: Sources, lane: dict) -> dict:
+    stage = 'lit-review'
+    lit = _dict(_state(src, 'literature'))
+    updated = _date(lit.get('updated_at'))
+    state_path = f'{REL["project"]}#state.literature.updated_at'
+    if updated:
+        mode = _text(lit.get('mode'))
+        return node(stage, 'done', updated, f'文獻回顧 {updated}' + (f'（{mode}）' if mode else ''),
+                    [ev('value', f'updated_at={updated}', state_path)])
+    files = [f'literature/{n}' for n in src.glob('literature', 'references.bib')]
+    files += [f'literature/{n}' for n in src.glob('literature', '*matrix*')]
+    if files:
+        return node(stage, 'done', summary=f'文獻回顧（{"、".join(files)} 存在，state 未記）',
+                    evidence=[ev('path', f, 'literature/') for f in files] + [ev('value', 'state 為空', state_path)])
+    return node(stage, 'pending', summary='尚無文獻回顧', evidence=[ev('value', 'state 為空', state_path), ev('value', '無 references.bib／matrix', 'literature/')])
+
+
+def judge_evidence_synthesis(src: Sources, lane: dict) -> dict:
+    return _state_or_file(src, 'evidence-synthesis', ('evidence_synthesis',), 'result', REL['evidence_synthesis'], '證據綜整')
+
+
+def judge_analyze_data_rerun(src: Sources, lane: dict) -> dict:
+    stage = 'analyze-data:rerun'
+    rerun = _state(src, 'analysis', 'rerun')
+    base = f'{REL["project"]}#state.analysis.rerun'
+    if not isinstance(rerun, dict) or not rerun:
+        return node(stage, 'pending', summary='尚無 clean rerun', evidence=[ev('value', 'state.analysis.rerun 為空', base)])
+    result = _text(rerun.get('result')).lower()
+    evidence = [ev('value', f'result={result or "（空）"}', f'{base}.result')]
+    for fld in ('fingerprint', 'input_fingerprint', 'results_fingerprint'):
+        if _text(rerun.get(fld)):
+            evidence.append(ev('hash', rerun.get(fld), f'{base}.{fld}'))
+    if _text(rerun.get('report')):
+        evidence.append(ev('path', rerun.get('report'), f'{base}.report'))
+    mode = _text(rerun.get('mode'))
+    if result == 'pass':
+        return node(stage, 'done', rerun.get('at'), f'clean rerun pass' + (f'（{mode}）' if mode else ''), evidence)
+    if result == 'waived':
+        return node(stage, 'done', rerun.get('at'), 'clean rerun waived（豁免，未實跑）', evidence)
+    return node(stage, 'blocked', rerun.get('at'), f'clean rerun {result or "結果缺"}', evidence)
+
+
+def judge_evaluate_full(src: Sources, lane: dict) -> dict:
+    stage = 'evaluate:full'
+    full = _dict(_state(src, 'last_full_evaluation'))
+    base = f'{REL["project"]}#state.last_full_evaluation'
+    result = _text(full.get('result')).lower()
+    fid = _text(full.get('id'))
+    evidence = [ev('value', f'result={result or "（空）"}', f'{base}.result')]
+    if fid:
+        evidence.append(ev('value', f'id={fid}', f'{base}.id'))
+    for name in src.glob('evaluations', '*.md'):
+        if 'full' in name or 'goalfit' in name:
+            evidence.append(ev('path', f'evaluations/{name}', 'evaluations/'))
+    label = f'整體評估 {fid or "?"} {result}'.replace('  ', ' ')
+    if result == 'pass':
+        return node(stage, 'done', summary=label, evidence=evidence)
+    if result == 'fail':
+        return node(stage, 'blocked', summary=label, evidence=evidence)
+    if result:
+        return node(stage, 'unknown', summary=f'整體評估 result 不在 pass／fail 之內（{result}）', evidence=evidence)
+    return node(stage, 'pending', summary='尚無整體評估', evidence=evidence)
+
+
+def judge_figure_design(src: Sources, lane: dict) -> dict:
+    stage, rel = 'figure-design', REL['manifest']
+    st = src.status('manifest')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無圖表 manifest', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    doc = src.data('manifest')
+    figs = doc.get('figures')
+    if isinstance(figs, list):
+        n = len(figs)
+    elif isinstance(figs, dict):
+        n = len(figs)
+    else:
+        n = len([k for k in doc if not str(k).startswith('_')])
+    return node(stage, 'done', summary=f'圖表 manifest {n} 筆', evidence=[ev('path', rel, rel), ev('value', f'{n} 筆', f'{rel}#figures')])
+
+
+def _max_version(names: list[str]) -> str:
+    best, best_n = '', -1
+    for n in names:
+        m = re.fullmatch(r'v(\d+)\.md', n)
+        if m and int(m.group(1)) > best_n:
+            best, best_n = f'v{m.group(1)}', int(m.group(1))
+    return best
+
+
+def judge_write_manuscript(src: Sources, lane: dict) -> dict:
+    stage = 'write-manuscript'
+    latest = _text(_state(src, 'zh_latest'))
+    state_path = f'{REL["project"]}#state.zh_latest'
+    if latest:
+        return node(stage, 'done', summary=f'中文稿 {latest}', evidence=[ev('value', f'zh_latest={latest}', state_path)])
+    names = src.glob('manuscript/zh', 'v*.md')
+    ver = _max_version(names)
+    if ver:
+        return node(stage, 'done', summary=f'中文稿 {ver}（依 manuscript/zh/ 檔名，state 未記）',
+                    evidence=[ev('path', f'manuscript/zh/{ver}.md', 'manuscript/zh/'), ev('value', 'state 為空', state_path)])
+    return node(stage, 'pending', summary='尚無中文稿', evidence=[ev('value', 'state 為空', state_path), ev('value', '無 v*.md', 'manuscript/zh/')])
+
+
+def judge_write_supplementary(src: Sources, lane: dict) -> dict:
+    stage = 'write-supplementary'
+    latest = _text(_state(src, 'si_latest'))
+    state_path = f'{REL["project"]}#state.si_latest'
+    if latest:
+        return node(stage, 'done', summary=f'補充材料 {latest}', evidence=[ev('value', f'si_latest={latest}', state_path)])
+    return node(stage, 'pending', summary='尚無補充材料', evidence=[ev('value', 'state 為空', state_path)])
+
+
+def judge_check_consistency(src: Sources, lane: dict) -> dict:
+    stage = 'check-consistency'
+    lc = _dict(_state(src, 'last_consistency'))
+    base = f'{REL["project"]}#state.last_consistency'
+    result = _text(lc.get('result')).lower()
+    if not result:
+        return node(stage, 'pending', summary='尚無一致性檢核', evidence=[ev('value', 'result 為空', f'{base}.result')])
+    evidence = [ev('value', f'result={result}', f'{base}.result')]
+    for fld in ('version', 'language', 'si'):
+        if _text(lc.get(fld)):
+            evidence.append(ev('value', f'{fld}={_text(lc.get(fld))}', f'{base}.{fld}'))
+    if _text(lc.get('gate_fingerprint')):
+        evidence.append(ev('hash', lc.get('gate_fingerprint'), f'{base}.gate_fingerprint'))
+    if _text(lc.get('report')):
+        evidence.append(ev('path', lc.get('report'), f'{base}.report'))
+    label = f'一致性檢核 {result}（{_text(lc.get("language")) or "?"}/{_text(lc.get("version")) or "?"}）'
+    if result == 'pass':
+        return node(stage, 'done', lc.get('at'), label, evidence)
+    if result == 'fail':
+        return node(stage, 'blocked', lc.get('at'), label, evidence)
+    return node(stage, 'unknown', lc.get('at'), f'一致性檢核 result 不在 pass／fail 之內（{result}）', evidence)
+
+
+def judge_peer_review(src: Sources, lane: dict) -> dict:
+    stage = 'peer-review'
+    review = _dict(_state(src, 'review'))
+    base = f'{REL["project"]}#state.review'
+    try:
+        rnd = int(review.get('round') or 0)
+    except (TypeError, ValueError):
+        rnd = 0
+    if rnd > 0:
+        decision = _text(review.get('decision')) or 'unknown'
+        evidence = [ev('value', f'round={rnd}', f'{base}.round'), ev('value', f'decision={decision}', f'{base}.decision')]
+        if review.get('converged') is not None:
+            evidence.append(ev('value', f'converged={str(bool(review.get("converged"))).lower()}', f'{base}.converged'))
+        return node(stage, 'done', summary=f'第 {rnd} 輪，{decision}', evidence=evidence)
+    return node(stage, 'pending', summary='尚無審稿輪', evidence=[ev('value', 'round=0', f'{base}.round')])
+
+
+def judge_revise(src: Sources, lane: dict) -> dict:
+    stage, rel = 'revise', REL['ledger']
+    st = src.status('ledger')
+    if st == 'missing':
+        return node(stage, 'pending', summary='尚無 issue ledger', evidence=[ev('value', '檔案不存在', rel)])
+    if st == 'broken':
+        return _unknown(stage, rel)
+    issues = _list(src.data('ledger').get('issues'))
+    return node(stage, 'done', summary=f'issue ledger {len(issues)} 筆', evidence=[ev('path', rel, rel), ev('value', f'{len(issues)} 筆', f'{rel}#issues')])
+
+
+def judge_translate_en(src: Sources, lane: dict) -> dict:
+    stage = 'translate-en'
+    en = _dict(_state(src, 'en_final'))
+    ver = _text(en.get('version'))
+    state_path = f'{REL["project"]}#state.en_final.version'
+    if ver:
+        evidence = [ev('value', f'version={ver}', state_path)]
+        if _text(en.get('source')):
+            evidence.append(ev('value', f'source={_text(en.get("source"))}', f'{REL["project"]}#state.en_final.source'))
+        return node(stage, 'done', en.get('confirmed_at'), f'英文稿 {ver}', evidence)
+    names = src.glob('manuscript/en', 'v*.md')
+    fver = _max_version(names)
+    if fver:
+        return node(stage, 'done', summary=f'英文稿 {fver}（依 manuscript/en/ 檔名，state 未記）',
+                    evidence=[ev('path', f'manuscript/en/{fver}.md', 'manuscript/en/'), ev('value', 'state 為空', state_path)])
+    return node(stage, 'pending', summary='尚無英文稿', evidence=[ev('value', 'state 為空', state_path), ev('value', '無 v*.md', 'manuscript/en/')])
+
+
+def _submission(src: Sources, stage: str, field: str, label: str) -> dict:
+    block = _state(src, 'submission', field)
+    base = f'{REL["project"]}#state.submission.{field}'
+    if not isinstance(block, dict) or not block:
+        return node(stage, 'pending', summary=f'尚無{label}', evidence=[ev('value', f'{field} 為空', base)])
+    evidence = [ev('value', f'{len(block)} 欄', base)]
+    for fld in ('result', 'journal', 'format', 'manuscript'):
+        if _text(block.get(fld)):
+            evidence.append(ev('value', f'{fld}={_text(block.get(fld))}', f'{base}.{fld}'))
+    files = block.get('files')
+    if isinstance(files, list):
+        for f in files:
+            evidence.append(ev('path', f, f'{base}.files'))
+    shown = _text(block.get('result')) or _text(block.get('format')) or ''
+    return node(stage, 'done', block.get('at'), f'{label}' + (f' {shown}' if shown else ''), evidence)
+
+
+def judge_submission_prep(src: Sources, lane: dict) -> dict:
+    return _submission(src, 'submission-prep', 'prep', '投稿準備')
+
+
+def judge_typeset(src: Sources, lane: dict) -> dict:
+    return _submission(src, 'typeset', 'build', '排版')
+
+
+PROJECT_JUDGES = {
+    'project-init': judge_project_init,
+    'methodology-router': judge_methodology_router,
+    'integrity-check': judge_integrity_check,
+    'data-audit': judge_data_audit,
+    'lit-review': judge_lit_review,
+    'evidence-synthesis': judge_evidence_synthesis,
+    'analyze-data:rerun': judge_analyze_data_rerun,
+    'evaluate:full': judge_evaluate_full,
+    'figure-design': judge_figure_design,
+    'write-manuscript': judge_write_manuscript,
+    'write-supplementary': judge_write_supplementary,
+    'check-consistency': judge_check_consistency,
+    'peer-review': judge_peer_review,
+    'revise': judge_revise,
+    'translate-en': judge_translate_en,
+    'submission-prep': judge_submission_prep,
+    'typeset': judge_typeset,
+}
+
+
+# ---------- 泳道與註記 ----------
+
+def build_lanes(src: Sources) -> list[dict]:
+    lanes: list[dict] = [{'id': 'project', 'kind': 'project', 'label': '專案層', 'question': '',
+                          'status': '', 'status_reason': '', 'goal_list': '', 'nodes': [], 'annotations': []}]
+    proj = src.data('project') if src.status('project') == 'ok' else {}
+    goals = _dict(proj.get('goals'))
+    if not _list(goals.get('sub_questions')) and not _list(goals.get('appendix_questions')):
+        where = 'project.yaml 不存在' if src.status('project') == 'missing' else 'project.yaml 無 goals'
+        src.warnings.append(f'{where}，只有專案層泳道')
+    for list_name, kind in (('sub_questions', 'sq'), ('appendix_questions', 'aq')):
+        for i, q in enumerate(_list(goals.get(list_name))):
+            if not isinstance(q, dict):
+                q = {}
+            lane_id = _text(q.get('id'))
+            if not lane_id:
+                lane_id = f'{list_name}[{i}]'
+                src.warnings.append(f'goals.{list_name}[{i}] 無 id，以 {lane_id} 作泳道名')
+            lanes.append({
+                'id': lane_id, 'kind': kind, 'label': lane_id, 'question': _text(q.get('question')),
+                'status': _text(q.get('status')), 'status_reason': _text(q.get('status_reason')),
+                'goal_list': list_name, 'nodes': [], 'annotations': [],
+            })
+    return lanes
+
+
+def judge_lane(src: Sources, lane: dict, next_stage: str) -> None:
+    if lane['kind'] == 'project':
+        for stage_id, _label in PROJECT_STAGES:
+            n = PROJECT_JUDGES[stage_id](src, lane)
+            n['current'] = bool(next_stage) and (stage_id == next_stage or stage_id.split(':')[0] == next_stage)
+            lane['nodes'].append(n)
+    else:
+        for stage_id, _label in SQ_STAGES:
+            lane['nodes'].append(SQ_JUDGES[stage_id](src, lane))
+
+
+def attach_annotations(src: Sources, lanes: list[dict]) -> None:
+    st = src.status('decisions')
+    if st == 'missing':
+        src.infos.append('decisions.yaml 不存在，決策註記為空')
+        return
+    if st == 'broken':
+        return  # 已在 Sources 記 WARNING；註記留空
+    by_id = {lane['id']: lane for lane in lanes}
+    for i, d in enumerate(_list(src.data('decisions').get('decisions'))):
+        if not isinstance(d, dict):
+            src.warnings.append(f'decisions[{i}] 不是 mapping，略過註記')
+            continue
+        ann = {
+            'id': _text(d.get('id')) or f'decisions[{i}]',
+            'date': _date(d.get('date')),
+            'stage': _text(d.get('stage')),
+            'summary': _clip(_text(d.get('decision')), SUMMARY_MAX),
+            'exec_issue': _text(d.get('exec_issue')),
+            'method': _text(d.get('method')),
+        }
+        question = _text(d.get('question'))
+        targets: list[str] = []
+        if question in by_id and question != 'project':
+            targets = [question]
+        elif question in ('', 'main'):
+            targets = [t for t in dict.fromkeys(_text(x) for x in _list(d.get('links'))) if t in by_id and t != 'project']
+        if not targets:
+            targets = ['project']
+        for t in targets:
+            by_id[t]['annotations'].append(dict(ann))
+
+
+# ---------- IR ----------
+
+def build_ir(root: Path, src: Sources, generated_at: str) -> dict:
+    proj = src.data('project') if src.status('project') == 'ok' else {}
+    meta = _dict(proj.get('project'))
+    title = _text(meta.get('title_zh')) or _text(meta.get('title_en')) or root.name or str(root)
+    next_stage = _text(_get(proj, 'state', 'next_stage'))
+    lanes = build_lanes(src)
+    for lane in lanes:
+        judge_lane(src, lane, next_stage)
+    attach_annotations(src, lanes)
+    for lane in lanes:
+        lane.pop('goal_list', None)
+    stages = [{'id': sid, 'label': label, 'scope': 'sq', 'source': SQ_RULES[sid][0], 'rule': SQ_RULES[sid][1]}
+              for sid, label in SQ_STAGES]
+    stages += [{'id': sid, 'label': label, 'scope': 'project', 'source': PROJECT_RULES[sid][0], 'rule': PROJECT_RULES[sid][1]}
+               for sid, label in PROJECT_STAGES]
+    by_state = {s: 0 for s in STATES}
+    n_nodes = 0
+    for lane in lanes:
+        for n in lane['nodes']:
+            n_nodes += 1
+            by_state[n['state']] = by_state.get(n['state'], 0) + 1
+    return {
+        'schema_version': SCHEMA_VERSION,
+        'generated_at': generated_at,
+        'project_root': str(root),
+        'project': {'title': title, 'research_question': _text(meta.get('research_question')), 'current_stage': next_stage},
+        'stages': stages,
+        'lanes': lanes,
+        'stats': {'lanes': len(lanes), 'nodes': n_nodes, 'by_state': by_state,
+                  'annotations': sum(len(lane['annotations']) for lane in lanes)},
+    }
+
+
+def validate_ir(ir) -> list[str]:
+    """IR 的自身 schema 驗證關卡。回傳錯誤清單（空＝通過），每條「IR-xx <主體>」。"""
+    errors: list[str] = []
+    if not isinstance(ir, dict):
+        return ['IR-01 top-level 不是 object']
+    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats'):
+        if key not in ir:
+            errors.append(f'IR-01 top-level.{key}')
+    if ir.get('schema_version') != SCHEMA_VERSION:
+        errors.append('IR-01 schema_version')
+    stages = ir.get('stages')
+    stage_ids: set[str] = set()
+    if not isinstance(stages, list) or not stages:
+        errors.append('IR-02 stages')
+    else:
+        seen: set[str] = set()
+        for i, s in enumerate(stages):
+            if not isinstance(s, dict) or not all(isinstance(s.get(k), str) and s.get(k) for k in ('id', 'label', 'scope')):
+                errors.append(f'IR-02 stages[{i}]')
+                continue
+            if s['id'] in seen:
+                errors.append(f'IR-02 stages[{i}].id 重複')
+            seen.add(s['id'])
+        stage_ids = seen
+    lanes = ir.get('lanes')
+    if not isinstance(lanes, list):
+        errors.append('IR-03 lanes')
+        lanes = []
+    for li, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            errors.append(f'IR-03 lanes[{li}]')
+            continue
+        for key in ('id', 'kind', 'label', 'question', 'status', 'status_reason'):
+            if not isinstance(lane.get(key), str):
+                errors.append(f'IR-03 lanes[{li}].{key}')
+        if lane.get('kind') not in ('sq', 'aq', 'project'):
+            errors.append(f'IR-03 lanes[{li}].kind')
+        nodes = lane.get('nodes')
+        if not isinstance(nodes, list):
+            errors.append(f'IR-04 lanes[{li}].nodes')
+            nodes = []
+        for ni, n in enumerate(nodes):
+            sub = f'lanes[{li}].nodes[{ni}]'
+            if not isinstance(n, dict):
+                errors.append(f'IR-04 {sub}')
+                continue
+            if n.get('stage') not in stage_ids:
+                errors.append(f'IR-04 {sub}.stage')
+            if n.get('state') not in STATES:
+                errors.append(f'IR-05 {sub}.state')
+            date = n.get('date')
+            if not isinstance(date, str) or (date and not DATE_RE.fullmatch(date)):
+                errors.append(f'IR-06 {sub}.date')
+            if not isinstance(n.get('summary'), str):
+                errors.append(f'IR-06 {sub}.summary')
+            if not isinstance(n.get('current'), bool):
+                errors.append(f'IR-06 {sub}.current')
+            evidence = n.get('evidence')
+            if not isinstance(evidence, list):
+                errors.append(f'IR-07 {sub}.evidence')
+            else:
+                for ei, e in enumerate(evidence):
+                    if not isinstance(e, dict) or not all(isinstance(e.get(k), str) for k in ('kind', 'value', 'source')):
+                        errors.append(f'IR-07 {sub}.evidence[{ei}]')
+                    elif e.get('kind') not in ('path', 'hash', 'run', 'value'):
+                        errors.append(f'IR-07 {sub}.evidence[{ei}].kind')
+            history = n.get('history')
+            if not isinstance(history, list):
+                errors.append(f'IR-08 {sub}.history')
+            else:
+                for hi, h in enumerate(history):
+                    if not isinstance(h, dict) or not all(isinstance(h.get(k), str) for k in ('date', 'summary')):
+                        errors.append(f'IR-08 {sub}.history[{hi}]')
+        anns = lane.get('annotations')
+        if not isinstance(anns, list):
+            errors.append(f'IR-09 lanes[{li}].annotations')
+        else:
+            for ai, a in enumerate(anns):
+                if not isinstance(a, dict) or not all(isinstance(a.get(k), str) for k in ('id', 'date', 'stage', 'summary', 'exec_issue', 'method')):
+                    errors.append(f'IR-09 lanes[{li}].annotations[{ai}]')
+    stats = ir.get('stats')
+    if not isinstance(stats, dict) or not isinstance(stats.get('by_state'), dict):
+        errors.append('IR-10 stats')
+    else:
+        n_nodes = sum(len(lane.get('nodes') or []) for lane in lanes if isinstance(lane, dict))
+        if stats.get('lanes') != len(lanes) or stats.get('nodes') != n_nodes:
+            errors.append('IR-10 stats.lanes／nodes')
+        if any(k not in stats['by_state'] for k in STATES) or sum(stats['by_state'].get(k, 0) for k in STATES) != n_nodes:
+            errors.append('IR-10 stats.by_state')
+    return errors
+
+
+# ---------- HTML ----------
+
+CSS = """
+:root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
+--done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
+--badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;}
+@media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
+--done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px}
+header p{margin:2px 0;color:var(--muted)}header .rq{color:var(--fg)}
+.notice{font-size:12px;color:var(--muted)}
+.controls{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:14px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.controls label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:8px 0 14px;font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+table.matrix{border-collapse:collapse;width:100%;min-width:640px}
+table.matrix th,table.matrix td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:6px 8px;vertical-align:top;text-align:left}
+table.matrix th{font-weight:600;font-size:12px;background:var(--proj);white-space:nowrap;position:sticky;top:0}
+table.matrix th.lane,table.matrix td.lane{position:sticky;left:0;background:var(--card);min-width:120px;z-index:1}
+table.matrix tr.project td.lane,table.matrix tr.project td{background:var(--proj)}
+table.matrix th.lane{z-index:2}
+.lane-id{font-weight:700}.lane-q{display:block;font-size:12px;color:var(--muted);max-width:220px}
+.badge{display:inline-block;font-size:11px;line-height:1.4;padding:0 6px;border-radius:9px;color:#fff;margin-left:4px;vertical-align:middle}
+.badge.blocked{background:var(--badge-blocked)}.badge.addressed{background:var(--badge-addressed)}.badge.open{background:var(--badge-open)}.badge.dropped{background:var(--badge-dropped)}
+.node{display:flex;flex-direction:column;gap:2px;width:100%;min-width:96px;border:1px solid transparent;border-radius:6px;padding:4px 6px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.node:hover,.node:focus-visible{border-color:var(--line);outline:none}
+.node.current{border:2px solid var(--current)}
+.node .cur{font-size:11px;color:var(--current);font-weight:700}
+.node .sum{font-size:12px}.node .date{font-size:11px;color:var(--muted)}
+.dot{display:inline-block;width:14px;height:14px;border-radius:50%;vertical-align:middle;position:relative;flex:none}
+.dot.done{background:var(--done);border:2px solid var(--done)}
+.dot.expired{border:2px solid var(--expired);background:linear-gradient(90deg,var(--expired) 50%,transparent 50%)}
+.dot.blocked{border:2px solid var(--blocked);background:var(--blocked);color:#fff}
+.dot.blocked::after{content:"\\00d7";position:absolute;left:0;right:0;top:-4px;text-align:center;font-size:14px;font-weight:700;line-height:1}
+.dot.pending{border:2px solid var(--pending);background:transparent}
+.dot.unknown{border:2px dashed var(--unknown);background:transparent}
+.node.filtered{opacity:.15;pointer-events:none}
+.node.selected{background:var(--proj);border-color:var(--current)}
+tr.annot-row td{background:var(--card);font-size:12px;color:var(--muted)}
+tr.annot-row details{margin:2px 0}tr.annot-row summary{cursor:pointer}
+tr.annot-row dl{margin:4px 0 4px 16px}tr.annot-row dt{font-weight:600;display:inline}tr.annot-row dd{display:inline;margin:0 0 0 4px}
+#detail{position:fixed;right:16px;bottom:16px;width:min(440px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:10}
+#detail h3{margin:0 0 6px;font-size:15px}#detail .close{float:right;border:1px solid var(--line);background:none;color:inherit;border-radius:6px;cursor:pointer;padding:2px 8px}
+#detail dl{margin:6px 0}#detail dt{font-weight:600;margin-top:6px}#detail dd{margin:0 0 0 8px}
+#detail ul{margin:2px 0;padding-left:18px}#detail .kind{display:inline-block;font-size:11px;padding:0 5px;border:1px solid var(--line);border-radius:4px;margin-right:4px}
+#detail .src{color:var(--muted);font-size:12px}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12px}
+footer{margin-top:24px;font-size:13px;color:var(--muted)}footer ul{margin:4px 0;padding-left:20px}
+@media (max-width:700px){#detail{position:static;width:auto;max-height:none;margin-top:14px}}
+"""
+
+JS = """
+(function(){
+  var raw=document.getElementById('progress-ir');if(!raw)return;
+  var ir=JSON.parse(raw.textContent);
+  var stageLabel={},stageRule={};ir.stages.forEach(function(s){stageLabel[s.id]=s.label;stageRule[s.id]=(s.rule||'')+(s.source?'（讀 '+s.source+'）':'');});
+  var stateZh={done:'完成',expired:'過期',blocked:'受阻',pending:'未到',unknown:'不明'};
+  var panel=document.getElementById('detail');var body=document.getElementById('detail-body');
+  var selected=null;
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function show(laneIdx,nodeIdx){
+    var lane=ir.lanes[laneIdx];var n=lane.nodes[nodeIdx];
+    var h='<h3>'+esc(lane.label)+' · '+esc(stageLabel[n.stage]||n.stage)+'</h3>';
+    h+='<dl><dt>狀態</dt><dd>'+esc(stateZh[n.state]||n.state)+(n.current?'（目前站）':'')+'</dd>';
+    h+='<dt>日期</dt><dd>'+esc(n.date||'—')+'</dd>';
+    h+='<dt>摘要</dt><dd>'+esc(n.summary||'—')+'</dd>';
+    h+='<dt>判定規則（'+esc(n.stage)+'）</dt><dd>'+esc(stageRule[n.stage]||'—')+'</dd>';
+    h+='<dt>evidence（'+n.evidence.length+'）</dt><dd>';
+    if(n.evidence.length){h+='<ul>';n.evidence.forEach(function(e){
+      var v=(e.kind==='hash')?'<span class="mono">'+esc(e.value)+'</span>':esc(e.value);
+      h+='<li><span class="kind">'+esc(e.kind)+'</span>'+v+'<br><span class="src">'+esc(e.source)+'</span></li>';});h+='</ul>';}else{h+='—';}
+    h+='</dd>';
+    if(n.history.length){h+='<dt>history（'+n.history.length+'）</dt><dd><ul>';n.history.forEach(function(x){h+='<li>'+esc(x.date||'—')+'：'+esc(x.summary)+'</li>';});h+='</ul></dd>';}
+    if(lane.status_reason){h+='<dt>status_reason</dt><dd>'+esc(lane.status_reason)+'</dd>';}
+    h+='</dl>';
+    body.innerHTML=h;panel.hidden=false;
+    if(selected)selected.classList.remove('selected');
+    selected=document.querySelector('.node[data-lane="'+laneIdx+'"][data-node="'+nodeIdx+'"]');
+    if(selected)selected.classList.add('selected');
+  }
+  function close(){panel.hidden=true;if(selected){selected.classList.remove('selected');selected=null;}}
+  document.querySelectorAll('.node').forEach(function(btn){btn.addEventListener('click',function(){show(+btn.dataset.lane,+btn.dataset.node);});});
+  document.getElementById('detail-close').addEventListener('click',close);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+  document.querySelectorAll('input[data-state]').forEach(function(cb){cb.addEventListener('change',function(){
+    document.querySelectorAll('.node[data-state="'+cb.dataset.state+'"]').forEach(function(el){el.classList.toggle('filtered',!cb.checked);});});});
+  var tog=document.getElementById('toggle-annot');
+  tog.addEventListener('change',function(){document.querySelectorAll('tr.annot-row').forEach(function(tr){tr.hidden=!tog.checked;});});
+})();
+"""
+
+
+def _h(text) -> str:
+    return html.escape(_text(text), quote=True)
+
+
+def _node_cell(lane_idx: int, node_idx: int, n: dict) -> str:
+    cls = 'node current' if n['current'] else 'node'
+    parts = [f'<button type="button" class="{cls}" data-lane="{lane_idx}" data-node="{node_idx}" data-state="{n["state"]}" title="{_h(n["summary"])}">']
+    if n['current']:
+        parts.append('<span class="cur">目前</span>')
+    parts.append(f'<span><span class="dot {n["state"]}"></span> {_h(STATE_ZH[n["state"]])}</span>')
+    parts.append(f'<span class="sum">{_h(_clip(n["summary"], CELL_MAX))}</span>')
+    parts.append(f'<span class="date">{_h(n["date"]) or "&nbsp;"}</span>')
+    parts.append('</button>')
+    return ''.join(parts)
+
+
+def _lane_cell(lane: dict) -> str:
+    out = [f'<td class="lane"><span class="lane-id">{_h(lane["label"])}</span>']
+    status = lane['status'].lower()
+    if lane['kind'] != 'project':
+        badge_cls = status if status in ('blocked', 'addressed', 'open', 'dropped') else 'open'
+        out.append(f'<span class="badge {badge_cls}">{_h(status or "open")}</span>')
+    if lane['question']:
+        out.append(f'<span class="lane-q">{_h(_clip(lane["question"], 60))}</span>')
+    out.append('</td>')
+    return ''.join(out)
+
+
+def _annot_row(lane: dict, ncols: int) -> str:
+    items = lane['annotations']
+    out = [f'<tr class="annot-row" data-lane="{_h(lane["id"])}" hidden><td colspan="{ncols}">']
+    if not items:
+        out.append('本泳道無決策註記。')
+    else:
+        out.append(f'決策註記（{len(items)}）：')
+        for a in items:
+            head = f'{_h(a["id"])} · {_h(a["date"]) or "—"} · {_h(a["stage"]) or "—"} · {_h(a["summary"])}'
+            out.append(f'<details><summary>{head}</summary><dl>')
+            out.append(f'<div><dt>method</dt><dd>{_h(a["method"]) or "—"}</dd></div>')
+            out.append(f'<div><dt>exec_issue</dt><dd>{_h(a["exec_issue"]) or "—"}</dd></div>')
+            out.append('</dl></details>')
+    out.append('</td></tr>')
+    return ''.join(out)
+
+
+def _matrix(ir: dict, scope: str) -> str:
+    stages = [s for s in ir['stages'] if s['scope'] == scope]
+    lanes = [(i, lane) for i, lane in enumerate(ir['lanes']) if (lane['kind'] == 'project') == (scope == 'project')]
+    out = ['<div class="wrap"><table class="matrix"><thead><tr><th class="lane">泳道</th>']
+    for s in stages:
+        out.append(f'<th title="{_h(s["id"])}">{_h(s["label"])}</th>')
+    out.append('</tr></thead><tbody>')
+    for li, lane in lanes:
+        out.append(f'<tr class="{lane["kind"]}">' + _lane_cell(lane))
+        for ni, n in enumerate(lane['nodes']):
+            out.append('<td>' + _node_cell(li, ni, n) + '</td>')
+        out.append('</tr>')
+        out.append(_annot_row(lane, len(stages) + 1))
+    if not lanes:
+        out.append(f'<tr><td colspan="{len(stages) + 1}">無研究問題泳道（project.yaml 無 goals）。</td></tr>')
+    out.append('</tbody></table></div>')
     return '\n'.join(out)
 
 
-def build_json(rows: list[dict], title: str, root: Path, generated_at: str,
-               sources: dict, gantt) -> dict:
-    block, reason, undated = gantt
-    return {
-        'schema_version': 1,
-        'generated_at': generated_at,
-        'project_root': str(root),
-        'project_title': title,
-        'sources': {k: v == 'ok' for k, v in sources.items()},
-        'n_total': len(rows),
-        'n_complete': sum(1 for r in rows if r['complete']),
-        'axes': _axes(rows),
-        'mermaid': {'included': block is not None, 'kind': 'gantt',
-                    'skipped_reason': reason, 'undated_ids': undated},
-        'rows': rows,
-    }
+def _current_label(stage_id: str, stage_label: dict) -> str:
+    if not stage_id:
+        return '（state.next_stage 未填）'
+    # 專案層若有同名站（analyze-data:rerun／evaluate:full），以專案層 label 為準，與「目前」外框一致
+    label = stage_label.get(stage_id + ':rerun') or stage_label.get(stage_id + ':full') or stage_label.get(stage_id, '')
+    return f'{_h(label)}（{_h(stage_id)}）' if label else _h(stage_id)
 
 
-# ---------- 主程式 ----------
+def render_html(ir: dict, root: Path) -> str:
+    p = ir['project']
+    st = ir['stats']
+    by = st['by_state']
+    payload = json.dumps(ir, ensure_ascii=False, indent=2).replace('<', '\\u003c')
+    stage_label = {s['id']: s['label'] for s in ir['stages']}
+    lines = [
+        f'<!DOCTYPE html>',
+        '<html lang="zh-Hant">',
+        '<head>',
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f'<title>{_h(p["title"])} 研究問題里程圖</title>',
+        f'<style>{CSS}</style>',
+        '</head>',
+        '<body>',
+        '<header>',
+        f'<h1>{_h(p["title"])} 研究問題里程圖</h1>',
+        f'<p class="rq">主問題：{_h(p["research_question"]) or "（project.yaml 未填 research_question）"}</p>',
+        f'<p>目前站：{_current_label(p["current_stage"], stage_label)}</p>',
+        f'<p>產生時間：{_h(ir["generated_at"])}</p>',
+        f'<p>來源路徑：<code>{_h(ir["project_root"])}</code></p>',
+        f'<p class="notice">本檔由 {SCRIPT_REL} 自動產生，請勿手動編輯；要改內容請改對應的 SSOT 檔再重跑。</p>',
+        '</header>',
+        '<div class="controls">',
+        '<span>顯示 state：</span>',
+    ]
+    for s in STATES:
+        lines.append(f'<label><input type="checkbox" data-state="{s}" checked> <span class="dot {s}"></span> {STATE_ZH[s]}</label>')
+    lines += [
+        '<label style="margin-left:auto"><input type="checkbox" id="toggle-annot"> 顯示決策註記</label>',
+        '</div>',
+        '<div class="legend">',
+        '<span><span class="dot done"></span> 完成（實心）</span>',
+        '<span><span class="dot expired"></span> 過期（半圓）</span>',
+        '<span><span class="dot blocked"></span> 受阻（叉）</span>',
+        '<span><span class="dot pending"></span> 未到（空心）</span>',
+        '<span><span class="dot unknown"></span> 不明（虛線）</span>',
+        '<span>外框藍色＝目前站</span>',
+        '</div>',
+        f'<h2>專案層（{len(PROJECT_STAGES)} 站）</h2>',
+        _matrix(ir, 'project'),
+        f'<h2>研究問題（每條 {len(SQ_STAGES)} 站）</h2>',
+        _matrix(ir, 'sq'),
+        '<aside id="detail" hidden><button type="button" class="close" id="detail-close">關閉（Esc）</button><div id="detail-body"></div></aside>',
+        '<footer>',
+        f'<p>泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。</p>',
+        '<p>資料維護狀況：</p><ul>',
+    ]
+    for lane in ir['lanes']:
+        done = sum(1 for n in lane['nodes'] if n['state'] == 'done')
+        lines.append(f'<li>{_h(lane["label"])}：完成 {done}／{len(lane["nodes"])} 站</li>')
+    lines += [
+        '</ul>',
+        '</footer>',
+        '<script id="progress-ir" type="application/json">',
+        payload,
+        '</script>',
+        f'<script>{JS}</script>',
+        '</body>',
+        '</html>',
+    ]
+    return '\n'.join(lines) + '\n'
 
-def main() -> int:
+
+# ---------- 統計與主程式 ----------
+
+def stats_line(ir: dict) -> str:
+    st = ir['stats']
+    by = st['by_state']
+    return (f'泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、'
+            f'受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。')
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='把 decisions.yaml 渲染成 <root>/PROGRESS.md（進度時間軸）')
+        description='研究問題里程圖：唯讀 SSOT → PROGRESS.ir.json → PROGRESS.html')
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
-    parser.add_argument('--dry-run', action='store_true', help='不寫檔；單獨使用時把 PROGRESS.md 印到 stdout')
-    parser.add_argument('--json', action='store_true', help='stdout 改印機器可讀 JSON')
-    args = parser.parse_args()
+    parser.add_argument('--dry-run', action='store_true', help='不寫檔；單獨使用時把 HTML 印到 stdout')
+    parser.add_argument('--json', action='store_true', help='stdout 改印 IR JSON')
+    parser.add_argument('--ir-only', action='store_true', help='只寫 PROGRESS.ir.json、不寫 PROGRESS.html')
+    args = parser.parse_args(argv)
 
     quiet_stdout = args.dry_run or args.json
     diag = sys.stderr if quiet_stdout else sys.stdout
@@ -398,56 +1266,41 @@ def main() -> int:
     if not quiet_stdout:
         print(f'=== render_progress: {root} ===')
 
-    decisions, dec_present, dec_error = load_decisions(root)
-    if dec_error is not None:
-        print(f'BLOCKER decisions.yaml 無法解析: {dec_error}', file=diag)
-        return 2
-    if not dec_present:
-        print('INFO decisions.yaml 不存在，視為 0 筆', file=diag)
-
-    warnings: list[str] = []
-    infos: list[str] = []
-    proj, proj_present, proj_warn = load_project(root)
-    if proj_warn:
-        warnings.append(proj_warn)
-    results, res_present, res_warn = load_results(root)
-    if res_warn:
-        warnings.append(res_warn)
-    sources = {
-        'decisions': 'ok' if dec_present else 'missing',
-        'project': 'ok' if proj is not None else ('broken' if proj_present else 'missing'),
-        'results': 'ok' if results is not None else ('broken' if res_present else 'missing'),
-    }
-
-    title = _project_title(proj, root)
-    rows = build_rows(decisions, results, res_present, results is not None, warnings)
-    gantt = build_gantt(rows, title)
-    if gantt[0] is None and gantt[1].startswith('時間軸略過'):
-        warnings.append(gantt[1])
-    elif gantt[0] is None and rows:
-        infos.append(gantt[1])
+    src = Sources(root)
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
-
-    for w in warnings:
+    ir = build_ir(root, src, generated_at)
+    for w in src.warnings:
         print(f'WARNING {w}', file=diag)
-    for i in infos:
+    for i in src.infos:
         print(f'INFO {i}', file=diag)
 
-    text = render_markdown(rows, title, root, generated_at, sources, len(decisions), gantt)
+    errors = validate_ir(ir)
+    if errors:
+        for e in errors:
+            print(f'BLOCKER IR 驗證失敗: {e}', file=diag)
+        return 2
+
+    ir_text = json.dumps(ir, ensure_ascii=False, indent=2) + '\n'
     if args.json:
-        payload = build_json(rows, title, root, generated_at, sources, gantt)
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        sys.stdout.write(ir_text)
+        sys.stdout.flush()
     elif args.dry_run:
-        sys.stdout.write(text)
+        sys.stdout.write(render_html(ir, root))
         sys.stdout.flush()
     if args.dry_run:
         return 0
 
-    out_path = root / 'PROGRESS.md'
-    out_path.write_text(text, encoding='utf-8', newline='\n')
+    ir_path = root / IR_NAME
+    ir_path.write_text(ir_text, encoding='utf-8', newline='\n')
     if not args.json:
-        print(f'PROGRESS.md 已寫入: {out_path}')
-        print(_stats_line(rows))
+        print(f'{IR_NAME} 已寫入: {ir_path}')
+    if not args.ir_only:
+        html_path = root / HTML_NAME
+        html_path.write_text(render_html(ir, root), encoding='utf-8', newline='\n')
+        if not args.json:
+            print(f'{HTML_NAME} 已寫入: {html_path}')
+    if not args.json:
+        print(stats_line(ir))
         print('結果: 完成')
     return 0
 
