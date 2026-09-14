@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.13.3（未發布）
+## 0.13.3（2026-09-14）
 
 1. **結果欄做成與方法欄對應的階層**：次要結果（`meta.result_kind == "secondary"`）改為子項——`subtype: "secondary"`、`parent: "p:<pid>#R<n>"`（宣告它的敏感性子節點：先看 results.json 的 plan、再看該問題現行版、再依宣告順序，同 plan 內取 R 序最小者；其餘仍列在 `meta.declared_by`），版面與方法欄子節點同一套（x 縮排 24、寬減 24、字級小一階、底色淡一階），**不畫結果欄內的 L 形線**（父在另一欄，產出邊本身就是連結），可見性與收合跟著 parent（父 plan 為舊版時一併收合，沿 parent 鏈借用現行版的列）。主要結果與未宣告結果維持頂層（`subtype: "primary"`／`"undeclared"`）。列序不變：同一 plan 內主要依 outputs 序 → 各 R 的次要結果緊接其後（縮排）→ 未宣告 → goals 引用。JS `relayout()`／`nodeVisible()` 沿 parent 判定同樣適用於結果節點，面板的「跳轉」對收合的次要結果會沿 parent 鏈展開對應版本。面板：次要結果列「父子分析」（可點跳）、子分析列「次要結果」（可點跳）。`validate_graph`：`subtype` 依 type 分（method 只准 primary／sensitivity，result 只准 primary／secondary／undeclared），result 的 `parent` 須存在且為敏感性子節點。圖例句改「縮排子節點＝敏感性子分析與其次要結果」。測試：`run_v0130` 加一段（k4／k6／k7 為 secondary 且 parent 正確、x 縮排、主要／未宣告頂層、列序、無結果欄 L 形線、HTML rect x 與寬、面板錨點、父 plan 換 superseded 後一併收合並借列、`gone`）；validate 測試補 result parent 規則。
 
