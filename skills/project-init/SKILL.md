@@ -43,7 +43,7 @@ metadata:
    └── submission/
    ```
 
-5. **建立決策日誌**：建立空的 `decisions.yaml`（研究決策的「為什麼」的單一落點，既有帳本記「是什麼」）。append-only：修正舊決策以新條目填 `supersedes`，不改寫舊條目。收尾強制記錄的規則見各 skill 收尾：每個 pipeline stage skill 收尾時各追加一筆 `checkpoint: 階段收尾` 的條目，照建議原樣通過也要記。
+5. **建立決策日誌**：建立空的 `decisions.yaml`（研究決策的「為什麼」的單一落點，既有帳本記「是什麼」）。append-only：修正舊決策以新條目填 `supersedes`，不改寫舊條目。收尾強制記錄的規則見各 skill 收尾：每個 pipeline stage skill 收尾時各追加一筆 `checkpoint: 階段收尾` 的條目，照建議原樣通過也要記。每筆決策落在三層之一——主問題（`question: main`）、子問題（`question: SQ2` 等 id）、或某個問題之下執行時發生的執行問題（該 `question` 再加 `issue`）；`method` 只有一欄，意義跟著那一層走（main＝研究設計、SQ＝分析方法、有 issue＝解決該執行問題的做法）。
 
    ```yaml
    # 決策日誌——研究決策的「為什麼」的單一落點（既有帳本記「是什麼」）。
@@ -62,8 +62,9 @@ metadata:
    #     decision: ""         # 一句話
    #     reason: ""           # 展開的理由
    #     rejected: ""         # 選填：被否決的替代方案
-   #     method: ""           # 選填：本決策採用的方法或做法（一句話）
-   #     problem: ""          # 選填：本決策要解決的問題（一句話）
+   #     question: ""         # 選填：這筆決策落在哪一層：main（主問題）、SQ2／AQ1（子問題 id），或自由文字
+   #     issue: ""            # 選填：只在這筆是該 question 之下的執行問題時填（一句話）
+   #     method: ""           # 選填：對應 question 那一層的方法（main＝研究設計；SQ＝分析方法；有 issue＝解決該執行問題的做法）
    #     evidence: []         # 選填：執行憑據——指令、腳本路徑、fingerprint 或輸出檔路徑（字串清單）
    #     links: []            # SQ / results 鍵 / claim / issue / E# / P# / V# / D#
    #     supersedes: ""       # 選填：修正舊決策時填原 D#
@@ -80,4 +81,4 @@ metadata:
 - 專案內所有路徑引用一律相對於專案根目錄。
 - 舊專案不自動升版。遷移到 v0.7 時先備份，再由 status 盤點缺失 artifacts；一旦將 `pipeline.version` 設為 0.7.3，新硬關卡即生效。`appendix_questions` 為附加、可選欄位（缺省視同 `[]`），對舊專案回溯相容。
 - 收尾申報：「本階段更新：pipeline.version → 0.7.3；goals 寫入 <N> 個 SQ；下一站：methodology-router」。
-- 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: project-init`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
+- 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: project-init`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for v0.11.0: decisions.yaml 補齊進度時間軸的資料來源。
 
-v0.11.0 (A) 在 `decisions.yaml` 條目 schema 加三個選填欄位 `method`／`problem`／
-`evidence`；(B) 22 個 pipeline stage skill 收尾強制追加一筆 `checkpoint: 階段收尾`
+v0.11.0 (A) 在 `decisions.yaml` 條目 schema 加四個選填欄位 `question`／`issue`／
+`method`／`evidence`（決策落在主問題、子問題或其下執行問題三層之一，`method` 跟著那一層走）；(B) 22 個 pipeline stage skill 收尾強制追加一筆 `checkpoint: 階段收尾`
 的 D#；(C) `check_decisions.py` 補 `debug-pipeline` 進 stage 詞彙表、匯出
-`STAGE_CLOSE_CHECKPOINT`、驗選填欄位型別，並依 `project.yaml` 的 `state` 對「已有
-紀錄卻無該 stage 條目」發 WARNING。契約：新欄位一律選填，舊專案缺欄位只列
+`STAGE_CLOSE_CHECKPOINT`、驗選填欄位型別、`question` 指向的 SQ#／AQ# 須存在、`issue`
+須掛在某個 `question` 之下，並依 `project.yaml` 的 `state` 對「已有紀錄卻無該 stage 條目」
+發 WARNING。契約：新欄位一律選填，舊專案缺欄位只列
 WARNING／INFO，`check_decisions.py` 維持「exit 0；檔案無法解析才 exit 2」。
 下列斷言同時以錨點字串與實際執行 checker 驗證此契約；暫存專案用 tempfile 建立、
 測試結束自動清除。
@@ -31,6 +32,7 @@ PLUGIN = Path(__file__).resolve().parents[1]
 CHECKER = PLUGIN / "skills/status/scripts/check_decisions.py"
 RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
 STATS_RE = re.compile(r"共 (\d+) 筆記錄，其中 (\d+) 筆有完整四軸")
+LEGACY_FIELD = "prob" + "lem"  # 已停用的舊欄位名，拆開寫以免 git grep 誤中
 CLOSE_SENTENCE = "收尾必記一筆 D#"
 EXCLUDED = ("status", "academic-english-editing", "chinese-academic-editing", "debug-pipeline")
 TARGETS = (
@@ -108,8 +110,8 @@ ENTRY_DESIGN_CLOSE = """  - id: D-002
     checkpoint: 階段收尾
     decision: 封存 SQ1-v1
     reason: 設計審通過
+    question: SQ1
     method: 版本化分析計畫＋reviewer-methods 設計審
-    problem: 正式分析前把 SQ1 的假說、模型與輸出鍵預先宣告
     evidence:
       - python3 skills/study-design/scripts/seal_artifact.py analysis/plans/SQ1-v1.yaml
       - analysis/plans/index.yaml
@@ -131,9 +133,33 @@ ENTRY_BAD_EVIDENCE = """  - id: D-002
     checkpoint: 階段收尾
     decision: 封存 SQ1-v1
     reason: 設計審通過
+    question: SQ1
     method: 版本化分析計畫
-    problem: 預先宣告輸出鍵
     evidence: "not-a-list"
+    links: []
+"""
+
+ENTRY_ISSUE_WITHOUT_QUESTION = """  - id: D-002
+    date: "2026-07-11"
+    stage: analyze-data
+    checkpoint: 執行問題
+    decision: 改用 --no-cache 重跑
+    reason: 快取毒化
+    issue: rerun 讀到舊快取
+    method: 清快取後重跑
+    evidence: []
+    links: []
+"""
+
+ENTRY_QUESTION_UNKNOWN_SQ = """  - id: D-002
+    date: "2026-07-11"
+    stage: analyze-data
+    checkpoint: 階段收尾
+    decision: x
+    reason: y
+    question: SQ9
+    method: m
+    evidence: []
     links: []
 """
 
@@ -146,16 +172,20 @@ def _write_project(root: Path, project: str, entries: str) -> None:
 def test_schema_comment_has_new_fields() -> None:
     need(
         "skills/project-init/SKILL.md",
-        "method: \"\"", "problem: \"\"", "evidence: []",
+        "question: \"\"", "issue: \"\"", "method: \"\"", "evidence: []",
         "階段收尾", "只記四類", "(d) 階段收尾",
         "date: \"2026-07-10\"", "ISO 8601",
         # 步驟 5 正文（非註解）也指向各 skill 收尾
         "收尾強制記錄的規則見各 skill 收尾",
     )
-    # 三個新欄位須在 links 之前
+    # 四個新欄位依 question → issue → method → evidence 排列，且都在 links 之前
     body = text("skills/project-init/SKILL.md")
-    for f in ("method: \"\"", "problem: \"\"", "evidence: []"):
-        assert body.index(f) < body.index("links: []            # SQ"), f"{f} 未放在 links 之前"
+    order = [body.index(f) for f in ("question: \"\"", "issue: \"\"", "method: \"\"", "evidence: []")]
+    assert order == sorted(order), "欄位順序須為 question → issue → method → evidence"
+    assert order[-1] < body.index("links: []            # SQ"), "新欄位未放在 links 之前"
+    assert LEGACY_FIELD not in body, f"project-init 不得再出現 {LEGACY_FIELD}"
+    # 步驟 5 正文補三層語意
+    need("skills/project-init/SKILL.md", "`question: main`", "意義跟著那一層走")
     # 0.7.2 的既有錨點不得被弄壞
     need("skills/project-init/SKILL.md", "supersedes", "先呈示原 D# 條目")
 
@@ -202,7 +232,7 @@ def test_coverage_warning_cleared_by_close_entry() -> None:
     assert "無此 stage 條目" not in out, out
     assert "階段收尾條目: 1/2" in out, out
     # 齊全的新欄位不得引發任何型別 WARNING
-    for token in ("method", "problem", "evidence", "date 須為"):
+    for token in ("method", "question", "issue", "evidence", "date 須為"):
         assert not any(token in line for line in out.splitlines() if line.startswith("WARNING")), out
 
 
@@ -213,7 +243,7 @@ def test_old_format_entry_is_clean() -> None:
         rc, out = run_checker(root)
     assert rc == 0, out
     warn_lines = [line for line in out.splitlines() if line.startswith("WARNING")]
-    for token in ("method", "problem", "evidence", "date 須為", "階段收尾"):
+    for token in ("method", "question", "issue", "evidence", "date 須為", "階段收尾"):
         assert not any(token in line for line in warn_lines), out
     assert "0 warning(s)" in out, out
 
@@ -227,6 +257,40 @@ def test_bad_evidence_type_is_warning_not_blocker() -> None:
     assert any(line.startswith("WARNING") and "evidence" in line for line in out.splitlines()), out
 
 
+def test_issue_without_question_is_warning() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_project(root, PROJECT_WITH_DESIGN, ENTRY_INIT + ENTRY_ISSUE_WITHOUT_QUESTION)
+        rc, out = run_checker(root)
+    assert rc == 0, out
+    assert "WARNING D-002: issue 須掛在某個 question 之下" in out, out
+
+
+def test_question_unknown_sq_is_warning() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_project(root, PROJECT_WITH_DESIGN, ENTRY_INIT + ENTRY_QUESTION_UNKNOWN_SQ)
+        rc, out = run_checker(root)
+    assert rc == 0, out
+    assert 'WARNING D-002: question 指向不存在的子問題 "SQ9"' in out, out
+    # 兩個清單都空 → 不驗、列 INFO
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_project(root, PROJECT_EMPTY_STATE, ENTRY_QUESTION_UNKNOWN_SQ.replace("D-002", "D-001"))
+        rc, out = run_checker(root)
+    assert rc == 0, out
+    assert "question 指向不存在" not in out, out
+    assert 'INFO D-001: project.yaml 無 sub_questions／appendix_questions, 不驗 question "SQ9"' in out, out
+    # AQ id 也算存在
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = PROJECT_WITH_DESIGN.replace("      status: open\n", "      status: open\n  appendix_questions:\n    - id: AQ1\n")
+        _write_project(root, project, ENTRY_INIT + ENTRY_QUESTION_UNKNOWN_SQ.replace("SQ9", "AQ1"))
+        rc, out = run_checker(root)
+    assert rc == 0, out
+    assert "question 指向不存在" not in out, out
+
+
 def test_all_target_skills_require_close_entry() -> None:
     skills_dir = PLUGIN / "skills"
     actual = sorted(p.name for p in skills_dir.iterdir() if (p / "SKILL.md").is_file())
@@ -237,6 +301,10 @@ def test_all_target_skills_require_close_entry() -> None:
         assert f"`stage: {skill}`" in body, f"{skill}: stage 名未對應 skill 名"
         assert "`checkpoint: 階段收尾`" in body, f"{skill}: 缺 checkpoint 階段收尾"
         assert "沒記就不會出現在時間軸上" in body, f"{skill}: 固定措辭被改動"
+        for token in ("`question`（本階段對應的問題層", "`issue`（只在這筆是該問題之下的執行問題時填",
+                      "`method`（對應該層的方法", "`evidence`（本階段的指令"):
+            assert token in body, f"{skill}: 收尾句缺 {token}"
+        assert LEGACY_FIELD not in body, f"{skill}: 不得再出現 {LEGACY_FIELD}"
         # frontmatter 不得因此變動：name 仍為 skill 名
         assert body.startswith("---\nname: " + skill + "\n"), f"{skill}: frontmatter 開頭異常"
     for skill in EXCLUDED:
@@ -247,7 +315,9 @@ def test_all_target_skills_require_close_entry() -> None:
 
 def test_docs_synced() -> None:
     need("README.md", "run_v0110_regressions.py", "階段收尾")
-    need("CHANGELOG.md", "0.11.0", "zz-canary", "`method`／`problem`／`evidence`", "階段收尾", "debug-pipeline")
+    need("CHANGELOG.md", "0.11.0", "zz-canary", "`question`／`issue`／`method`／`evidence`", "階段收尾", "debug-pipeline")
+    for rel in ("README.md", "CHANGELOG.md", "tests/README.md"):
+        assert LEGACY_FIELD not in text(rel), f"{rel}: 不得再出現 {LEGACY_FIELD}"
     need("tests/README.md", "run_v0110_regressions.py", "STATE_COVERAGE")
 
 
@@ -306,8 +376,8 @@ RENDER_FULL = """decisions:
     checkpoint: 階段收尾
     decision: 正式分析完成
     reason: 依封存計畫執行
+    question: SQ1
     method: 依 SQ1-v1 執行主模型
-    problem: 產出 SQ1 的主結果
     evidence: []
     links: [SQ1, results.k1]
   - id: D-002
@@ -316,8 +386,8 @@ RENDER_FULL = """decisions:
     checkpoint: 階段收尾
     decision: 建立專案
     reason: 拆解審通過
+    question: main
     method: project-init 訪談＋拆解審
-    problem: 建立 SQ 與骨架
     evidence: ["python3 skills/project-init/scripts/init.py <root>"]
     links: [SQ1]
   - id: D-003
@@ -326,8 +396,9 @@ RENDER_FULL = """decisions:
     checkpoint: 階段收尾
     decision: 封存 SQ1-v1
     reason: 設計審通過
-    method: 版本化分析計畫
-    problem: 預先宣告輸出鍵
+    question: SQ1
+    issue: 封存前 index.yaml 的 hash 與 plan 不符
+    method: 重算 hash 後再封存
     evidence:
       - python3 skills/study-design/scripts/seal_artifact.py analysis/plans/SQ1-v1.yaml
       - analysis/plans/index.yaml
@@ -362,7 +433,7 @@ RENDER_UNSAFE = """decisions:
     decision: x
     reason: y
     method: "GLMM: 負二項"
-    problem: p
+    question: SQ1
     evidence: [a.py]
   - id: D-002
     date: "2026-07-11"
@@ -370,6 +441,18 @@ RENDER_UNSAFE = """decisions:
     checkpoint: c
     decision: x
     reason: y
+"""
+
+RENDER_ISSUE_NO_QUESTION = """decisions:
+  - id: D-001
+    date: "2026-07-10"
+    stage: analyze-data
+    checkpoint: c
+    decision: x
+    reason: y
+    issue: rerun 讀到舊快取
+    method: 清快取後重跑
+    evidence: [a.py]
 """
 
 RENDER_MISSING_KEY = """decisions:
@@ -426,7 +509,11 @@ def test_render_full_project() -> None:
         assert "run run-2026-07-12" in k1_row and "sha256:0123456789abcdef0123" in k1_row, k1_row
         assert "```mermaid" in progress and "timeline" in progress, progress
         assert "    title 渲染測試專案" in progress, progress
-        assert "    2026-07-11 : study-design：版本化分析計畫" in progress, progress
+        assert "    2026-07-11 : study-design：重算 hash 後再封存" in progress, progress
+        # 問題欄：question；有 issue 時「question › issue」
+        assert "| D-002 | 2026-07-10 | project-init | project-init 訪談＋拆解審 | main | python3" in progress, progress
+        assert "| D-003 | 2026-07-11 | study-design | 重算 hash 後再封存 | SQ1 › 封存前 index.yaml 的 hash 與 plan 不符 | python3" in progress, progress
+        assert "問題欄＝question；有執行問題時寫成「question › issue」。" in progress, progress
         # 冪等：再跑一次，除產生時間外相同
         rc2, _, _ = run_renderer(root)
         assert rc2 == 0
@@ -505,14 +592,17 @@ def test_render_json_output() -> None:
         data = json.loads(out)
         assert data["schema_version"] == 1
         assert data["n_total"] == 3 and data["n_complete"] == 3 and len(data["rows"]) == 3, data
-        assert data["axes"] == {"date": 3, "method": 3, "problem": 3, "evidence": 3}, data
+        assert data["axes"] == {"date": 3, "method": 3, "question": 3, "evidence": 3}, data
+        assert LEGACY_FIELD not in data["axes"] and LEGACY_FIELD not in data["rows"][0], data
         assert data["sources"] == {"decisions": True, "project": True, "results": True}, data
         assert data["mermaid"] == {"included": True, "skipped_reason": ""}, data
         assert data["project_title"] == "渲染測試專案"
-        for key in ("id", "date", "date_known", "stage", "method", "problem", "evidence",
+        for key in ("id", "date", "date_known", "stage", "method", "question", "issue", "evidence",
                     "checkpoint", "complete"):
             assert key in data["rows"][0], f"rows[0] 缺 {key}: {data['rows'][0]}"
         assert data["rows"][0]["id"] == "D-002" and data["rows"][0]["date_known"] is True
+        assert data["rows"][0]["question"] == "main" and data["rows"][0]["issue"] == ""
+        assert data["rows"][1]["id"] == "D-003" and data["rows"][1]["issue"].startswith("封存前")
         # --json 單獨用仍寫檔
         assert (root / "PROGRESS.md").exists(), "--json 單獨使用時仍須寫檔"
 
@@ -527,7 +617,7 @@ def test_render_mermaid_unsafe_skips_block() -> None:
         progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
         rows = _table_rows(progress)
         assert len(rows) == 2, rows
-        assert "| D-001 | 2026-07-10 | analyze-data | GLMM: 負二項 | p | a.py |" in progress, progress
+        assert "| D-001 | 2026-07-10 | analyze-data | GLMM: 負二項 | SQ1 | a.py |" in progress, progress
         assert "```mermaid" not in progress, progress
         assert "時間軸略過" in progress and "D-001" in progress and "「:」" in progress, progress
         assert _stats(progress) == (2, 1), progress
@@ -553,6 +643,23 @@ def test_render_results_link_missing() -> None:
         progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
         assert "results.nope（無 analysis/results.json）" in progress, progress
         assert "analysis/results.json（無）" in progress, progress
+
+
+def test_render_issue_without_question() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_ISSUE_NO_QUESTION)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert "| D-001 | 2026-07-10 | analyze-data | 清快取後重跑 | unknown › rerun 讀到舊快取 | a.py |" in progress, progress
+        # question 缺 → 問題軸不算有值、不算完整四軸
+        assert _stats(progress) == (1, 0), progress
+        assert "問題 0" in progress, progress
+        rc, out, err = run_renderer(root, "--dry-run", "--json")
+        data = json.loads(out)
+        assert data["rows"][0]["question"] == "unknown" and data["rows"][0]["issue"] == "rerun 讀到舊快取", data
+        assert data["axes"]["question"] == 0 and data["n_complete"] == 0, data
 
 
 def test_render_blockers() -> None:
@@ -585,7 +692,7 @@ def test_render_docs_registered() -> None:
 
 def main() -> int:
     test_schema_comment_has_new_fields()
-    print("[regression] project-init schema 註解含 method/problem/evidence 與階段收尾: pass")
+    print("[regression] project-init schema 註解含 question/issue/method/evidence 與階段收尾、三層語意: pass")
     test_checker_constants()
     print("[regression] check_decisions STAGES 含 debug-pipeline、STAGE_CLOSE_CHECKPOINT、覆蓋表: pass")
     test_coverage_warning_when_stage_missing()
@@ -596,12 +703,16 @@ def main() -> int:
     print("[regression] 舊格式裸日期條目 → 無新欄位 WARNING: pass")
     test_bad_evidence_type_is_warning_not_blocker()
     print("[regression] evidence 非清單 → WARNING 仍 exit 0: pass")
+    test_issue_without_question_is_warning()
+    print("[regression] issue 無 question → WARNING 仍 exit 0: pass")
+    test_question_unknown_sq_is_warning()
+    print("[regression] question 指向不存在的 SQ → WARNING；清單皆空 → INFO；AQ id 有效: pass")
     test_all_target_skills_require_close_entry()
-    print("[regression] 22 個 skill 收尾含固定措辭、四個排除者不含: pass")
+    print("[regression] 22 個 skill 收尾含 question/issue/method/evidence 固定措辭、無舊欄位名、四個排除者不含: pass")
     test_docs_synced()
     print("[regression] README/CHANGELOG/tests README 同步: pass")
     test_render_full_project()
-    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、results.k1 反查、mermaid、雜湊紅線、無 BOM／CR、冪等: pass")
+    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、question › issue、results.k1 反查、mermaid、雜湊紅線、無 BOM／CR、冪等: pass")
     test_render_old_format_project()
     print("[regression] render_progress 舊格式專案：unknown 補位、缺日期排最後、0 筆完整四軸: pass")
     test_render_empty_and_missing_decisions()
@@ -614,6 +725,8 @@ def main() -> int:
     print("[regression] render_progress mermaid 不安全字元 → 略過區塊、表格仍全列: pass")
     test_render_results_link_missing()
     print("[regression] render_progress results.<key> 無此鍵／無 results.json: pass")
+    test_render_issue_without_question()
+    print("[regression] render_progress issue 無 question → 「unknown › issue」、問題軸不計: pass")
     test_render_blockers()
     print("[regression] render_progress 根目錄不存在／decisions.yaml 無法解析 → exit 2 無 traceback: pass")
     test_render_docs_registered()
