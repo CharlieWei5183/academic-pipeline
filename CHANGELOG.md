@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.13.4（未發布）
+## 0.13.4（2026-09-14）
 
 附錄問題（`goals.appendix_questions`，id `AQ#`，v0.7.3 起就有的 schema）進機械關卡。之前只有 `check_coverage.py`、`check_decisions.py`、`render_progress.py` 認得 AQ，plan／results／validation／claims 這一系的關卡只讀 `goals.sub_questions`，所以一個 `evidence: [analysis]` 的附錄問題不能擁有 sealed plan、`results.json` 結果鍵或 validation item——實測把 SQ1 搬到 `appendix_questions` 後，`check_plan.py --require-confirmed --results` 對結果鍵報 `plan_id AQ1-v1 不是目前載入的 active plan`，`check_validation.py` 報 `V19: sq 無效`。本版改成：**附錄問題與主問題在機械關卡上同等可掛 plan／results／validation／claims／exploration；差別只有一項——AQ 缺 active plan（或缺 validation item）是 WARNING，主問題仍是 BLOCKER**。evaluate 的主覆蓋規則（只算 `sub_questions`）不變；skills、agents、管線階段與 SSOT schema 不變。
 
