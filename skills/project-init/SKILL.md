@@ -29,7 +29,9 @@ metadata:
    <root>/
    ├── project.yaml
    ├── decisions.yaml
-   ├── PROGRESS.md        # 自動產生（status/scripts/render_progress.py），不要手動編輯
+   ├── DECISIONS-TIMELINE.md   # 自動產生（status/scripts/render_decisions_timeline.py），不要手動編輯
+   ├── PROGRESS.ir.json        # 自動產生（status/scripts/render_progress.py 的 IR），不要手動編輯
+   ├── PROGRESS.html           # 自動產生（同上，自含 HTML 里程圖），不要手動編輯
    ├── protocol/
    ├── methodology/
    ├── integrity/

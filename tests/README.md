@@ -165,16 +165,28 @@ v0.11.0 為進度時間軸補齊 `decisions.yaml` 的資料來源，以錨點字
 - 22 個目標 SKILL.md 每一份都含「收尾必記一筆 D#」、`checkpoint: 階段收尾` 與 `question`／`exec_issue`／`method`／`evidence` 四欄的固定措辭，且不再出現舊欄位名；`status`、兩個潤稿站、`debug-pipeline` 不含該句。
 - README 含 `run_v0110_regressions.py`；CHANGELOG 含 `0.11.0`。
 
-階段 2 在同一檔追加 `render_progress.py`（進度時間軸 renderer）的測試，全部以 `tempfile.TemporaryDirectory` 建 fixture、讀磁碟上實際產出的 `PROGRESS.md` 斷言，結束自動清除：
+階段 2 在同一檔追加 `render_decisions_timeline.py`（決策時間軸 renderer；開發中曾名 `render_progress.py`、產出曾名 `DECISIONS-TIMELINE.md`）的測試，全部以 `tempfile.TemporaryDirectory` 建 fixture、讀磁碟上實際產出的 `DECISIONS-TIMELINE.md` 斷言，結束自動清除：
 
-- 欄位完整專案（3 筆四軸齊全、其中一筆 `links: [results.k1]`、一筆有 `exec_issue`）→ 表格 3 列、統計「共 3 筆記錄，其中 3 筆有完整四軸」、問題欄分別為 `main`／`SQ1`／`SQ1 › <exec_issue>`、`k1` 那列含 fixture 的 `script`／`run_id`／`data_fingerprint`、mermaid 區塊為 `gantt`（section 順序 `main`→`SQ1`、section 內依日期升冪、每列 `milestone, <日期>, 0d`）；執行前後 fixture 逐檔 sha256 相同、只多出 `PROGRESS.md`；產出無 BOM、無 `\r`、檔尾恰一個換行；重跑除「產生時間」外相同。
+- 欄位完整專案（3 筆四軸齊全、其中一筆 `links: [results.k1]`、一筆有 `exec_issue`）→ 表格 3 列、統計「共 3 筆記錄，其中 3 筆有完整四軸」、問題欄分別為 `main`／`SQ1`／`SQ1 › <exec_issue>`、`k1` 那列含 fixture 的 `script`／`run_id`／`data_fingerprint`、mermaid 區塊為 `gantt`（section 順序 `main`→`SQ1`、section 內依日期升冪、每列 `milestone, <日期>, 0d`）；執行前後 fixture 逐檔 sha256 相同、只多出 `DECISIONS-TIMELINE.md`；產出無 BOM、無 `\r`、檔尾恰一個換行；重跑除「產生時間」外相同。
 - 舊格式專案（只有必填欄、缺 `date`、缺 `stage`）→ exit 0、三列都在、對應欄顯示 `unknown`、缺日期那列排最後、「共 3 筆記錄，其中 0 筆有完整四軸」，且不用 `checkpoint`／`decision` 代填。
 - `exec_issue` 非空而 `question` 缺 → 問題欄「unknown › <exec_issue>」、問題軸不計、不算完整四軸；JSON rows 的 `question` 為 `unknown`、`exec_issue` 為原文。
 - `decisions: []` 與沒有 `decisions.yaml`（同時缺 `project.yaml`／`results.json`）→ exit 0、「共 0 筆記錄」、表頭存在、無 mermaid 區塊、有「無記錄」。
-- `--dry-run` → 目錄檔案清單與雜湊完全不變、無 `PROGRESS.md`、stdout 含 `## 記錄表`；`--dry-run --json` 只印 JSON。
+- `--dry-run` → 目錄檔案清單與雜湊完全不變、無 `DECISIONS-TIMELINE.md`、stdout 含 `## 記錄表`；`--dry-run --json` 只印 JSON。
 - `--json` → stdout 可 `json.loads`，`n_total`／`n_complete`／`len(rows)`／`axes`（鍵為 `date`／`method`／`question`／`evidence`）／`sources`／`mermaid` 與 fixture 一致，`rows[0]` 有全部欄位（含 `question`、`exec_issue`）；單獨使用仍寫檔。
 - `method` 含半形 `:` → exit 0、表格仍有該列、檔內無 ```` ```mermaid ```` 而有「時間軸略過」與該 id；`question` 含半形 `:` → 同樣略過並註明 section 名。
 - gantt section 順序：fixture 含 `main`、`SQ2`、`SQ10`、`AQ1`、自由文字、缺 question → 斷言 section 序為 main, SQ2, SQ10, AQ1, 自由文字, unknown（整數序，非字串序）；缺 date 與非 ISO date 的列不入圖、圖下「無日期未入圖：D-007、D-008。」、JSON `mermaid.undated_ids` 一致；全部列都無已知日期 → 無 ```` ```mermaid ```` 而有「無已知日期的記錄」。
 - `results.<key>` 找不到 → 憑據含「results.json 無此鍵」；無 `results.json` → 含「無 results.json」。
 - 根目錄不存在／`decisions.yaml` 無法解析 → exit 2、無 traceback、不落檔。
-- 登記錨點：README 含 `PROGRESS.md` 與 `render_progress.py`；`project-init` 步驟 4 樹含 `PROGRESS.md`；`status` SKILL.md 含 `render_progress.py`（frontmatter 未動）；CHANGELOG 0.11.0 段含 `render_progress.py`。
+- 登記錨點：README、`project-init` 步驟 4 樹、`status` SKILL.md（frontmatter 未動）、CHANGELOG 0.11.0 段與本檔都含三個產出檔名（`DECISIONS-TIMELINE.md`、`PROGRESS.ir.json`、`PROGRESS.html`）與兩支腳本名（`render_progress.py`、`render_decisions_timeline.py`）；README 與 `project-init` 樹不得再列舊檔名 `PROGRESS.md`；22 個 stage skill 收尾句「這一筆是進度時間軸的資料來源」與 `check_decisions.py` 不因改名而動。
+
+階段 3 在同一檔追加新的 `render_progress.py`（研究問題里程圖：唯讀 SSOT → `PROGRESS.ir.json` → `validate_ir()` → 自含 `PROGRESS.html`）的測試，同樣以暫存目錄動態建 fixture、讀磁碟實際產出斷言：
+
+- 改名：`render_decisions_timeline.py` 存在、產出 `DECISIONS-TIMELINE.md`、標題含「決策時間軸」、stdout 開頭 `=== render_decisions_timeline:`，腳本與產出內無 `PROGRESS.md`／`render_progress`／「進度時間軸」殘留。
+- 完整 fixture（`project.yaml` 含 2 個 SQ＋1 個 AQ、goals status 各 addressed／blocked／open、`state.next_stage: evaluate`、`state.methodology`、`state.review.round: 1`；`plans/index.yaml` SQ1 有 v1 superseded＋v2 active、SQ2 只有 v1 active、AQ1 無；`results.json` 兩鍵掛 SQ1-v2（run_id 含日期）、一鍵掛 SQ2-v1（run_id 無日期）；`validation.yaml` 頂層 expired、items SQ1 pass；`decisions.yaml` 三筆：question SQ1、question main＋links [SQ2]、無）→ lanes 順序 project, SQ1, SQ2, AQ1；`stages[]` 前六個為 SQ 六站、含 `analyze-data:rerun` 與 `evaluate:full`、id 唯一；SQ1 study-design done（date＝v2 confirmed_at、summary 含「第 2 版」、history 1 筆為 v1、evidence 含 plan path 與 content_hash 且 source 都指向 `analysis/plans/index.yaml#`）、analyze-data done 且 date 取 run_id 最大日期、run／script 各兩筆、data_fingerprint 去重為一筆、evidence 註明「日期取自 run_id」、validate-results expired（date＝completed_at、summary含「過期」、兩個 fingerprint 進 evidence）、evaluate done 且 evidence source 為 `project.yaml#goals.sub_questions[SQ1].status`、interpret-results／claim-audit pending；SQ2 evaluate blocked 且 summary 含 status_reason、`evaluations/` 含 SQ2 的 md 進 evidence、analyze-data date 為空；AQ1 六站全 pending；專案層 17 站、`evaluate:full` 節點 `current: true` 且僅此一個、peer-review done「第 1 輪，major」、methodology-router 依 state 判 done 並註明 route.yaml 不存在、其餘 pending；註記分配 SQ1=[D-001]、SQ2=[D-002]、project=[D-003]、AQ1=[]，且 D-002 六欄逐一相符；`stats` 與 stdout 統計行一致；IR 檔與 HTML 檔都在磁碟上、HTML 內嵌 JSON 可 `json.loads` 且等於 IR 檔；HTML 含 `<title>`、「請勿手動編輯」、「目前站：整體評估（evaluate）」與每條泳道「完成 x／N 站」；執行前後 fixture 逐檔 sha256 相同、只多出兩個產出檔。
+- methodology-router：`methodology/route.yaml` 存在 → done，date 以 `state.methodology.at` 優先於 route.yaml 的 `confirmed_at`，route.yaml 路徑進 evidence。
+- 空 fixture（只有最小 `project.yaml`）→ exit 0、只有專案層泳道、除 project-init 外全 pending、`WARNING project.yaml 無 goals，只有專案層泳道`、`INFO decisions.yaml 不存在`、`current_stage` 為空且無 current 節點、HTML 含「無研究問題泳道」；完全空目錄也 exit 0（project-init pending、WARNING 改為「project.yaml 不存在」）。
+- 無法解析：`plans/index.yaml` 內容 `: : :`、`validation.yaml` 內容 `items: [` → 每條 SQ／AQ 的 study-design 與 validate-results 為 unknown 且 summary 含「無法解析」、index 壞掉時 results 鍵歸屬無法判定故 analyze-data 亦 unknown、兩個 WARNING、exit 0、無 traceback、SSOT 未動。
+- 旗標正交：`--dry-run` 目錄不變、stdout 含 `<html` 與 `<title>`、無「已寫入」；`--dry-run --json` stdout 可 `json.loads` 且 `schema_version == 1`、無 `<html`；`--ir-only` 只多出 `PROGRESS.ir.json`、stdout 無「PROGRESS.html 已寫入」；`--json` 單獨用仍寫兩檔、stdout 只有 JSON。
+- 自含與逸出：HTML 無 `http://`、`https://`、`<link `、`src=`，恰兩個 `<script`（內嵌 IR 與內嵌 JS），含 `prefers-color-scheme: dark`；無 BOM、無 `\r`；SQ question 含 `<script>alert(1)</script>` 時靜態表格為 `&lt;script&gt;…`、內嵌 JSON 為 `\u003cscript>…`、原文 `<script>alert` 不出現，IR 檔與內嵌 IR 都保留原文；IR 檔無 BOM、無 CR、以 `}\n` 結尾。
+- 確定性：同一 fixture 跑兩次，HTML 除含 `generated_at` 的兩行（檔頭與內嵌 IR）外逐行相同，IR 除 `generated_at` 外相等。
+- IR 驗證關卡：`validate_ir()` 對正常 IR 回空清單；`state` 非法 → `IR-05 lanes[2].nodes[3].state`；date 非 ISO、evidence 缺欄、stages 空 → `IR-06`／`IR-07`／`IR-02`；以 monkeypatch 把 `build_ir` 換成壞 IR 後呼叫 `main([root])` → 回 2、stdout 含 `BLOCKER IR 驗證失敗: IR-05 …`、不落任何檔；根目錄不存在 → exit 2、無 traceback。
