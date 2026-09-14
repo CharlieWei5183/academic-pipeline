@@ -464,6 +464,57 @@ def test_route_no_overlap_in_fixture_and_html() -> None:
         assert st and st == dt, (len(st), len(dt))
 
 
+def test_secondary_results_are_children() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        g = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
+        nodes = {n["id"]: n for n in g["nodes"]}
+        k1, k2, k4, k5, k6, k7 = (nodes[f"r:{k}"] for k in ("k1", "k2", "k4", "k5", "k6", "k7"))
+        # 次要結果＝子項：subtype secondary、parent＝宣告它的子分析、縮排 24、寬減 24（HTML）
+        assert k4["subtype"] == "secondary" and k4["parent"] == "p:SQ1-v2#R2" and k4["collapsed"] is False
+        assert k6["subtype"] == "secondary" and k6["parent"] == "p:SQ1-v2#R3" and k7["parent"] == "p:SQ1-v2#R3"
+        assert k4["x"] == k1["x"] + 24 and k6["x"] == k1["x"] + 24
+        # 主要／未宣告維持頂層
+        assert k1["subtype"] == "primary" and k2["subtype"] == "primary" and k5["subtype"] == "undeclared"
+        assert k1["parent"] == "" and k2["parent"] == "" and k5["parent"] == "" and k1["x"] == k5["x"]
+        assert nodes["r:k3"]["subtype"] == "primary" and nodes["r:k3"]["parent"] == ""
+        # 列序：主要 k1 k2 → R1（無次要）→ R2 的 k4 → R3 的 k6 k7 → 未宣告 k5；y 連續
+        y = {n["id"]: n["y"] for n in g["nodes"]}
+        assert y["r:k1"] < y["r:k2"] < y["r:k4"] < y["r:k6"] < y["r:k7"] < y["r:k5"]
+        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result") == [20 + 48 * i for i in range(7)]
+        # 產出邊仍由子分析連到次要結果；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
+        edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
+        assert ("p:SQ1-v2#R2", "r:k4", "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
+        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        mk4 = re.search(r'data-node-id="r:k4"[^>]*data-parent="p:SQ1-v2#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
+        mk1 = re.search(r'data-node-id="r:k1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
+        assert mk4 and mk1 and int(mk4.group(1)) == int(mk1.group(1)) + 24 and int(mk4.group(3)) == int(mk1.group(3)) - 24, (mk4, mk1)
+        assert 'class="gnode t-result s-done sub"' in html_text and "縮排子節點＝敏感性子分析與其次要結果" in html_text
+        assert "'<dt>父子分析</dt>" in html_text and "次要結果（'+secs.length+'）" in html_text
+        # 父 plan 換成 superseded → 子分析與其次要結果一併收合、y 借用現行版
+        index = INDEX.replace("active: {SQ1: SQ1-v2, SQ2: SQ2-v1}", "active: {SQ1: SQ1-v3, SQ2: SQ2-v1}") \
+            .replace('status: active, content_hash: bbbb, confirmed_at: "2026-07-12"}',
+                     'status: superseded, content_hash: bbbb, confirmed_at: "2026-07-12", replaced_by: SQ1-v3}\n'
+                     '  - {plan_id: SQ1-v3, path: analysis/plans/SQ1-v3.yaml, sq: SQ1, status: active, content_hash: dddd, confirmed_at: "2026-07-14"}')
+        (root / "analysis/plans/index.yaml").write_text(index, encoding="utf-8")
+        (root / "analysis/plans/SQ1-v3.yaml").write_text(PLAN_SQ1_V2.replace("plan_id: SQ1-v2", "plan_id: SQ1-v3").replace("supersedes: SQ1-v1", "supersedes: SQ1-v2")
+                                                          .replace("robustness:", "robustness_old:"), encoding="utf-8")
+        g2 = graph_of(root)
+        n2 = {n["id"]: n for n in g2["nodes"]}
+        assert n2["p:SQ1-v2#R2"]["collapsed"] is True and n2["r:k4"]["collapsed"] is True and n2["r:k4"]["parent"] == "p:SQ1-v2#R2"
+        assert n2["r:k4"]["y"] == n2["p:SQ1-v3"]["y"], "收合的次要結果沿 parent 鏈借用現行版的列"
+        assert n2["r:k1"]["collapsed"] is False and n2["r:k1"]["subtype"] == "primary"
+        rc, out, err = run(root)
+        assert rc == 0, out + err
+        assert 'class="gnode t-result s-done sub gone"' in (root / "PROGRESS.html").read_text(encoding="utf-8") or \
+            re.search(r'data-node-id="r:k4"[^>]*class=', (root / "PROGRESS.html").read_text(encoding="utf-8")) is None
+        html2 = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert re.search(r'<g class="gnode t-result s-\w+ sub gone" data-node-id="r:k4"', html2), "收合的次要結果帶 gone"
+
+
 def test_validate_graph_subtype_rules() -> None:
     spec = importlib.util.spec_from_file_location("render_progress", RENDERER)
     module = importlib.util.module_from_spec(spec)
@@ -481,9 +532,11 @@ def test_validate_graph_subtype_rules() -> None:
         q["subtype"] = "sensitivity"
         res = [n for n in bad["graph"]["nodes"] if n["id"] == "r:k1"][0]
         res["subtype"] = "weird"
+        k4 = [n for n in bad["graph"]["nodes"] if n["id"] == "r:k4"][0]
+        k4["parent"] = "p:SQ1-v2"   # 結果的 parent 須為敏感性子節點
         del bad["graph"]["stats"]["sensitivity_items"]
         errors = module.validate_ir(bad)
-        assert any(e.endswith(".parent") for e in errors) and sum(1 for e in errors if e.endswith(".subtype")) == 2, errors
+        assert sum(1 for e in errors if e.endswith(".parent")) == 2 and sum(1 for e in errors if e.endswith(".subtype")) == 2, errors
         assert "IR-14 graph.stats" in errors, errors
 
 
@@ -508,8 +561,10 @@ def main() -> int:
     print("[regression] Python／JS 版面常數同值：NODE_W 260、COL_PITCH 380（走道 120）、ROW_GAP 48、GRAPH_PAD 20、LANE_GAP 8、車道上限 13: pass")
     test_route_no_overlap_in_fixture_and_html()
     print("[regression] 走道內重疊幹線 x 皆不同、每條可見邊有 path、HTML 幹線群組與 data-trunk、圖例句、sensitivity 不併幹線、Python／JS 路徑一致（有 Chrome 時）: pass")
+    test_secondary_results_are_children()
+    print("[regression] 次要結果為子項：subtype secondary、parent＝宣告它的子分析、縮排 24 寬減 24、主要／未宣告頂層、列序、無結果欄 L 形線、父 plan superseded 後一併收合並借列: pass")
     test_validate_graph_subtype_rules()
-    print("[regression] validate_ir：parent 不存在、subtype 非法或非 method、缺 stats.sensitivity_items: pass")
+    print("[regression] validate_ir：parent 不存在、subtype 非法或非 method／result、result 的 parent 須為敏感性子節點、缺 stats.sensitivity_items: pass")
     test_docs_registered()
     print("[regression] 登記：CHANGELOG 0.13.0／status SKILL／tests README／README: pass")
     print("PASS v0.13.0 regressions")
