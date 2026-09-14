@@ -28,6 +28,7 @@ metadata:
 - `state.review.scores` 與 `check_ledger.py` 的趨勢／保險閥輸出
 - `state.last_consistency` 的 version、result、gate_fingerprint、report
 - 中英文最新／定稿版本及 optional editing hook 狀態
+- `PROGRESS.inbox.yaml`（進度頁面收件匣：`python3 <skill路徑>/scripts/check_inbox.py <root>` 列 pending；有 pending 先於其他路由處理，見下）
 
 對 v0.7.x 專案執行適用 checker；state 與 artifact 衝突時以 checker 為準並修復快取。決策日誌 warning 不擋路，但 gate blocker 不能跳過。
 
@@ -39,6 +40,16 @@ python3 <skill路徑>/scripts/render_decisions_timeline.py <root>   # DECISIONS-
 ```
 
 `render_progress.py` 是研究問題里程圖：唯讀 `project.yaml`、`decisions.yaml`、`analysis/plans/index.yaml`、`analysis/results.json`、`analysis/validation.yaml`、`analysis/claims.yaml`、`analysis/claim-audit.yaml`、`methodology/route.yaml` 等 SSOT，建出 typed JSON IR（`PROGRESS.ir.json`，`schema_version: 1`）、通過自身 schema 驗證後再確定性渲染成單一自含 HTML（`PROGRESS.html`，無外部資源、`file://` 直接開）；泳道＝專案層（17 站）與每個 SQ／AQ（6 站：study-design → analyze-data → validate-results → evaluate → interpret-results → claim-audit），每站一個節點，state 為 done／expired／blocked／pending／unknown，缺檔缺欄位一律 pending、檔存在但無法解析一律 unknown 並 WARNING，不過濾任何泳道或站；決策註記依 `question`／`links` 掛到泳道，預設收合。IR 另有 `graph` 鍵、HTML 另有「關聯」分頁（URL hash `#relations`）：欄序照「問題 → 方法 → 驗證 → 主要結果 → 決策」——節點 `q:`問題／`p:`方法（＝計畫版本，label 帶 model_id，superseded 版本收合、現行版帶「v4（3 舊版）」徽章）／`v:`驗證／`r:`結果（徽章「主要」／「穩健性」／「其他」）／`d:`決策，邊 decomposes／plans／supersedes／validated_by／primary／robustness／produces／cites／refers 全部只從 SSOT 建，每條帶 `default_visible` 與 `style`（solid／dashed／thin）——預設只畫主幹（問題→現行方法→驗證→主要結果，穩健性 result_keys 為細線）與「未驗證旁路」（現行方法直接到 primary 與 robustness 都沒驗過的鍵，虛線）；plan 宣告但 results.json 沒登錄的鍵建 pending 節點、goals 指向不存在的鍵建 unknown 節點並計入 `stats.dangling_result_keys`、未驗證的登錄鍵計入 `stats.unvalidated_result_keys`。節點底色與符號顯示 state，工具列有 state 篩選、「顯示舊版計畫」「顯示全部邊」「顯示決策」（都預設關），SVG 內嵌並可縮放平移，點節點顯示其全部邊並亮上下游、`/` 搜尋、Shift+點找最短路徑、`P` 逐 SQ 導覽。第五欄 `f:`圖表來自 `analysis/figures/manifest.json`（`r:` → `f:` 為「呈現於」depicts 邊；results_keys 指到不在圖裡的鍵不建邊、徽章「無對應結果鍵」並 WARNING；state 依 `status` 與檔案存在與否），結果節點面板可直接看完成的表（rows 最多 200 列）與掛在此鍵的圖（點圖放大），圖表節點面板顯示圖、圖說與結果鍵。旗標：`--dry-run` 不寫檔並印 HTML、`--json` 印 IR、`--ir-only` 只寫 IR、`--embed-figures` 把圖檔（svg／png，單檔 ≤ 5 MB）以 data URI 內嵌進 IR 與 HTML（預設不內嵌，HTML 以相對路徑顯示圖）。只有根目錄不存在或 IR 未通過驗證才 exit 2（後者不落檔）。
+
+### 進度頁面伺服器與收件匣
+
+要在 `PROGRESS.html` 上直接送「新問題／新分析／意見」，用本機伺服器開頁面（`file://` 開的頁面表單一律 disabled）：
+
+```bash
+python3 <skill路徑>/scripts/progress_server.py <root> --port 8765   # 只綁 127.0.0.1；--port 0 自動選埠
+```
+
+伺服器啟動時先重算一次進度產物，之後只做三件事：`GET /` 先重跑 `render_progress.py` 再回 `PROGRESS.html`；提供 root 底下白名單副檔名的靜態檔（給圖用；路徑含 `..` 或跑出 root 一律 403）；`POST /api/inbox` 把表單 append 到 `<root>/PROGRESS.inbox.yaml`（IN-### 連號、`status: pending`、鎖檔後寫暫存檔再替換）。它**只綁 loopback、只寫收件匣**，不碰任何 SSOT；下次 session 由本 skill 依上面的路由逐筆處理。
 
 `render_decisions_timeline.py` 是決策時間軸：只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/DECISIONS-TIMELINE.md`（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section、一筆一個 milestone，無日期的列不入圖而列於圖下）；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
 
@@ -78,6 +89,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 
 依第一個未通過／過期項導向：
 
+- **收件匣有 pending（`check_inbox.py <root>` 列出）→ 先於其他路由，逐筆呈使用者裁決**：`new_question` → goals 變更確認（結構性增修觸發 evaluate 的拆解審）並記 D#；`new_analysis` → study-design（新 plan 或 amendment）並記 D#；`comment` → 依內容記一筆 D#（`question`＝target 所屬問題，`exec_issue`／`method` 視內容填）或轉對應 skill。使用者裁定後跑 `python3 <skill路徑>/scripts/check_inbox.py <root> --resolve IN-xxx --by <D#／plan id／SQ id>`；不採納 → `--dismiss IN-xxx --note <理由>`。**收件匣不是事實來源，不得未經使用者確認直接改 goals／plans／decisions**；`check_inbox.py` 是唯一可以改收件匣 status 的程式。
 - 無 route／未確認 → methodology-router；
 - prestudy 未過 → integrity-check；
 - protocol/plans 缺或 hash 不符 → study-design；
