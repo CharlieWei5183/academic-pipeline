@@ -1273,7 +1273,7 @@ def test_graph_full_fixture() -> None:
             assert nid in nodes, f"graph 缺節點 {nid}: {sorted(nodes)}"
         assert not any(nid.startswith("m:") for nid in nodes), "不得再有 m: 節點"
         assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"]
-        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "validated_by", "primary", "robustness", "produces", "depicts", "cites", "refers"]
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by", "primary", "robustness", "produces", "depicts", "cites", "refers"]   # v0.14.0 加 supplements
         assert [t["label"] for t in g["edge_types"] if t["id"] == "robustness"] == ["驗證（穩健性）"]
         assert nodes["q:main"]["title"] == "主問題一句" and nodes["q:main"]["state"] == ""
         assert nodes["q:SQ1"]["state"] == "done" and nodes["q:SQ2"]["state"] == "blocked" and nodes["q:AQ1"]["state"] == "pending"
@@ -1296,7 +1296,7 @@ def test_graph_full_fixture() -> None:
         assert nodes["r:k3"]["badge"] == "主要" and nodes["r:k3"]["meta"]["validated"] is False and nodes["r:k3"]["meta"]["validation_kind"] == "" and nodes["r:k3"]["meta"]["validated_by"] == []
         # 敏感性子節點
         sub = nodes["p:SQ1-v2#R1"]
-        assert sub["type"] == "method" and sub["subtype"] == "sensitivity" and sub["parent"] == "p:SQ1-v2" and sub["state"] == "done"
+        assert sub["type"] == "method" and sub["subtype"] == "sensitivity" and sub["parent"] == "p:SQ1-v2#S" and sub["state"] == "done"   # v0.14.0：parent 改為敏感性分析群
         assert sub["label"] == "R1：換 block 尺度" and sub["meta"]["expected_keys"] == ["k2"] and sub["meta"]["registered_keys"] == ["k2"]
         assert cur["subtype"] == "primary" and cur["meta"]["sensitivity_ids"] == ["p:SQ1-v2#R1"] and old["subtype"] == "primary"
         assert nodes["r:k1"]["state"] == "done" and nodes["r:k1"]["meta"]["model_id"] == "M-shared"
@@ -1324,14 +1324,17 @@ def test_graph_full_fixture() -> None:
         assert [nodes[i]["col"] for i in ("q:main", "q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 4, 6], "主問題欄 0、圖表欄 5"
         # 收合檢視：collapsed 節點不佔列（y 借用現行版）、同欄可見 y 連續；order 含 collapsed 節點
         y = {n["id"]: n["y"] for n in g["nodes"]}
-        assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ1-v2#R1", "p:SQ2-v1")] == [0, 1, 2, 3]
-        assert y["p:SQ1-v2"] == 20 and y["p:SQ1-v2#R1"] == 20 + 48 and y["p:SQ2-v1"] == 20 + 96 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
-        assert y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"] and y["q:main"] == (y["q:SQ1"] + y["q:AQ1"]) / 2, y
+        # v0.14.0：order 為每 (band, col) 內的整數序；main 區帶有 supp 可見節點時從 GRAPH_PAD + BAND_TITLE_H = 48 起，supp 區帶另起
+        assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1")] == [0, 1, 2] and [nodes[i]["order"] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1")] == [0, 1]
+        assert y["p:SQ1-v2"] == 48 and y["p:SQ2-v1"] == 48 + 48 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
+        y0_supp = max(n["y"] for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision") + 36 + 40 + 28
+        assert y["p:SQ1-v2#S"] == y0_supp and y["p:SQ1-v2#R1"] == y0_supp + 48 and y["q:AQ1"] == y0_supp, {k: v for k, v in y.items() if k.startswith("p:")}
+        assert y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"] and y["q:main"] == (y["q:SQ1"] + y["q:SQ2"]) / 2, y   # v0.14.0：只對 main 區帶的問題居中
         ry = [n["y"] for n in g["nodes"] if n["type"] == "result"]
-        assert sorted(ry) == [20 + 48 * i for i in range(len(ry))], "result 欄 y 須連續"
+        assert sorted(ry) == [48 + 48 * i for i in range(len(ry))], "result 欄 y 須連續"
         assert y["r:k1"] < y["r:k2"] < y["r:legacy_key"] < y["r:k3"] < y["r:k_missing"], {k: v for k, v in y.items() if k.startswith("r:")}
         dy = sorted(n["y"] for n in g["nodes"] if n["type"] == "decision")
-        assert dy == [20 + 48 * i for i in range(len(dy))] and [n["id"] for n in sorted((n for n in g["nodes"] if n["type"] == "decision"), key=lambda n: n["y"])] == ["d:D-001", "d:D-002", "d:D-003"]
+        assert dy == [48 + 48 * i for i in range(len(dy))] and [n["id"] for n in sorted((n for n in g["nodes"] if n["type"] == "decision"), key=lambda n: n["y"])] == ["d:D-001", "d:D-002", "d:D-003"]
         # 邊：型別、方向、default_visible、style、label
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert not any(t in ("uses", "validates") for _, _, t in edges), "不得再有 uses／validates 邊"
@@ -1354,8 +1357,11 @@ def test_graph_full_fixture() -> None:
         assert ("v:V1", "r:k2", "primary") not in edges and ("v:V1", "r:k1", "robustness") not in edges
         ev(("p:SQ1-v2", "r:k1", "produces"), True, "solid", "")           # 每個分析有產出都連到結果，不再依驗證隱藏
         ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")
-        ev(("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")
-        ev(("p:SQ1-v2#R1", "r:k2", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), False, "solid", "敏感性")        # v0.14.0：plan → 群（跨區帶，預設不畫）
+        ev(("p:SQ1-v2#S", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")      # 群 → 子分析
+        assert ("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity") not in edges
+        ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")                  # v0.14.0：子分析 → 主要結果跨區帶，預設不畫
+        ev(("p:SQ1-v2#S", "r:k1", "supplements"), True, "solid", "敏感性對照")
         ev(("p:SQ2-v1", "r:k3", "produces"), True, "solid", "")
         ev(("p:SQ2-v1", "r:k_missing", "produces"), True, "solid", "")
         assert not any(e["type"] == "produces" and e["style"] == "dashed" for e in g["edges"]), "fixture 沒有未宣告鍵，不該有虛線 produces"
@@ -1395,9 +1401,10 @@ def test_graph_full_fixture() -> None:
         assert sh["via"] == ["model:M-shared", "r:k3"] and sh["kinds"] == ["method", "result"], sh
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         assert g["stats"] == {"nodes": len(g["nodes"]), "edges": len(g["edges"]),
-                              "by_type": {"question": 4, "method": 4, "validation": 1, "result": 5, "figure": 0, "decision": 3},
+                              "by_type": {"question": 4, "method": 5, "validation": 1, "result": 5, "figure": 0, "decision": 3},
                               "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0,
-                              "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1}, g["stats"]
+                              "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1,
+                              "sensitivity_groups": 1, "band_main_nodes": 15, "band_supp_nodes": 3}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵
         # 拿掉 robustness → k2 回到未驗證：produces 邊仍可見實線、徽章仍「主要」、unvalidated 多 1、meta.validated 變 false
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
         g_n = _graph_ir(root)["graph"]
@@ -1408,7 +1415,7 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）；區帶 main 15 節點、supp 3 節點、敏感性分析群 1 組。" in out, out
 
 
 def test_graph_layout_deterministic() -> None:
@@ -1515,7 +1522,8 @@ def test_graph_empty_fixtures() -> None:
         assert [n["id"] for n in g["nodes"]] == ["q:main"] and g["edges"] == [] and g["shared"] == [], g
         assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "figure": 0, "decision": 0},
                               "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0, "figures_unreviewed": 0,
-                              "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 0}
+                              "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 0,
+                              "sensitivity_groups": 0, "band_main_nodes": 1, "band_supp_nodes": 0}
         rc, out, err = run_progress(root)
         assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err
         assert "<svg" in (root / "PROGRESS.html").read_text(encoding="utf-8")
