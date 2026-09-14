@@ -23,11 +23,12 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 
 關聯圖（IR 的 graph 鍵、HTML 的「關聯」分頁）: 節點＝問題 q:／方法 p:（＝計畫版本，label 帶 model_id）／
 驗證 v:／結果 r:／決策 d:，邊＝decomposes／plans／supersedes／validated_by／primary／produces／cites／refers，
-全部只從 SSOT 建（來源見 build_graph），缺檔缺欄位就沒有那條邊；每條邊帶 default_visible 與 style——
-預設只畫主幹（q→SQ、q→現行 p、p→v、v→主要結果 r）與「未驗證旁路」（現行 p→不在任何 primary_results 的 r，
-虛線），取代／引用／決策邊點選或開關才顯。superseded 計畫收合（collapsed），現行版帶 superseded_versions 與
+全部只從 SSOT 建（來源見 build_graph），缺檔缺欄位就沒有那條邊；每條邊帶 default_visible 與 style
+（solid／dashed／thin）——預設只畫主幹（q→SQ、q→現行 p、p→v、v→主要結果 r、v→穩健性 r 細線）與「未驗證
+旁路」（現行 p→不在任何 primary_results 也不在任何 robustness result_keys 的 r，虛線），取代／引用／決策邊
+點選或開關才顯。superseded 計畫收合（collapsed），現行版帶 superseded_versions 與
 徽章。plan 宣告但 results.json 沒登錄的鍵建 pending 節點、goals 指向不存在的鍵建 unknown 節點並計入
-stats.dangling_result_keys；不在任何 primary_results 的登錄鍵計入 stats.unvalidated_result_keys。版面由
+stats.dangling_result_keys；primary 與 robustness 都沒驗過的登錄鍵計入 stats.unvalidated_result_keys。版面由
 Python 算好（欄序 question → method → validation → result → decision，每欄固定序：問題依 lanes、方法依
 （問題, 版本）、驗證依（問題, item 序）、結果依（問題, 主要→其他→dangling, 現行 plan 宣告序）、決策依 id；
 x／y 為收合檢視，另給 col／order 讓 JS 展開時重排），HTML 只照座標畫 SVG，渲染確定性。
@@ -914,11 +915,13 @@ def attach_annotations(src: Sources, lanes: list[dict]) -> None:
 NODE_TYPES = (('question', '問題'), ('method', '方法'), ('validation', '驗證'), ('result', '結果'),
               ('decision', '決策'))  # 順序＝關聯圖欄序（問題 → 方法 → 驗證 → 主要結果 → 決策）
 EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('validated_by', '驗證'),
-              ('primary', '主要結果'), ('produces', '未驗證旁路'), ('cites', '引為證據'), ('refers', '決策關聯'))
+              ('primary', '主要結果'), ('robustness', '穩健性'), ('produces', '未驗證旁路'), ('cites', '引為證據'),
+              ('refers', '決策關聯'))
+EDGE_STYLES = ('solid', 'dashed', 'thin')
 NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'decision': 'd:'}
 GRAPH_COL = {t: i for i, (t, _) in enumerate(NODE_TYPES)}
 NODE_W, NODE_H, COL_GAP, ROW_GAP, GRAPH_PAD = 260, 36, 330, 48, 20
-DOWNSTREAM_TYPES = ('plans', 'validated_by', 'primary', 'produces', 'cites')
+DOWNSTREAM_TYPES = ('plans', 'validated_by', 'primary', 'robustness', 'produces', 'cites')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
 PLAN_PATH_RE = re.compile(r'^analysis/plans/([^/]+)\.ya?ml$')
 META_MAX = 200
@@ -1075,12 +1078,20 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
     result_objs = {str(k): v for k, v in results.items() if isinstance(v, dict)}
     vdoc = src.data('validation') if src.status('validation') == 'ok' else {}
     vitems = [(i, it) for i, it in enumerate(_list(vdoc.get('items'))) if isinstance(it, dict)]
-    validated_by: dict[str, list[str]] = {}
+    validated_by: dict[str, list[str]] = {}   # 鍵 → 驗過它的 item（primary 或 robustness result_keys 都算）
+    primary_keys: set[str] = set()
     for i, item in vitems:
         vid = _text(item.get('id')) or f'items[{i}]'
         for key in _list(item.get('primary_results')):
             if _text(key):
-                validated_by.setdefault(_text(key), []).append(vid)
+                primary_keys.add(_text(key))
+                if vid not in validated_by.setdefault(_text(key), []):
+                    validated_by[_text(key)].append(vid)
+        for rob in _list(item.get('robustness')):
+            if isinstance(rob, dict):
+                for key in _list(rob.get('result_keys')):
+                    if _text(key) and vid not in validated_by.setdefault(_text(key), []):
+                        validated_by[_text(key)].append(vid)
 
     def result_node(key: str, source: str, missing_title: str, missing_state: str, declared_by: str = '') -> str:
         nid = f'r:{key}'
@@ -1088,7 +1099,8 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
             return nid
         obj = result_objs.get(key)
         vids = validated_by.get(key, [])
-        base_meta = {'primary': bool(vids), 'validated_by': list(vids)}
+        kind = 'primary' if key in primary_keys else ('robustness' if vids else '')
+        base_meta = {'primary': key in primary_keys, 'validated_by': list(vids), 'validation_kind': kind}
         if obj is not None:
             pid = _text(obj.get('plan_id'))
             pstate = g.nodes.get(f'p:{pid}', {}).get('state', '')
@@ -1102,7 +1114,7 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
             if declared_by:
                 meta['declared_by'] = declared_by
             n = g.add_node(nid, 'result', key, missing_title, missing_state, meta, source)
-        n['badge'] = '主要' if vids else '其他'
+        n['badge'] = {'primary': '主要', 'robustness': '穩健性'}.get(kind, '其他')
         return nid
 
     for pid, doc in plan_docs.items():
@@ -1189,7 +1201,9 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
         istatus = _text(item.get('status')).lower()
         state = 'expired' if top_expired else {'pass': 'done', 'qualified': 'done', 'fail': 'blocked'}.get(istatus, 'unknown')
         meta = {'status': istatus or 'unknown', 'sq': _text(item.get('sq')), 'plan_id': _text(item.get('plan_id')),
-                'primary_results': [_text(k) for k in _list(item.get('primary_results')) if _text(k)]}
+                'primary_results': [_text(k) for k in _list(item.get('primary_results')) if _text(k)],
+                'robustness_keys': list(dict.fromkeys(_text(k) for rob in _list(item.get('robustness')) if isinstance(rob, dict)
+                                                      for k in _list(rob.get('result_keys')) if _text(k)))}
         if top_expired:
             meta['expired_at'] = _date(vdoc.get('expired_at'))
         if _text(item.get('limitations')):
@@ -1206,6 +1220,11 @@ def build_graph(src: Sources, lanes: list[dict]) -> dict:
         for key in meta['primary_results']:
             nid = result_node(key, f'{source}.primary_results', 'validation 指向的鍵不在 results.json', 'unknown')
             g.add_edge(f'v:{vid}', nid, 'primary', f'{source}.primary_results', '主要結果')
+        for key in meta['robustness_keys']:
+            if key in meta['primary_results']:
+                continue  # 同一 item 同一鍵：只畫 primary，不重複
+            nid = result_node(key, f'{source}.robustness[].result_keys', 'validation 指向的鍵不在 results.json', 'unknown')
+            g.add_edge(f'v:{vid}', nid, 'robustness', f'{source}.robustness[].result_keys', '穩健性', style='thin')
         sq = _text(item.get('sq')) or plan_sq.get(pid, '')
         vrank[f'v:{vid}'] = (question_order.index(f'q:{sq}') if f'q:{sq}' in question_order else BIG, i)
 
@@ -1445,7 +1464,7 @@ def validate_graph(graph) -> list[str]:
             errors.append(f'IR-13 {sub}.label／meta')
         if not isinstance(e.get('default_visible'), bool):
             errors.append(f'IR-13 {sub}.default_visible')
-        if e.get('style') not in ('solid', 'dashed'):
+        if e.get('style') not in EDGE_STYLES:
             errors.append(f'IR-13 {sub}.style')
     for i, s in enumerate(graph['shared'] if isinstance(graph['shared'], list) else []):
         sub = f'graph.shared[{i}]'
@@ -1770,7 +1789,7 @@ GRAPH_CSS = """
 .tsw{display:inline-block;width:10px;height:14px;border-radius:2px}
 .tsw.question{background:var(--t-question)}.tsw.method{background:var(--t-method)}.tsw.validation{background:var(--t-validation)}.tsw.result{background:var(--t-result)}.tsw.decision{background:var(--t-decision)}
 .esw{display:inline-block;width:26px;height:0;border-top:2px solid var(--fg);opacity:.7}
-.esw.dashed{border-top-style:dashed}.esw.faint{opacity:.25}
+.esw.dashed{border-top-style:dashed}.esw.faint{opacity:.25}.esw.thin{border-top-width:1px;opacity:.35}
 #graph-wrap{position:relative;overflow:auto;height:72vh;min-height:360px;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:grab;user-select:none}
 #graph-wrap.dragging{cursor:grabbing}
 #graph-svg{display:block}
@@ -1790,6 +1809,7 @@ GRAPH_CSS = """
 .gnode.gone,path.edge.off{display:none}
 path.edge{fill:none;stroke:var(--fg);stroke-width:1.4;opacity:.45;marker-end:url(#arrow)}
 path.edge.st-dashed{stroke-dasharray:6 4}
+path.edge.st-thin{stroke-width:.9;opacity:.3}
 path.edge.e-supersedes,path.edge.e-cites,path.edge.e-refers{opacity:.25}
 .gnode.sel .box{stroke:var(--current);stroke-width:4}
 .gnode.up .box{stroke:var(--up);stroke-width:3}
@@ -1927,8 +1947,9 @@ GRAPH_JS = """
       h+='<dt>models</dt><dd>'+esc((n.meta.models||[]).join('、')||'—')+'</dd>';
       var sv=n.meta.superseded_versions||[];h+='<dt>superseded_versions（'+sv.length+'）</dt><dd>'+(sv.length?sv.map(function(p){return '<span class="goto" data-goto="p:'+esc(p)+'">'+esc(p)+'</span>';}).join('、')+' <span class="expand" data-expand="'+esc(id)+'">'+(expanded[id]?'收合舊版':'展開舊版')+'</span>':'無')+'</dd>';
       if(n.meta.amendment_reason)h+='<dt>amendment_reason</dt><dd>'+esc(n.meta.amendment_reason)+'</dd>';}
-    if(n.type==='result'){skip=['primary','validated_by','robustness_id'];
-      h+='<dt>primary</dt><dd>'+(n.meta.primary?'是（主要結果）':'否（其他結果）')+'</dd>';
+    if(n.type==='result'){skip=['primary','validated_by','robustness_id','validation_kind'];
+      var vk=n.meta.validation_kind||'';h+='<dt>validation_kind</dt><dd>'+(vk==='primary'?'primary（主要結果）':vk==='robustness'?'robustness（只在穩健性 result_keys）':'—（未經任何驗證 item）')+'</dd>';
+      h+='<dt>primary</dt><dd>'+(n.meta.primary?'是':'否')+'</dd>';
       h+='<dt>validated_by</dt><dd>'+((n.meta.validated_by||[]).length?n.meta.validated_by.map(function(v){return '<span class="goto" data-goto="v:'+esc(v)+'">'+esc(v)+'</span>';}).join('、'):'無')+'</dd>';
       if(n.meta.robustness_id)h+='<dt>robustness_id</dt><dd>'+esc(n.meta.robustness_id)+'</dd>';}
     h+='<dt>meta</dt><dd>'+metaRows(n.meta,skip)+'</dd>';
@@ -1962,10 +1983,11 @@ GRAPH_JS = """
     var curP=null;plans.forEach(function(p){if(!p.collapsed&&(!curP||(p.meta.version||0)>(curP.meta.version||0)))curP=p;});
     if(!curP)return n.label+' ｜ 方法 無（'+plans.length+' 個舊版，無現行版）';
     var vids=[],vst={};(outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='validated_by'){vids.push(nodes[e.to].label);vst[nodes[e.to].meta.status||'unknown']=true;}});
-    var prim={},unval=0;vids.forEach(function(v){(outE['v:'+v]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='primary')prim[e.to]=true;});});
+    var prim={},rob={},unval=0;vids.forEach(function(v){(outE['v:'+v]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='primary')prim[e.to]=true;if(e.type==='robustness')rob[e.to]=true;});});
+    Object.keys(prim).forEach(function(k){delete rob[k];});
     (outE[curP.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='produces'&&e.default_visible)unval++;});
     var models=(curP.meta.models||[]).join('、')||'無 model';var k=(curP.meta.superseded_versions||[]).length;
-    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+Object.keys(prim).length+' 鍵、未驗證 '+unval+' 鍵';
+    return n.label+' ｜ 方法 '+curP.id.slice(2)+'（'+models+'；'+k+' 舊版）→ 驗證 '+(vids.length?Object.keys(vst).join('／'):'無')+'（'+(vids.join('、')||'—')+'）→ 主要結果 '+Object.keys(prim).length+' 鍵、穩健性 '+Object.keys(rob).length+' 鍵、未驗證 '+unval+' 鍵';
   }
   function tourLine(){return '<div class="tour">第 '+(tour+1)+'／'+chapters.length+' 章：'+esc(chapterSummary(chapters[tour]))+'<br><span class="src">← → 換章，Esc 離開</span></div>';}
   function tourGo(i){if(!chapters.length)return;tour=((i%chapters.length)+chapters.length)%chapters.length;select(chapters[tour],true);}
@@ -2122,6 +2144,7 @@ def _relations_tab(ir: dict) -> list[str]:
         '<span>｜</span>',
         '<span><span class="esw"></span>主幹（規劃／驗證／主要結果）</span>',
         '<span><span class="esw dashed"></span>未驗證旁路</span>',
+        '<span><span class="esw thin"></span>細線＝穩健性</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
         '</div>',
         '<div id="graph-wrap">',

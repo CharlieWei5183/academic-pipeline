@@ -906,7 +906,7 @@ completed_at: "2026-07-18"
 expired_at: "2026-07-20"
 report: reviews/validation-SQ1-1.md
 items:
-  - {id: V1, sq: SQ1, plan_id: SQ1-v2, status: pass, primary_results: [k1]}
+  - {id: V1, sq: SQ1, plan_id: SQ1-v2, status: pass, primary_results: [k1], robustness: [{id: R1, result_keys: [k2]}]}
 """
 
 IR_DECISIONS = """decisions:
@@ -1260,7 +1260,8 @@ def test_graph_full_fixture() -> None:
             assert nid in nodes, f"graph 缺節點 {nid}: {sorted(nodes)}"
         assert not any(nid.startswith("m:") for nid in nodes), "不得再有 m: 節點"
         assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "decision"]
-        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "validated_by", "primary", "produces", "cites", "refers"]
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "validated_by", "primary", "robustness", "produces", "cites", "refers"]
+        assert [t["label"] for t in g["edge_types"] if t["id"] == "robustness"] == ["穩健性"]
         assert nodes["q:main"]["title"] == "主問題一句" and nodes["q:main"]["state"] == ""
         assert nodes["q:SQ1"]["state"] == "done" and nodes["q:SQ2"]["state"] == "blocked" and nodes["q:AQ1"]["state"] == "pending"
         # 方法節點＝計畫版本
@@ -1274,12 +1275,17 @@ def test_graph_full_fixture() -> None:
         assert sq2["state"] == "done" and sq2["collapsed"] is False and sq2["badge"] == "" and sq2["meta"]["superseded_versions"] == [] and sq2["meta"]["models"] == ["M-shared"]
         # 結果節點
         assert nodes["r:k1"]["meta"]["primary"] is True and nodes["r:k1"]["meta"]["validated_by"] == ["V1"] and nodes["r:k1"]["badge"] == "主要"
-        assert nodes["r:k2"]["meta"]["primary"] is False and nodes["r:k2"]["badge"] == "其他" and nodes["r:k2"]["meta"]["robustness_id"] == "R1"
+        assert nodes["r:k1"]["meta"]["validation_kind"] == "primary"
+        # k2 只在 V1 的 robustness result_keys → 穩健性
+        assert nodes["r:k2"]["meta"]["primary"] is False and nodes["r:k2"]["badge"] == "穩健性" and nodes["r:k2"]["meta"]["robustness_id"] == "R1"
+        assert nodes["r:k2"]["meta"]["validated_by"] == ["V1"] and nodes["r:k2"]["meta"]["validation_kind"] == "robustness"
+        assert nodes["r:k3"]["badge"] == "其他" and nodes["r:k3"]["meta"]["validation_kind"] == "" and nodes["r:k3"]["meta"]["validated_by"] == []
         assert nodes["r:k1"]["state"] == "done" and nodes["r:k1"]["meta"]["model_id"] == "M-shared"
         assert nodes["r:legacy_key"]["state"] == "unknown" and nodes["r:legacy_key"]["title"] == "goals 指向的鍵不在 results.json" and nodes["r:legacy_key"]["badge"] == "其他"
         assert nodes["r:k_missing"]["state"] == "pending" and nodes["r:k_missing"]["title"] == "已宣告、results.json 尚無此鍵"
         assert nodes["r:k_missing"]["meta"]["declared_by"] == "SQ2-v1" and nodes["r:k_missing"]["meta"]["primary"] is False
         assert nodes["v:V1"]["state"] == "expired" and nodes["v:V1"]["meta"]["status"] == "pass" and nodes["v:V1"]["meta"]["primary_results"] == ["k1"]
+        assert nodes["v:V1"]["meta"]["robustness_keys"] == ["k2"]
         assert nodes["d:D-002"]["meta"] == {"date": "2026-07-02", "stage": "analyze-data", "checkpoint": "c", "decision": "依 plan 跑分析",
                                             "method": "GLMM", "exec_issue": "快取"} and nodes["d:D-002"]["state"] == ""
         for n in g["nodes"]:
@@ -1322,8 +1328,10 @@ def test_graph_full_fixture() -> None:
         ev(("p:SQ1-v1", "p:SQ1-v2", "supersedes"), False, "dashed")
         ev(("p:SQ1-v2", "v:V1", "validated_by"), True, "solid", "驗證")
         ev(("v:V1", "r:k1", "primary"), True, "solid", "主要結果")
+        ev(("v:V1", "r:k2", "robustness"), True, "thin", "穩健性")         # 穩健性驗證：細線可見
+        assert ("v:V1", "r:k2", "primary") not in edges and ("v:V1", "r:k1", "robustness") not in edges
         ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")          # 已驗證的鍵：旁路隱藏
-        ev(("p:SQ1-v2", "r:k2", "produces"), True, "dashed", "未驗證")     # 未驗證：旁路可見、虛線
+        ev(("p:SQ1-v2", "r:k2", "produces"), False, "solid", "")          # 只被穩健性驗過：旁路也隱藏
         assert edges[("p:SQ1-v2", "r:k2", "produces")]["meta"] == {"robustness_id": "R1", "change": "換 block 尺度"}
         ev(("p:SQ2-v1", "r:k3", "produces"), True, "dashed", "未驗證")
         ev(("p:SQ2-v1", "r:k_missing", "produces"), True, "dashed", "未驗證")
@@ -1338,7 +1346,13 @@ def test_graph_full_fixture() -> None:
         assert not any(e["from"] == "d:D-003" and e["type"] == "refers" for e in g["edges"]), "D-003 只靠 supersedes 對到 D-001，不再退回 q:main"
         assert len({(e["from"], e["to"], e["type"]) for e in g["edges"]}) == len(g["edges"]), "邊須去重"
         for e in g["edges"]:
-            assert isinstance(e["default_visible"], bool) and e["style"] in ("solid", "dashed")
+            assert isinstance(e["default_visible"], bool) and e["style"] in ("solid", "dashed", "thin")
+        # 同一鍵同時在同一 item 的 primary_results 與 robustness result_keys → 只畫 primary
+        (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace("result_keys: [k2]", "result_keys: [k1, k2]"), encoding="utf-8")
+        g_r = _graph_ir(root)["graph"]
+        er = {(e["from"], e["to"], e["type"]) for e in g_r["edges"]}
+        assert ("v:V1", "r:k1", "primary") in er and ("v:V1", "r:k1", "robustness") not in er and ("v:V1", "r:k2", "robustness") in er
+        (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         # 完全沒對到節點的決策 → refers 到 q:main
         (root / "decisions.yaml").write_text(IR_DECISIONS + "  - {id: D-004, date: \"2026-07-04\", stage: status, checkpoint: c, decision: 無連結, reason: r, links: [GOAL.md]}\n", encoding="utf-8")
         g2 = _graph_ir(root)["graph"]
@@ -1358,10 +1372,17 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         assert g["stats"] == {"nodes": len(g["nodes"]), "edges": len(g["edges"]),
                               "by_type": {"question": 4, "method": 3, "validation": 1, "result": 5, "decision": 3},
-                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 2}, g["stats"]
+                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1}, g["stats"]
+        # 拿掉 robustness → k2 回到未驗證：旁路可見、unvalidated 多 1
+        (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
+        g_n = _graph_ir(root)["graph"]
+        en = {(e["from"], e["to"], e["type"]): e for e in g_n["edges"]}
+        assert en[("p:SQ1-v2", "r:k2", "produces")]["default_visible"] is True and en[("p:SQ1-v2", "r:k2", "produces")]["style"] == "dashed"
+        assert g_n["stats"]["unvalidated_result_keys"] == 2 and [n for n in g_n["nodes"] if n["id"] == "r:k2"][0]["badge"] == "其他"
+        (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 2。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1。" in out, out
 
 
 def test_graph_layout_deterministic() -> None:
@@ -1402,6 +1423,7 @@ def test_graph_html_tab() -> None:
         assert any(" Q" in d for d in edge_ds), "至少一條邊有圓角轉折"
         # 預設隱藏的邊帶 off、收合的節點帶 gone、未驗證旁路帶 st-dashed、state 底色與符號
         assert 'class="edge e-produces st-dashed" data-idx=' in html_text and 'class="edge e-cites st-solid off"' in html_text
+        assert 'class="edge e-robustness st-thin" data-idx=' in html_text and "細線＝穩健性" in html_text and "path.edge.st-thin{" in html_text
         assert 'class="gnode t-method s-expired gone"' in html_text and 'class="gnode t-method s-done"' in html_text
         assert '<text class="sym" x="13" y="24">●</text>' in html_text and '<text class="sym" x="13" y="24">◐</text>' in html_text
         assert '<text class="st" x="252" y="23" text-anchor="end">完成</text>' in html_text
@@ -1437,6 +1459,9 @@ def test_graph_validation_gate() -> None:
         bad2["graph"]["nodes"][3]["collapsed"] = "no"
         del bad2["graph"]["edges"][0]["default_visible"]
         bad2["graph"]["edges"][1]["style"] = "dotted"
+        ok_thin = json.loads(json.dumps(good))
+        ok_thin["graph"]["edges"][1]["style"] = "thin"
+        assert module.validate_ir(ok_thin) == [], "style thin 須合法"
         errors = module.validate_ir(bad2)
         assert any(e.startswith("IR-12 ") and e.endswith("[0].id") for e in errors), errors
         assert "IR-12 graph.nodes[1].x" in errors and "IR-12 graph.nodes[2].col" in errors and "IR-12 graph.nodes[3].collapsed" in errors, errors
@@ -1546,7 +1571,7 @@ def main() -> int:
     test_progress_ir_validation_gate()
     print("[regression] render_progress validate_ir 回 IR- 代碼；壞 IR → 主程式 exit 2 不落檔；根目錄不存在 → exit 2: pass")
     test_graph_full_fixture()
-    print("[regression] graph IR 完整 fixture：方法節點＝計畫版本（models／badge／collapsed）、validated_by p→v、primary v→r、未驗證旁路 dashed 可見／已驗證 hidden、cites／refers hidden、shared via model:、stats 含 unvalidated、收合檢視 y、欄序: pass")
+    print("[regression] graph IR 完整 fixture：方法節點＝計畫版本（models／badge／collapsed）、validated_by p→v、primary v→r、robustness v→r thin（同 item 同鍵只畫 primary）、旁路只在兩者皆無時可見、badge 主要／穩健性／其他、cites／refers hidden、shared via model:、stats 含 unvalidated、收合檢視 y、欄序: pass")
     test_graph_layout_deterministic()
     print("[regression] graph 版面確定性：同 fixture 兩次 graph 逐位元相同、HTML 除 generated_at 外相同: pass")
     test_graph_html_tab()
