@@ -1255,92 +1255,113 @@ def test_graph_full_fixture() -> None:
         ir = _graph_ir(root)
         g = ir["graph"]
         nodes = {n["id"]: n for n in g["nodes"]}
-        for nid in ("q:main", "q:SQ1", "q:SQ2", "q:AQ1", "p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1", "m:M-shared",
+        for nid in ("q:main", "q:SQ1", "q:SQ2", "q:AQ1", "p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1",
                     "r:k1", "r:k2", "r:k3", "r:legacy_key", "r:k_missing", "v:V1", "d:D-001", "d:D-002", "d:D-003"):
             assert nid in nodes, f"graph 缺節點 {nid}: {sorted(nodes)}"
+        assert not any(nid.startswith("m:") for nid in nodes), "不得再有 m: 節點"
+        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "decision"]
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "validated_by", "primary", "produces", "cites", "refers"]
         assert nodes["q:main"]["title"] == "主問題一句" and nodes["q:main"]["state"] == ""
         assert nodes["q:SQ1"]["state"] == "done" and nodes["q:SQ2"]["state"] == "blocked" and nodes["q:AQ1"]["state"] == "pending"
-        assert nodes["r:legacy_key"]["state"] == "unknown" and nodes["r:legacy_key"]["title"] == "goals 指向的鍵不在 results.json"
-        assert nodes["r:k_missing"]["state"] == "pending" and nodes["r:k_missing"]["title"] == "已宣告、results.json 尚無此鍵"
-        assert nodes["r:k_missing"]["meta"] == {"declared_by": "SQ2-v1"}
+        # 方法節點＝計畫版本
+        cur, old, sq2 = nodes["p:SQ1-v2"], nodes["p:SQ1-v1"], nodes["p:SQ2-v1"]
+        assert cur["type"] == "method" and cur["state"] == "done" and cur["collapsed"] is False
+        assert cur["label"] == "SQ1-v2 ｜ M-shared" and cur["meta"]["models"] == ["M-shared"], cur
+        assert cur["badge"] == "v2（1 舊版）" and cur["meta"]["superseded_versions"] == ["SQ1-v1"], cur
+        assert cur["meta"]["version"] == 2 and cur["meta"]["content_hash"] == "bbbb2222" and cur["meta"]["amendment_reason"] == "改用 shrinkage smooth"
+        assert cur["meta"]["primary_model"].startswith("M-shared：共用模型")
+        assert old["state"] == "expired" and old["collapsed"] is True and old["badge"] == "" and old["meta"]["models"] == [] and old["label"] == "SQ1-v1"
+        assert sq2["state"] == "done" and sq2["collapsed"] is False and sq2["badge"] == "" and sq2["meta"]["superseded_versions"] == [] and sq2["meta"]["models"] == ["M-shared"]
+        # 結果節點
+        assert nodes["r:k1"]["meta"]["primary"] is True and nodes["r:k1"]["meta"]["validated_by"] == ["V1"] and nodes["r:k1"]["badge"] == "主要"
+        assert nodes["r:k2"]["meta"]["primary"] is False and nodes["r:k2"]["badge"] == "其他" and nodes["r:k2"]["meta"]["robustness_id"] == "R1"
         assert nodes["r:k1"]["state"] == "done" and nodes["r:k1"]["meta"]["model_id"] == "M-shared"
-        assert nodes["p:SQ1-v1"]["state"] == "expired" and nodes["p:SQ1-v2"]["state"] == "done" and nodes["p:SQ2-v1"]["state"] == "done"
-        assert nodes["p:SQ1-v2"]["meta"]["version"] == 2 and nodes["p:SQ1-v2"]["meta"]["content_hash"] == "bbbb2222"
-        assert nodes["p:SQ1-v2"]["meta"]["amendment_reason"] == "改用 shrinkage smooth"
-        assert nodes["p:SQ1-v2"]["meta"]["primary_model"].startswith("M-shared：共用模型")
-        assert nodes["p:SQ1-v1"]["meta"].get("primary_model") is None, "SQ1-v1 無 plan yaml → 不帶 primary_model"
-        assert nodes["m:M-shared"]["meta"]["description"] == "共用模型 GLMM"
-        assert sorted(nodes["m:M-shared"]["meta"]["plans"]) == ["SQ1-v2", "SQ2-v1"] and nodes["m:M-shared"]["meta"]["keys"] == ["k1", "k2", "k3"]
-        assert nodes["v:V1"]["state"] == "expired" and nodes["v:V1"]["meta"]["status"] == "pass"
+        assert nodes["r:legacy_key"]["state"] == "unknown" and nodes["r:legacy_key"]["title"] == "goals 指向的鍵不在 results.json" and nodes["r:legacy_key"]["badge"] == "其他"
+        assert nodes["r:k_missing"]["state"] == "pending" and nodes["r:k_missing"]["title"] == "已宣告、results.json 尚無此鍵"
+        assert nodes["r:k_missing"]["meta"]["declared_by"] == "SQ2-v1" and nodes["r:k_missing"]["meta"]["primary"] is False
+        assert nodes["v:V1"]["state"] == "expired" and nodes["v:V1"]["meta"]["status"] == "pass" and nodes["v:V1"]["meta"]["primary_results"] == ["k1"]
         assert nodes["d:D-002"]["meta"] == {"date": "2026-07-02", "stage": "analyze-data", "checkpoint": "c", "decision": "依 plan 跑分析",
-                                            "method": "GLMM", "exec_issue": "快取"}
+                                            "method": "GLMM", "exec_issue": "快取"} and nodes["d:D-002"]["state"] == ""
         for n in g["nodes"]:
             assert n["source"], f"{n['id']} 無 source"
             assert isinstance(n["x"], (int, float)) and isinstance(n["y"], (int, float)) and not isinstance(n["x"], bool)
-        # 同 type 同 x；欄序 question < plan < method < result < validation < decision
+            assert isinstance(n["col"], int) and isinstance(n["order"], int) and isinstance(n["collapsed"], bool) and isinstance(n["badge"], str)
+        # 欄序 question < method < validation < result < decision；同 type 同 x
         xs = {}
         for n in g["nodes"]:
             xs.setdefault(n["type"], set()).add(n["x"])
         assert all(len(v) == 1 for v in xs.values()), xs
-        order = [next(iter(xs[t])) for t in ("question", "plan", "result", "method", "validation", "decision")]
-        assert order == sorted(order) and len(set(order)) == 6, order
-        # 固定列序：plan 欄同問題版本相鄰、舊→新由上而下；result 欄 SQ1 的鍵（含 goals 引用的 dangling）都在 SQ2 的鍵之前
+        order = [next(iter(xs[t])) for t in ("question", "method", "validation", "result", "decision")]
+        assert order == sorted(order) and len(set(order)) == 5, order
+        assert [nodes[i]["col"] for i in ("q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 4]
+        # 收合檢視：collapsed 節點不佔列（y 借用現行版）、同欄可見 y 連續；order 含 collapsed 節點
         y = {n["id"]: n["y"] for n in g["nodes"]}
+        assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1")] == [0, 1, 2]
+        assert y["p:SQ1-v2"] == 20 and y["p:SQ2-v1"] == 20 + 48 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
         assert y["q:main"] < y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"], y
-        assert y["p:SQ1-v1"] < y["p:SQ1-v2"] < y["p:SQ2-v1"], {k: v for k, v in y.items() if k.startswith("p:")}
-        assert max(y["r:k1"], y["r:k2"], y["r:legacy_key"]) < min(y["r:k3"], y["r:k_missing"]), {k: v for k, v in y.items() if k.startswith("r:")}
-        assert y["r:k1"] < y["r:k2"] < y["r:legacy_key"], "同問題內依宣告序，dangling 放區塊末尾"
-        assert y["r:k3"] < y["r:k_missing"]
-        ys = sorted(n["y"] for n in g["nodes"] if n["type"] == "decision")
-        assert ys == [ys[0] + 44 * i for i in range(len(ys))], "同欄列距須為 44"
-        edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
-        for key in (("q:main", "q:SQ1", "decomposes"), ("q:main", "q:AQ1", "decomposes"),
-                    ("q:SQ1", "p:SQ1-v1", "plans"), ("q:SQ1", "p:SQ1-v2", "plans"), ("q:SQ2", "p:SQ2-v1", "plans"),
-                    ("p:SQ1-v1", "p:SQ1-v2", "supersedes"), ("d:D-001", "d:D-003", "supersedes"),
-                    ("p:SQ1-v2", "r:k1", "produces"), ("p:SQ1-v2", "r:k2", "produces"), ("p:SQ2-v1", "r:k_missing", "produces"),
-                    ("r:k1", "m:M-shared", "uses"), ("r:k3", "m:M-shared", "uses"),
-                    ("r:k1", "v:V1", "validates"), ("p:SQ1-v2", "v:V1", "validates"),
-                    ("q:SQ1", "r:k1", "cites"), ("q:SQ1", "r:legacy_key", "cites"),
-                    ("d:D-001", "q:SQ1", "refers"), ("d:D-002", "q:main", "refers"), ("d:D-002", "q:SQ2", "refers"),
-                    ("d:D-002", "d:D-001", "refers")):
+        ry = [n["y"] for n in g["nodes"] if n["type"] == "result"]
+        assert sorted(ry) == [20 + 48 * i for i in range(len(ry))], "result 欄 y 須連續"
+        assert y["r:k1"] < y["r:k2"] < y["r:legacy_key"] < y["r:k3"] < y["r:k_missing"], {k: v for k, v in y.items() if k.startswith("r:")}
+        dy = sorted(n["y"] for n in g["nodes"] if n["type"] == "decision")
+        assert dy == [20 + 48 * i for i in range(len(dy))] and [n["id"] for n in sorted((n for n in g["nodes"] if n["type"] == "decision"), key=lambda n: n["y"])] == ["d:D-001", "d:D-002", "d:D-003"]
+        # 邊：型別、方向、default_visible、style、label
+        edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
+        assert not any(t in ("uses", "validates") for _, _, t in edges), "不得再有 uses／validates 邊"
+        def ev(key, visible, style, label=None):
             assert key in edges, f"graph 缺邊 {key}"
-        assert ("d:D-003", "d:D-001", "supersedes") not in edges, "supersedes 方向須為舊→新"
-        assert ("v:V1", "r:k1", "validates") not in edges and ("v:V1", "p:SQ1-v2", "validates") not in edges, "validates 方向須為 r／p → v"
-        # D-003 只靠 supersedes 對到 D-001，已算對到節點，不再掛 q:main
-        assert not any(e["from"] == "d:D-003" and e["type"] == "refers" for e in g["edges"]), "D-003 不該再退回 q:main"
+            e = edges[key]
+            assert e["default_visible"] is visible and e["style"] == style, (key, e)
+            if label is not None:
+                assert e["label"] == label, (key, e["label"])
+            assert e["source"], key
+        ev(("q:main", "q:SQ1", "decomposes"), True, "solid")
+        ev(("q:main", "q:AQ1", "decomposes"), True, "solid")
+        ev(("q:SQ1", "p:SQ1-v2", "plans"), True, "solid")
+        ev(("q:SQ1", "p:SQ1-v1", "plans"), False, "solid")
+        ev(("q:SQ2", "p:SQ2-v1", "plans"), True, "solid")
+        ev(("p:SQ1-v1", "p:SQ1-v2", "supersedes"), False, "dashed")
+        ev(("p:SQ1-v2", "v:V1", "validated_by"), True, "solid", "驗證")
+        ev(("v:V1", "r:k1", "primary"), True, "solid", "主要結果")
+        ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")          # 已驗證的鍵：旁路隱藏
+        ev(("p:SQ1-v2", "r:k2", "produces"), True, "dashed", "未驗證")     # 未驗證：旁路可見、虛線
+        assert edges[("p:SQ1-v2", "r:k2", "produces")]["meta"] == {"robustness_id": "R1", "change": "換 block 尺度"}
+        ev(("p:SQ2-v1", "r:k3", "produces"), True, "dashed", "未驗證")
+        ev(("p:SQ2-v1", "r:k_missing", "produces"), True, "dashed", "未驗證")
+        ev(("q:SQ1", "r:k1", "cites"), False, "solid")
+        ev(("q:SQ1", "r:legacy_key", "cites"), False, "solid")
+        ev(("d:D-001", "q:SQ1", "refers"), False, "solid")
+        ev(("d:D-002", "q:main", "refers"), False, "solid")
+        ev(("d:D-002", "q:SQ2", "refers"), False, "solid")
+        ev(("d:D-002", "d:D-001", "refers"), False, "solid")
+        ev(("d:D-001", "d:D-003", "supersedes"), False, "dashed")
+        assert ("d:D-003", "d:D-001", "supersedes") not in edges and ("v:V1", "p:SQ1-v2", "validated_by") not in edges
+        assert not any(e["from"] == "d:D-003" and e["type"] == "refers" for e in g["edges"]), "D-003 只靠 supersedes 對到 D-001，不再退回 q:main"
+        assert len({(e["from"], e["to"], e["type"]) for e in g["edges"]}) == len(g["edges"]), "邊須去重"
+        for e in g["edges"]:
+            assert isinstance(e["default_visible"], bool) and e["style"] in ("solid", "dashed")
         # 完全沒對到節點的決策 → refers 到 q:main
         (root / "decisions.yaml").write_text(IR_DECISIONS + "  - {id: D-004, date: \"2026-07-04\", stage: status, checkpoint: c, decision: 無連結, reason: r, links: [GOAL.md]}\n", encoding="utf-8")
         g2 = _graph_ir(root)["graph"]
         e4 = [e for e in g2["edges"] if e["from"] == "d:D-004"]
         assert [(e["to"], e["type"]) for e in e4] == [("q:main", "refers")] and "無對應節點" in e4[0]["source"], e4
         (root / "decisions.yaml").write_text(IR_DECISIONS, encoding="utf-8")
-        robust = [e for e in g["edges"] if e["type"] == "produces" and e["label"] == "R1"]
-        assert len(robust) == 1 and robust[0]["to"] == "r:k2" and robust[0]["meta"] == {"change": "換 block 尺度"}, robust
-        for e in g["edges"]:
-            assert e["source"], f"邊 {e['from']}→{e['to']} 無 source"
-        assert len({(e["from"], e["to"], e["type"]) for e in g["edges"]}) == len(g["edges"]), "邊須去重"
-        # shared：SQ1–SQ2 經 m:M-shared
+        # shared：SQ1–SQ2 共用 model:M-shared；via 為字串清單
         pairs = {(sh["a"], sh["b"]): sh for sh in g["shared"]}
         assert ("q:SQ1", "q:SQ2") in pairs, g["shared"]
-        assert "m:M-shared" in pairs[("q:SQ1", "q:SQ2")]["via"] and pairs[("q:SQ1", "q:SQ2")]["kinds"] == ["method"], pairs
-        assert "v:V1" not in pairs[("q:SQ1", "q:SQ2")]["via"], "V1 只在 SQ1 下游"
-        # validates 納入下游走法：把 V1 也掛到 SQ2 的鍵 → via 多出 v:V1、kinds 加 validation
+        assert pairs[("q:SQ1", "q:SQ2")]["via"] == ["model:M-shared"] and pairs[("q:SQ1", "q:SQ2")]["kinds"] == ["method"], pairs
+        assert not any("q:main" in (sh["a"], sh["b"]) for sh in g["shared"])
+        # V1（掛 SQ1-v2）的 primary_results 加上 k3 → SQ1 經 v:V1 也到得了 r:k3（SQ2 本就到得了）→ via 多 r:k3、kinds 加 result
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace("primary_results: [k1]", "primary_results: [k1, k3]"), encoding="utf-8")
         g_v = _graph_ir(root)["graph"]
         sh = [x for x in g_v["shared"] if (x["a"], x["b"]) == ("q:SQ1", "q:SQ2")][0]
-        assert "v:V1" in sh["via"] and sh["kinds"] == ["method", "validation"], sh
+        assert sh["via"] == ["model:M-shared", "r:k3"] and sh["kinds"] == ["method", "result"], sh
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
-        assert not any("q:main" in (sh["a"], sh["b"]) for sh in g["shared"]), "q:main 不沿 decomposes 走，不該有共用"
         assert g["stats"] == {"nodes": len(g["nodes"]), "edges": len(g["edges"]),
-                              "by_type": {"question": 4, "plan": 3, "method": 1, "result": 5, "validation": 1, "decision": 3},
-                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1}, g["stats"]
-        assert [t["id"] for t in g["node_types"]] == ["question", "plan", "result", "method", "validation", "decision"]
-        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "produces", "uses", "validates", "cites", "refers"]
-        assert [t["label"] for t in g["edge_types"] if t["id"] == "validates"] == ["驗證於"]
-        # stdout 摘要含關聯圖一句
+                              "by_type": {"question": 4, "method": 3, "validation": 1, "result": 5, "decision": 3},
+                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 2}, g["stats"]
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 2。" in out, out
 
 
 def test_graph_layout_deterministic() -> None:
@@ -1367,12 +1388,26 @@ def test_graph_html_tab() -> None:
         assert rc == 0, out + err
         html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
         for token in ('id="tab-relations"', 'id="tab-milestones"', "<svg", 'data-node-id="q:SQ1"', 'data-node-id="r:legacy_key"',
-                      "共用關係", "導覽", "Shift", 'data-tab="relations"', 'id="graph-search"', 'id="toggle-dec"', "關聯圖：節點"):
+                      "共用關係", "導覽", "Shift", 'data-tab="relations"', 'id="graph-search"', 'id="toggle-dec"', "關聯圖：節點",
+                      "顯示舊版計畫", "顯示全部邊", 'id="toggle-old"', 'id="toggle-alledges"', "未驗證旁路", "v2（1 舊版）"):
             assert token in html_text, f"HTML 缺 {token}"
+        for s_ in ("done", "expired", "blocked", "pending", "unknown"):
+            assert f'<input type="checkbox" data-gstate="{s_}" checked>' in html_text, f"缺 state 篩選 {s_}"
         for token in ("http://", "https://", "<link ", "src="):
             assert token not in html_text, f"HTML 不得含 {token}"
+        # 邊全為直角折線（M … L … Q 圓角），無三次貝茲
+        edge_ds = re.findall(r'<path class="edge[^>]*? d="([^"]*)"', html_text)
+        assert len(edge_ds) == len(json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]["edges"])
+        assert all(d.startswith("M") and " L" in d and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or " L" not in d][:3]
+        assert any(" Q" in d for d in edge_ds), "至少一條邊有圓角轉折"
+        # 預設隱藏的邊帶 off、收合的節點帶 gone、未驗證旁路帶 st-dashed、state 底色與符號
+        assert 'class="edge e-produces st-dashed" data-idx=' in html_text and 'class="edge e-cites st-solid off"' in html_text
+        assert 'class="gnode t-method s-expired gone"' in html_text and 'class="gnode t-method s-done"' in html_text
+        assert '<text class="sym" x="13" y="24">●</text>' in html_text and '<text class="sym" x="13" y="24">◐</text>' in html_text
+        assert '<text class="st" x="252" y="23" text-anchor="end">完成</text>' in html_text
+        assert "--bg-done:" in html_text and "--bg-expired:" in html_text
         # 決策節點與其邊帶 dec class；SVG 文字逸出
-        assert 'class="gnode t-decision s-none dec"' in html_text
+        assert 'class="gnode t-decision s-none dec gone"' in html_text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_text and "<script>alert" not in html_text
         parser = _TagBalance()
         parser.feed(html_text)
@@ -1389,7 +1424,8 @@ def test_graph_validation_gate() -> None:
         good = module.build_ir(root.resolve(), src, "2026-09-14T00:00:00+08:00")
         assert module.validate_ir(good) == [], module.validate_ir(good)
         bad = json.loads(json.dumps(good))
-        bad["graph"]["edges"].append({"from": "q:SQ1", "to": "r:nope", "type": "cites", "label": "", "source": "x", "meta": {}})
+        bad["graph"]["edges"].append({"from": "q:SQ1", "to": "r:nope", "type": "cites", "label": "", "source": "x", "meta": {},
+                                      "default_visible": False, "style": "solid"})
         bad["graph"]["stats"]["edges"] += 1
         errors = module.validate_ir(bad)
         assert errors and all(e.startswith("IR-") for e in errors), errors
@@ -1397,9 +1433,14 @@ def test_graph_validation_gate() -> None:
         bad2 = json.loads(json.dumps(good))
         bad2["graph"]["nodes"][0]["id"] = "zz:main"
         bad2["graph"]["nodes"][1]["x"] = "20"
+        bad2["graph"]["nodes"][2]["col"] = 3
+        bad2["graph"]["nodes"][3]["collapsed"] = "no"
+        del bad2["graph"]["edges"][0]["default_visible"]
+        bad2["graph"]["edges"][1]["style"] = "dotted"
         errors = module.validate_ir(bad2)
         assert any(e.startswith("IR-12 ") and e.endswith("[0].id") for e in errors), errors
-        assert "IR-12 graph.nodes[1].x" in errors, errors
+        assert "IR-12 graph.nodes[1].x" in errors and "IR-12 graph.nodes[2].col" in errors and "IR-12 graph.nodes[3].collapsed" in errors, errors
+        assert "IR-13 graph.edges[0].default_visible" in errors and "IR-13 graph.edges[1].style" in errors, errors
         bad3 = json.loads(json.dumps(good))
         del bad3["graph"]
         assert "IR-01 top-level.graph" in module.validate_ir(bad3)
@@ -1420,8 +1461,8 @@ def test_graph_empty_fixtures() -> None:
         ir = _graph_ir(root)
         g = ir["graph"]
         assert [n["id"] for n in g["nodes"]] == ["q:main"] and g["edges"] == [] and g["shared"] == [], g
-        assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "plan": 0, "method": 0, "result": 0, "validation": 0, "decision": 0},
-                              "shared_pairs": 0, "dangling_result_keys": 0}
+        assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "decision": 0},
+                              "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0}
         rc, out, err = run_progress(root)
         assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err
         assert "<svg" in (root / "PROGRESS.html").read_text(encoding="utf-8")
@@ -1505,13 +1546,13 @@ def main() -> int:
     test_progress_ir_validation_gate()
     print("[regression] render_progress validate_ir 回 IR- 代碼；壞 IR → 主程式 exit 2 不落檔；根目錄不存在 → exit 2: pass")
     test_graph_full_fixture()
-    print("[regression] graph IR 完整 fixture：q/p/r/m/v/d 節點、supersedes 舊→新、validates r／p→v、produces R1、cites dangling、refers、shared 經 m:（validates 納入下游）、stats、欄序與分組列序、stdout 一句: pass")
+    print("[regression] graph IR 完整 fixture：方法節點＝計畫版本（models／badge／collapsed）、validated_by p→v、primary v→r、未驗證旁路 dashed 可見／已驗證 hidden、cites／refers hidden、shared via model:、stats 含 unvalidated、收合檢視 y、欄序: pass")
     test_graph_layout_deterministic()
     print("[regression] graph 版面確定性：同 fixture 兩次 graph 逐位元相同、HTML 除 generated_at 外相同: pass")
     test_graph_html_tab()
-    print("[regression] HTML 關聯分頁：tab-relations／svg／data-node-id／共用關係／導覽／Shift、無外部 URL、SVG 文字逸出、tag 全閉合: pass")
+    print("[regression] HTML 關聯分頁：分頁／svg／state 篩選／顯示舊版計畫／顯示全部邊、直角折線無貝茲、off／gone／st-dashed、state 符號與底色、無外部 URL、逸出、tag 全閉合: pass")
     test_graph_validation_gate()
-    print("[regression] validate_ir graph 規則：邊指到不存在節點 IR-13、id 前綴／x 型別 IR-12、缺 graph IR-01；壞 IR → exit 2 不落檔: pass")
+    print("[regression] validate_ir graph 規則：邊指到不存在節點／default_visible／style IR-13、id 前綴／x／col／collapsed IR-12、缺 graph IR-01；壞 IR → exit 2 不落檔: pass")
     test_graph_empty_fixtures()
     print("[regression] 空 fixture：無 goals → graph 只有 q:main；有 goals 無其他 SSOT → 只有 decomposes 邊: pass")
     print("PASS v0.11.0 regressions")
