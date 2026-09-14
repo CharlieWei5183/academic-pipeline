@@ -1162,7 +1162,7 @@ def test_progress_html_self_contained_and_escaped() -> None:
         raw = (root / "PROGRESS.html").read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw, "HTML 有 BOM 或 CR"
         html_text = raw.decode("utf-8")
-        for token in ("http://", "https://", "<link ", "src="):
+        for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text, f"HTML 不得含 {token}"
         assert html_text.count("<script") == 3, "只允許內嵌 IR、里程 JS、關聯 JS 三個 script"
         assert '<script id="progress-ir" type="application/json">' in html_text
@@ -1219,7 +1219,7 @@ def test_progress_ir_validation_gate() -> None:
         assert "IR-06 lanes[1].nodes[0].date" in errors and "IR-07 lanes[1].nodes[0].evidence[0]" in errors and "IR-02 stages" in errors, errors
         # 主程式：build_ir 被換成壞 IR → exit 2、不落檔
         before = _sha_tree(root)
-        module.build_ir = lambda root, src, generated_at: bad
+        module.build_ir = lambda root, src, generated_at, embed_figures=False: bad
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1272,8 +1272,8 @@ def test_graph_full_fixture() -> None:
                     "r:k1", "r:k2", "r:k3", "r:legacy_key", "r:k_missing", "v:V1", "d:D-001", "d:D-002", "d:D-003"):
             assert nid in nodes, f"graph 缺節點 {nid}: {sorted(nodes)}"
         assert not any(nid.startswith("m:") for nid in nodes), "不得再有 m: 節點"
-        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "decision"]
-        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "validated_by", "primary", "robustness", "produces", "cites", "refers"]
+        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"]
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "validated_by", "primary", "robustness", "produces", "depicts", "cites", "refers"]
         assert [t["label"] for t in g["edge_types"] if t["id"] == "robustness"] == ["穩健性"]
         assert nodes["q:main"]["title"] == "主問題一句" and nodes["q:main"]["state"] == ""
         assert nodes["q:SQ1"]["state"] == "done" and nodes["q:SQ2"]["state"] == "blocked" and nodes["q:AQ1"]["state"] == "pending"
@@ -1312,7 +1312,7 @@ def test_graph_full_fixture() -> None:
         assert all(len(v) == 1 for v in xs.values()), xs
         order = [next(iter(xs[t])) for t in ("question", "method", "validation", "result", "decision")]
         assert order == sorted(order) and len(set(order)) == 5, order
-        assert [nodes[i]["col"] for i in ("q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 4]
+        assert [nodes[i]["col"] for i in ("q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 5], "圖表欄為 4"
         # 收合檢視：collapsed 節點不佔列（y 借用現行版）、同欄可見 y 連續；order 含 collapsed 節點
         y = {n["id"]: n["y"] for n in g["nodes"]}
         assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1")] == [0, 1, 2]
@@ -1384,8 +1384,8 @@ def test_graph_full_fixture() -> None:
         assert sh["via"] == ["model:M-shared", "r:k3"] and sh["kinds"] == ["method", "result"], sh
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         assert g["stats"] == {"nodes": len(g["nodes"]), "edges": len(g["edges"]),
-                              "by_type": {"question": 4, "method": 3, "validation": 1, "result": 5, "decision": 3},
-                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1}, g["stats"]
+                              "by_type": {"question": 4, "method": 3, "validation": 1, "result": 5, "figure": 0, "decision": 3},
+                              "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0}, g["stats"]
         # 拿掉 robustness → k2 回到未驗證：旁路可見、unvalidated 多 1
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
         g_n = _graph_ir(root)["graph"]
@@ -1395,7 +1395,7 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、圖表 0 張（未審 0）。" in out, out
 
 
 def test_graph_layout_deterministic() -> None:
@@ -1427,7 +1427,7 @@ def test_graph_html_tab() -> None:
             assert token in html_text, f"HTML 缺 {token}"
         for s_ in ("done", "expired", "blocked", "pending", "unknown"):
             assert f'<input type="checkbox" data-gstate="{s_}" checked>' in html_text, f"缺 state 篩選 {s_}"
-        for token in ("http://", "https://", "<link ", "src="):
+        for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text, f"HTML 不得含 {token}"
         # 邊全為直角折線（M … L … Q 圓角），無三次貝茲
         edge_ds = re.findall(r'<path class="edge[^>]*? d="([^"]*)"', html_text)
@@ -1483,7 +1483,7 @@ def test_graph_validation_gate() -> None:
         del bad3["graph"]
         assert "IR-01 top-level.graph" in module.validate_ir(bad3)
         before = _sha_tree(root)
-        module.build_ir = lambda root, src, generated_at: bad
+        module.build_ir = lambda root, src, generated_at, embed_figures=False: bad
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1499,8 +1499,8 @@ def test_graph_empty_fixtures() -> None:
         ir = _graph_ir(root)
         g = ir["graph"]
         assert [n["id"] for n in g["nodes"]] == ["q:main"] and g["edges"] == [] and g["shared"] == [], g
-        assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "decision": 0},
-                              "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0}
+        assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "figure": 0, "decision": 0},
+                              "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0, "figures_unreviewed": 0}
         rc, out, err = run_progress(root)
         assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err
         assert "<svg" in (root / "PROGRESS.html").read_text(encoding="utf-8")

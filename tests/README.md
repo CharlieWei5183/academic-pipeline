@@ -211,3 +211,14 @@ v0.11.0 為進度時間軸補齊 `decisions.yaml` 的資料來源，以錨點字
 - 雜湊紅線：fixture 多放 `analysis/results.json`、`plans/index.yaml`、`validation.yaml`、`methodology/route.yaml`，執行前後 SSOT 逐檔 sha256 相同；預放的舊 `PROGRESS.html` 被覆寫、舊 `.progress-hook.log` 被追加（第一行仍為舊內容）。
 - log 截斷：預放 220 KB 的 log → 執行後 ≤100 KB＋兩行新紀錄，截斷對齊換行不留半行。
 - 登記錨點：README artifacts block 含 `.progress-hook.log`、有「自動重算」與「逃生口」；`project-init` 步驟 4 樹含 `.progress-hook.log`（註明 hook）；`status` SKILL.md 含 `SessionEnd`／`progress_hook.py`／`.progress-hook.log`／`ACADEMIC_PIPELINE_PROGRESS_HOOK`；CHANGELOG 0.11.0 段有第 9 條並含 `hooks/hooks.json`；本檔含「自動觸發」。frontmatter 未動。
+
+## run_v0120_regressions.py
+
+v0.12.0 為關聯圖加第五欄「圖表」與結果節點面板的表／圖，全部以 `tempfile.TemporaryDirectory` 動態建 fixture（`project.yaml` 兩個 SQ、兩份 active plan、`results.json` 三鍵——k1 三列表、k2 純量含 value／display／unit、k3 250 列表、`validation.yaml` V1 primary [k1]、`analysis/figures/manifest.json` 兩張圖——`fig_a` 掛 k1、`registered_not_reviewed`、file 為 tempdir 內真的小 svg，`fig_b` 掛不存在的 `nope` 且無 file）、讀磁碟實際產出斷言：
+
+- 圖表節點與 depicts 邊：`node_types` 順序 question／method／validation／result／figure／decision、`edge_types` 含 `depicts`（「呈現於」）；`f:fig_a`（col 4、badge「主圖」、pending、title「已登錄未審：」＋去 markdown 的 caption、meta 帶 file／files／role／figure_number／status／script／registered_at／results_keys／caption／spec、預設無 `data_uri`）；`f:fig_b`（無 file → unknown「檔案不存在」、badge「無對應結果鍵」、stderr `WARNING …figures[fig_b].results_keys 指到不在圖裡的鍵: nope`、無 depicts 邊、不反向建 `r:nope`）；`r:k1→f:fig_a depicts` 可見 solid label「呈現於」；k1 `meta.table == {columns, rows（3 列）, n_rows 3, truncated false}` 與 `description`、k2 無 table 而有 value／display／unit、k3 `n_rows 250`／`truncated true`／rows 200 列；`stats.by_type.figure == 2`、`figures_unreviewed == 2`；圖表欄 fig_a 在 fig_b 前；SQ1／SQ2 不因 depicts 誤共用；stdout 摘要含「圖表 2 張（未審 2）。」。
+- figure state 規則：`confirmed`／`reviewed` → done、`draft` → pending 無前綴、部分鍵對到 → 建邊＋WARNING 並保留 role 徽章、無 `results_keys` → 徽章「無結果鍵」＋INFO；`figures_unreviewed` 只算 state 非 done；manifest 無法解析 → WARNING、無圖表節點、exit 0；manifest 缺 → 無圖表節點、無 depicts 邊。
+- `--embed-figures`：`meta.data_uri` 以 `data:image/svg+xml;base64,` 開頭且解回原 svg、無檔的圖不內嵌、`--dry-run` 不落檔；寫檔後 HTML 與 IR 都含 data URI；預設 HTML 不含 `data:image`；> 5 MB 的 svg 跳過並 `WARNING … 超過 5 MB`、state 不受影響。
+- HTML：含 `id="lightbox"`、figure 圖例色與「呈現於（depicts）」、`t-figure` 節點、`e-depicts` 邊、`loading="lazy"`、「找不到檔案：」、表格與圖表的 JS 片段、導覽文字的圖表段；自含改為無 `http://`／`https://`／`<link `／`src="http`；靜態 HTML 只有燈箱那個不帶 src 的 `<img>`；SSOT 字串（`x<y`、`<b>`）在內嵌 IR 逸出成 `\u003c`；無 BOM／CR；`html.parser` tag 平衡；里程分頁錨點仍在。
+- `validate_ir`：figure `meta.files` 非清單、`data_uri` 不以 `data:` 開頭、result `meta.table.rows` 非清單、缺 `stats.figures_unreviewed`、id 前綴 `x:` → 各自的 `IR-12`／`IR-14`。
+- 登記錨點：CHANGELOG `## 0.12.0（未發布）` 含 figure／depicts／`--embed-figures`／figures_unreviewed；`status` SKILL.md 含 `--embed-figures`（frontmatter 未動）；本檔與 README 含 `run_v0120_regressions.py`；README artifacts 說明含「看表與圖」。
