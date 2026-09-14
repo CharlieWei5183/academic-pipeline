@@ -105,22 +105,32 @@ def active_plan_paths(root: Path, blockers: list[str]) -> list[str]:
     return paths
 
 
-def project_claim_context(project: dict[str, Any]) -> dict[str, Any]:
+QUESTION_CONTEXT_FIELDS = ("id", "question", "why", "evidence", "success_criteria", "role", "origin")
+
+
+def question_context(items: Any) -> list[Any]:
     questions: list[Any] = []
-    for item in ((project.get("goals") or {}).get("sub_questions") or []):
+    for item in (items or []):
         if not isinstance(item, dict):
             questions.append(item)
             continue
-        questions.append({
-            key: item.get(key)
-            for key in ("id", "question", "why", "evidence", "success_criteria", "role", "origin")
-            if key in item
-        })
-    return {
+        questions.append({key: item.get(key) for key in QUESTION_CONTEXT_FIELDS if key in item})
+    return questions
+
+
+def project_claim_context(project: dict[str, Any]) -> dict[str, Any]:
+    goals = project.get("goals") or {}
+    context = {
         "methodology": project.get("methodology") or {},
         "research_question": (project.get("project") or {}).get("research_question"),
-        "sub_questions": questions,
+        "sub_questions": question_context(goals.get("sub_questions")),
     }
+    # 附錄問題另列一鍵、不混進 sub_questions；只在非空時加入，沒有附錄問題的專案
+    # source_fingerprint 維持不變。
+    appendix = question_context(goals.get("appendix_questions"))
+    if appendix:
+        context["appendix_questions"] = appendix
+    return context
 
 
 def source_records(

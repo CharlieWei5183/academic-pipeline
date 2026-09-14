@@ -10,6 +10,7 @@ from plan_common import (
     ADAPTER_REQUIREMENTS,
     adapter_validation_requirements,
     dump_yaml,
+    goal_kinds,
     goal_map,
     load_yaml,
     next_plan_id,
@@ -37,7 +38,7 @@ def main() -> int:
         print(f"找不到 {project_path}")
         return 2
     project = load_yaml(project_path)
-    goals = goal_map(project)
+    goals = goal_map(project)  # 含 appendix_questions：附錄問題（AQ#）也能建 plan
     if args.sq not in goals:
         print(f"goals 無 {args.sq}")
         return 2
@@ -51,6 +52,9 @@ def main() -> int:
         return 2
 
     sq = goals[args.sq]
+    # 附錄問題 defend 主答案而非承重，template 也沒有 role 欄；未明寫時預設 secondary，
+    # 主問題維持 primary。plan 的 role 仍可在草案中手動改。
+    default_role = "secondary" if goal_kinds(project).get(args.sq) == "aq" else "primary"
     plan_id = next_plan_id(root / "analysis" / "plans", args.sq)
     out = plan_path(root, plan_id)
     if out.exists():
@@ -73,7 +77,7 @@ def main() -> int:
         "changes": [] if not args.supersedes else ["【請填與前版差異】"],
         "origin": str(sq.get("origin") or ""),
         "question": sq.get("question", ""),
-        "role": str(sq.get("role") or "primary"),
+        "role": str(sq.get("role") or default_role),
         "analysis_unit": "",
         "inclusion": [],
         "exclusion": [],

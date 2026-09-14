@@ -345,8 +345,12 @@ def collect_input_components(root: Path, order: list[RunEntry]) -> list[dict[str
         project = load_yaml(project_path)
         goals = project.get("goals") or {}
         canonical_goals: dict[str, Any] = {}
+        # sub_questions 與 appendix_questions 同一份欄位白名單：只有問題本身（id／question／
+        # why／evidence／success_criteria／role／origin）進 fingerprint，status／status_reason／
+        # links 這類進度欄位改動不會讓 validation 過期。空的 appendix_questions（[]）前後都是
+        # []，沒有附錄問題的專案 fingerprint 不變。
         for key, value in goals.items():
-            if key != "sub_questions" or not isinstance(value, list):
+            if key not in {"sub_questions", "appendix_questions"} or not isinstance(value, list):
                 canonical_goals[key] = value
                 continue
             canonical_goals[key] = [

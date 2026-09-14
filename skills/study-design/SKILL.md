@@ -33,6 +33,8 @@ metadata:
      --timing retrospective-before-analysis
    ```
 
+   附錄問題（`goals.appendix_questions`，id `AQ#`）也能用同一支指令建 plan（`--sq AQ1`），封存、index、results 預宣告與 validation 走同一套關卡；AQ 的 goals 沒寫 `role` 時 plan 的 `role` 預設 `secondary`（defend 主答案，不承重）。差別只有一項：`check_plan.py` 對 evidence 含 analysis 的 AQ 缺 active plan 只 WARNING（`AQ1: index.active 無 confirmed plan（附錄問題，不擋）`），主問題缺 plan 仍是 BLOCKER。protocol 的 `sub_questions` 只列主問題。
+
    已確認計畫要改時，禁止原地編輯；先建立新版本：
 
    ```bash
@@ -57,6 +59,8 @@ metadata:
    ```bash
    python3 <skill路徑>/scripts/check_plan.py <專案根> --require-confirmed
    ```
+
+   統計行分列 SQ 與 AQ（`checked SQ n + AQ m`）；`--sq AQ1` 可只查一個附錄問題。
 
 7. 更新 `state.study_design`，含 protocol、active plans、result、at。下一站 data-audit；若 audit 發現會改變納排或模型的問題，回本 skill 做 amendment。
 

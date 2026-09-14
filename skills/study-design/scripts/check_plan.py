@@ -2,8 +2,12 @@
 """Validate the study protocol, versioned plan index, sealed plan hashes, and optional results links.
 
 Usage:
-  python3 check_plan.py <project-root> [--sq SQ1] [--require-confirmed]
+  python3 check_plan.py <project-root> [--sq SQ1|AQ1] [--require-confirmed]
       [--results analysis/results.json]
+
+goals.sub_questions（SQ#）與 goals.appendix_questions（AQ#）的 plan 走同一套檢查（shape、
+sq／plan_id 一致、confirmed、content_hash、index hash、results 的 plan_id 與預宣告）；唯一差別是
+AQ 缺 active plan 只 WARNING（附錄問題不擋），SQ 缺 active plan 仍 BLOCKER。
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ except ImportError:
 
 from plan_common import (
     content_hash,
+    goal_kinds,
     goal_map,
     load_index,
     load_yaml,
@@ -74,7 +79,8 @@ def main() -> int:
     active = index.get("active") or {}
     entries = [x for x in (index.get("plans") or []) if isinstance(x, dict)]
     entry_by_id = {str(x.get("plan_id")): x for x in entries if x.get("plan_id")}
-    goals = goal_map(project)
+    goals = goal_map(project)  # SQ# 與 AQ# 都收
+    kinds = goal_kinds(project)  # id → 'sq' | 'aq'
 
     required_sqs = []
     primary_adapter = str((project.get("methodology") or {}).get("primary") or "quantitative-inference")
@@ -95,7 +101,11 @@ def main() -> int:
     for sqid in required_sqs:
         pid = active.get(sqid)
         if not pid:
-            blockers.append(f"{sqid}: index.active 無 confirmed plan")
+            # 附錄問題 defend 主答案，沒有 plan 不擋關；主問題缺 plan 仍是 blocker。
+            if kinds.get(sqid) == "aq":
+                warnings.append(f"{sqid}: index.active 無 confirmed plan（附錄問題，不擋）")
+            else:
+                blockers.append(f"{sqid}: index.active 無 confirmed plan")
             continue
         entry = entry_by_id.get(str(pid))
         if not entry:
@@ -164,7 +174,11 @@ def main() -> int:
         print(f"BLOCKER {msg}")
     for msg in warnings:
         print(f"WARNING {msg}")
-    print(f"--- checked SQ {len(required_sqs)}; {len(blockers)} blocker(s), {len(warnings)} warning(s) ---")
+    n_aq = sum(1 for x in required_sqs if kinds.get(x) == "aq")
+    print(
+        f"--- checked SQ {len(required_sqs) - n_aq} + AQ {n_aq}; "
+        f"{len(blockers)} blocker(s), {len(warnings)} warning(s) ---"
+    )
     print("結果: " + ("未通過" if blockers else "通過"))
     return 1 if blockers else 0
 

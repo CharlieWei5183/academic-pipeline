@@ -7,7 +7,7 @@
 檢查:
 - schema: id 形如 E+序號且唯一; trigger/scope/finding 非空（三個月後要可讀）;
   disposition ∈ {promoted, noted, dropped}
-- promoted 必有 sq, 該 SQ 存在於 goals 且帶對應 origin: E# → 否則 BLOCKER
+- promoted 必有 sq, 該 SQ（或附錄問題 AQ#）存在於 goals 且帶對應 origin: E# → 否則 BLOCKER
 - artifacts 路徑存在（且應位於 analysis/exploration/ 下, 否則 WARNING）
 - 分艙防線: figures/manifest.json 與稿件不得引用 analysis/exploration/ 下的檔案
   → 違者 BLOCKER（與 check_numbers 既有防線互補）
@@ -53,8 +53,11 @@ def main():
     doc = yaml.safe_load(open(log_path, encoding='utf-8')) or {}
     proj = yaml.safe_load(open(proj_path, encoding='utf-8')) or {}
     entries = doc.get('explorations') or []
-    sqs = {sq.get('id'): sq for sq in
-           ((proj.get('goals') or {}).get('sub_questions') or [])}
+    # 探索可轉正成主問題（SQ#）或附錄問題（AQ#）；兩個清單的 id 都合法
+    sqs = {sq.get('id'): sq
+           for list_name in ('sub_questions', 'appendix_questions')
+           for sq in ((proj.get('goals') or {}).get(list_name) or [])
+           if isinstance(sq, dict)}
 
     blockers, warnings = [], []
     seen = set()

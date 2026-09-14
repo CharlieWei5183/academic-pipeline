@@ -2,12 +2,16 @@
 """Validate analysis/validation.yaml against current results, active plans, and artifacts.
 
 Usage:
-  python3 check_validation.py <project-root> [--sq SQ1] [--strict]
+  python3 check_validation.py <project-root> [--sq SQ1|AQ1] [--strict]
   python3 check_validation.py <project-root> --fingerprint-only
   python3 check_validation.py <project-root> --source-fingerprint-only
 
 For v0.7 projects, the checker also proves that every validation check declared by the
 active plan (and therefore by its methodology adapter) was explicitly assessed.
+
+items[].sq 可為 goals.sub_questions（SQ#）或 goals.appendix_questions（AQ#）的 id；有 item 的
+AQ 與 SQ 走同一套逐項檢查。唯一差別：有結果卻沒有任何 validation item 的 AQ 只 WARNING，
+SQ 仍 BLOCKER（附錄問題 defend 主答案，不擋關）。
 """
 from __future__ import annotations
 
@@ -216,11 +220,14 @@ def main() -> int:
     elif not (root / report).is_file():
         blockers.append(f"validation.report 不存在: {report}")
 
-    goals = {
-        str(item.get("id")): item
-        for item in ((project.get("goals") or {}).get("sub_questions") or [])
-        if isinstance(item, dict) and item.get("id")
-    }
+    # SQ# 與 AQ# 都是合法的 items[].sq；同 id 兩邊都有時主問題優先。
+    goals: dict[str, dict[str, Any]] = {}
+    goal_kind: dict[str, str] = {}
+    for list_name, kind in (("sub_questions", "sq"), ("appendix_questions", "aq")):
+        for item in ((project.get("goals") or {}).get(list_name) or []):
+            if isinstance(item, dict) and item.get("id") and str(item["id"]) not in goals:
+                goals[str(item["id"])] = item
+                goal_kind[str(item["id"])] = kind
     active, plans, plan_blockers = active_plan_docs(root)
     if strict:
         blockers.extend(plan_blockers)
@@ -419,7 +426,11 @@ def main() -> int:
         target_sqs = [args.sq]
     for sq in target_sqs:
         if sq not in by_sq:
-            blockers.append(f"{sq}: 無 validation item")
+            # 附錄問題沒有 validation item 不擋關；一旦有 item 就與 SQ 同一套驗。
+            if goal_kind.get(sq) == "aq":
+                warnings.append(f"{sq}: 無 validation item（附錄問題，不擋）")
+            else:
+                blockers.append(f"{sq}: 無 validation item")
         elif not any(item.get("status") in {"pass", "qualified"} for item in by_sq[sq]):
             blockers.append(f"{sq}: 無 pass/qualified validation")
 
@@ -435,9 +446,10 @@ def main() -> int:
         print(f"BLOCKER {message}")
     for message in warnings:
         print(f"WARNING {message}")
+    n_target_aq = sum(1 for sq in target_sqs if goal_kind.get(sq) == "aq")
     print(
-        f"--- items {len(items)}; target SQ {len(target_sqs)}; adapter checks "
-        f"{sum(len(value) for value in required_by_plan.values())}; "
+        f"--- items {len(items)}; target SQ {len(target_sqs) - n_target_aq} + AQ {n_target_aq}; "
+        f"adapter checks {sum(len(value) for value in required_by_plan.values())}; "
         f"{len(blockers)} blocker(s), {len(warnings)} warning(s) ---"
     )
     print("結果: " + ("未通過" if blockers else "通過"))
