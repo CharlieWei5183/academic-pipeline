@@ -167,13 +167,14 @@ v0.11.0 為進度時間軸補齊 `decisions.yaml` 的資料來源，以錨點字
 
 階段 2 在同一檔追加 `render_progress.py`（進度時間軸 renderer）的測試，全部以 `tempfile.TemporaryDirectory` 建 fixture、讀磁碟上實際產出的 `PROGRESS.md` 斷言，結束自動清除：
 
-- 欄位完整專案（3 筆四軸齊全、其中一筆 `links: [results.k1]`、一筆有 `exec_issue`）→ 表格 3 列、統計「共 3 筆記錄，其中 3 筆有完整四軸」、問題欄分別為 `main`／`SQ1`／`SQ1 › <exec_issue>`、`k1` 那列含 fixture 的 `script`／`run_id`／`data_fingerprint`、mermaid 區塊含 `timeline`；執行前後 fixture 逐檔 sha256 相同、只多出 `PROGRESS.md`；產出無 BOM、無 `\r`、檔尾恰一個換行；重跑除「產生時間」外相同。
+- 欄位完整專案（3 筆四軸齊全、其中一筆 `links: [results.k1]`、一筆有 `exec_issue`）→ 表格 3 列、統計「共 3 筆記錄，其中 3 筆有完整四軸」、問題欄分別為 `main`／`SQ1`／`SQ1 › <exec_issue>`、`k1` 那列含 fixture 的 `script`／`run_id`／`data_fingerprint`、mermaid 區塊為 `gantt`（section 順序 `main`→`SQ1`、section 內依日期升冪、每列 `milestone, <日期>, 0d`）；執行前後 fixture 逐檔 sha256 相同、只多出 `PROGRESS.md`；產出無 BOM、無 `\r`、檔尾恰一個換行；重跑除「產生時間」外相同。
 - 舊格式專案（只有必填欄、缺 `date`、缺 `stage`）→ exit 0、三列都在、對應欄顯示 `unknown`、缺日期那列排最後、「共 3 筆記錄，其中 0 筆有完整四軸」，且不用 `checkpoint`／`decision` 代填。
 - `exec_issue` 非空而 `question` 缺 → 問題欄「unknown › <exec_issue>」、問題軸不計、不算完整四軸；JSON rows 的 `question` 為 `unknown`、`exec_issue` 為原文。
 - `decisions: []` 與沒有 `decisions.yaml`（同時缺 `project.yaml`／`results.json`）→ exit 0、「共 0 筆記錄」、表頭存在、無 mermaid 區塊、有「無記錄」。
 - `--dry-run` → 目錄檔案清單與雜湊完全不變、無 `PROGRESS.md`、stdout 含 `## 記錄表`；`--dry-run --json` 只印 JSON。
 - `--json` → stdout 可 `json.loads`，`n_total`／`n_complete`／`len(rows)`／`axes`（鍵為 `date`／`method`／`question`／`evidence`）／`sources`／`mermaid` 與 fixture 一致，`rows[0]` 有全部欄位（含 `question`、`exec_issue`）；單獨使用仍寫檔。
-- `method` 含半形 `:` → exit 0、表格仍有該列、檔內無 ```` ```mermaid ```` 而有「時間軸略過」與該 id。
+- `method` 含半形 `:` → exit 0、表格仍有該列、檔內無 ```` ```mermaid ```` 而有「時間軸略過」與該 id；`question` 含半形 `:` → 同樣略過並註明 section 名。
+- gantt section 順序：fixture 含 `main`、`SQ2`、`SQ10`、`AQ1`、自由文字、缺 question → 斷言 section 序為 main, SQ2, SQ10, AQ1, 自由文字, unknown（整數序，非字串序）；缺 date 與非 ISO date 的列不入圖、圖下「無日期未入圖：D-007、D-008。」、JSON `mermaid.undated_ids` 一致；全部列都無已知日期 → 無 ```` ```mermaid ```` 而有「無已知日期的記錄」。
 - `results.<key>` 找不到 → 憑據含「results.json 無此鍵」；無 `results.json` → 含「無 results.json」。
 - 根目錄不存在／`decisions.yaml` 無法解析 → exit 2、無 traceback、不落檔。
 - 登記錨點：README 含 `PROGRESS.md` 與 `render_progress.py`；`project-init` 步驟 4 樹含 `PROGRESS.md`；`status` SKILL.md 含 `render_progress.py`（frontmatter 未動）；CHANGELOG 0.11.0 段含 `render_progress.py`。

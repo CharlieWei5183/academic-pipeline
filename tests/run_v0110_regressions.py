@@ -345,6 +345,17 @@ def _table_rows(progress: str) -> list[str]:
             if line.startswith("| ") and not line.startswith("| 編號") ]
 
 
+def _gantt_block(progress: str) -> str:
+    """```mermaid … ``` 區塊內容；沒有就回空字串。"""
+    m = re.search(r"```mermaid\n(.*?)\n```", progress, re.S)
+    return m.group(1) if m else ""
+
+
+def _sections(progress: str) -> list[str]:
+    return [line[len("    section "):] for line in _gantt_block(progress).splitlines()
+            if line.startswith("    section ")]
+
+
 def _stats(progress: str) -> tuple[int, int]:
     m = STATS_RE.search(progress)
     assert m, f"統計行缺失或格式不符:\n{progress}"
@@ -455,6 +466,26 @@ RENDER_EXEC_ISSUE_NO_QUESTION = """decisions:
     evidence: [a.py]
 """
 
+RENDER_SECTIONS = """decisions:
+  - {id: D-001, date: "2026-07-14", stage: project-init, checkpoint: c, decision: x, reason: y}
+  - {id: D-002, date: "2026-07-15", stage: analyze-data, checkpoint: c, decision: x, reason: y, question: SQ10, method: m10}
+  - {id: D-003, date: "2026-07-15", stage: analyze-data, checkpoint: c, decision: x, reason: y, question: SQ2, method: m2, exec_issue: 快取}
+  - {id: D-004, date: "2026-07-13", stage: study-design, checkpoint: c, decision: x, reason: y, question: main, method: 研究設計}
+  - {id: D-005, date: "2026-07-16", stage: validate-results, checkpoint: c, decision: x, reason: y, question: AQ1, method: 敏感度}
+  - {id: D-006, date: "2026-07-12", stage: evaluate, checkpoint: c, decision: x, reason: y, question: 其他, method: 自由文字}
+  - {id: D-007, stage: evaluate, checkpoint: c, decision: x, reason: y, question: SQ2, method: 無日期}
+  - {id: D-008, date: "2026/07/17", stage: evaluate, checkpoint: c, decision: x, reason: y, question: SQ2, method: 非ISO}
+"""
+
+RENDER_ALL_UNDATED = """decisions:
+  - {id: D-001, stage: project-init, checkpoint: c, decision: x, reason: y, question: main, method: m}
+  - {id: D-002, date: "七月", stage: evaluate, checkpoint: c, decision: x, reason: y, question: SQ1, method: m}
+"""
+
+RENDER_UNSAFE_SECTION = """decisions:
+  - {id: D-001, date: "2026-07-10", stage: analyze-data, checkpoint: c, decision: x, reason: y, question: "SQ1: 主結果", method: m}
+"""
+
 RENDER_MISSING_KEY = """decisions:
   - id: D-001
     date: "2026-07-10"
@@ -507,9 +538,15 @@ def test_render_full_project() -> None:
         k1_row = [r for r in rows if r.startswith("| D-001 ")][0]
         assert "results.k1 → analysis/scripts/01_fit_model.py" in k1_row, k1_row
         assert "run run-2026-07-12" in k1_row and "sha256:0123456789abcdef0123" in k1_row, k1_row
-        assert "```mermaid" in progress and "timeline" in progress, progress
+        assert "```mermaid" in progress and "\ngantt\n" in progress, progress
         assert "    title 渲染測試專案" in progress, progress
-        assert "    2026-07-11 : study-design：重算 hash 後再封存" in progress, progress
+        assert "    dateFormat YYYY-MM-DD" in progress and "    todayMarker off" in progress, progress
+        # section 依 question：main 在前、SQ1 在後；section 內依日期升冪
+        assert _sections(progress) == ["main", "SQ1"], _sections(progress)
+        assert "    D-002 project-init：project-init 訪談＋拆解審 : milestone, 2026-07-10, 0d" in progress, progress
+        assert "    D-003 study-design：重算 hash 後再封存 : milestone, 2026-07-11, 0d" in progress, progress
+        assert progress.index("D-003 study-design：") < progress.index("D-001 analyze-data："), "section 內須依日期升冪"
+        assert "無日期未入圖" not in progress, progress
         # 問題欄：question；有 exec_issue 時「question › exec_issue」
         assert "| D-002 | 2026-07-10 | project-init | project-init 訪談＋拆解審 | main | python3" in progress, progress
         assert "| D-003 | 2026-07-11 | study-design | 重算 hash 後再封存 | SQ1 › 封存前 index.yaml 的 hash 與 plan 不符 | python3" in progress, progress
@@ -538,8 +575,12 @@ def test_render_old_format_project() -> None:
         assert "| D-002 | unknown | evaluate | unknown | unknown |  |" in progress, progress
         assert "| D-003 | 2026-07-11 | unknown | unknown | unknown |  |" in progress, progress
         assert _stats(progress) == (3, 0), progress
-        # 缺日期的列合成最後一個 period unknown
-        assert "    unknown : evaluate：unknown" in progress, progress
+        # 缺日期的列不入圖、列在圖下；有日期但 question 缺的列進 section unknown
+        assert "```mermaid" in progress, progress
+        assert _sections(progress) == ["unknown"], _sections(progress)
+        assert "    D-001 project-init：unknown : milestone, 2026-07-10, 0d" in progress, progress
+        assert "無日期未入圖：D-002。" in progress, progress
+        assert "D-002" not in _gantt_block(progress), _gantt_block(progress)
         # 不得用 checkpoint／decision 代填方法與問題
         assert "拆解審確認" not in "\n".join(rows) and "只有必填欄" not in "\n".join(rows), rows
 
@@ -595,7 +636,7 @@ def test_render_json_output() -> None:
         assert data["axes"] == {"date": 3, "method": 3, "question": 3, "evidence": 3}, data
         assert LEGACY_FIELD not in data["axes"] and LEGACY_FIELD not in data["rows"][0], data
         assert data["sources"] == {"decisions": True, "project": True, "results": True}, data
-        assert data["mermaid"] == {"included": True, "skipped_reason": ""}, data
+        assert data["mermaid"] == {"included": True, "kind": "gantt", "skipped_reason": "", "undated_ids": []}, data
         assert data["project_title"] == "渲染測試專案"
         for key in ("id", "date", "date_known", "stage", "method", "question", "exec_issue", "evidence",
                     "checkpoint", "complete"):
@@ -624,6 +665,62 @@ def test_render_mermaid_unsafe_skips_block() -> None:
         rc, out, err = run_renderer(root, "--dry-run", "--json")
         data = json.loads(out)
         assert data["mermaid"]["included"] is False and "D-001" in data["mermaid"]["skipped_reason"], data
+        assert data["mermaid"]["kind"] == "gantt" and data["mermaid"]["undated_ids"] == [], data
+
+
+def test_render_gantt_section_order_and_undated() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_SECTIONS)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert len(_table_rows(progress)) == 8, progress
+        # section 順序：main → SQ2 → SQ10（整數序，非字串序）→ AQ1 → 自由文字 → unknown
+        assert _sections(progress) == ["main", "SQ2", "SQ10", "AQ1", "其他", "unknown"], _sections(progress)
+        block = _gantt_block(progress)
+        assert block.count("milestone") == 6, block
+        # 無日期（缺 date、非 ISO）的列不入圖，圖下依檔案順序列出
+        assert "無日期未入圖：D-007、D-008。" in progress, progress
+        assert "D-007" not in block and "D-008" not in block, block
+        # 無日期的列仍在表裡
+        assert "| D-007 | unknown | evaluate |" in progress and "| D-008 | 2026/07/17 | evaluate |" in progress, progress
+        rc, out, err = run_renderer(root, "--dry-run", "--json")
+        data = json.loads(out)
+        assert data["mermaid"] == {"included": True, "kind": "gantt", "skipped_reason": "",
+                                   "undated_ids": ["D-007", "D-008"]}, data
+
+
+def test_render_gantt_all_undated() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_ALL_UNDATED)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert len(_table_rows(progress)) == 2, progress
+        assert "```mermaid" not in progress, progress
+        assert "無已知日期的記錄，略過時間軸。" in progress, progress
+        assert "無日期未入圖" not in progress, progress
+        rc, out, err = run_renderer(root, "--dry-run", "--json")
+        data = json.loads(out)
+        assert data["mermaid"] == {"included": False, "kind": "gantt",
+                                   "skipped_reason": "無已知日期的記錄，略過時間軸。",
+                                   "undated_ids": ["D-001", "D-002"]}, data
+
+
+def test_render_gantt_unsafe_section_skips_block() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_render_project(root, RENDER_UNSAFE_SECTION)
+        rc, out, err = run_renderer(root)
+        assert rc == 0, out + err
+        assert "WARNING 時間軸略過：section「SQ1: 主結果」" in out, out
+        progress = (root / "PROGRESS.md").read_text(encoding="utf-8")
+        assert len(_table_rows(progress)) == 1, progress
+        assert "| D-001 | 2026-07-10 | analyze-data | m | SQ1: 主結果 |  |" in progress, progress
+        assert "```mermaid" not in progress, progress
+        assert "時間軸略過：section「SQ1: 主結果」含 mermaid 不安全字元「:」。" in progress, progress
 
 
 def test_render_results_link_missing() -> None:
@@ -712,17 +809,23 @@ def main() -> int:
     test_docs_synced()
     print("[regression] README/CHANGELOG/tests README 同步: pass")
     test_render_full_project()
-    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、question › exec_issue、results.k1 反查、mermaid、雜湊紅線、無 BOM／CR、冪等: pass")
+    print("[regression] render_progress 欄位完整專案：3 列、3 筆完整四軸、question › exec_issue、results.k1 反查、gantt section／milestone、雜湊紅線、無 BOM／CR、冪等: pass")
     test_render_old_format_project()
-    print("[regression] render_progress 舊格式專案：unknown 補位、缺日期排最後、0 筆完整四軸: pass")
+    print("[regression] render_progress 舊格式專案：unknown 補位、缺日期排最後且不入圖、0 筆完整四軸: pass")
     test_render_empty_and_missing_decisions()
-    print("[regression] render_progress decisions: [] 與無 decisions.yaml：0 筆、表頭在、無 mermaid: pass")
+    print("[regression] render_progress decisions: [] 與無 decisions.yaml：0 筆、表頭在、無 gantt: pass")
     test_render_dry_run_touches_nothing()
     print("[regression] render_progress --dry-run 目錄不變、無 PROGRESS.md、stdout 含記錄表: pass")
     test_render_json_output()
     print("[regression] render_progress --json 結構與筆數: pass")
     test_render_mermaid_unsafe_skips_block()
-    print("[regression] render_progress mermaid 不安全字元 → 略過區塊、表格仍全列: pass")
+    print("[regression] render_progress 列標籤含半形冒號 → 略過 gantt 區塊、表格仍全列: pass")
+    test_render_gantt_section_order_and_undated()
+    print("[regression] render_progress gantt section 順序 main→SQ2→SQ10→AQ1→自由文字→unknown、無日期列未入圖: pass")
+    test_render_gantt_all_undated()
+    print("[regression] render_progress 全部無已知日期 → 無 gantt、一句略過: pass")
+    test_render_gantt_unsafe_section_skips_block()
+    print("[regression] render_progress section 名含半形冒號 → 略過 gantt 區塊: pass")
     test_render_results_link_missing()
     print("[regression] render_progress results.<key> 無此鍵／無 results.json: pass")
     test_render_exec_issue_without_question()
