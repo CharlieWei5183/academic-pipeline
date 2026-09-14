@@ -45,7 +45,9 @@ stats.dangling_result_keys；primary 與 robustness 都沒驗過的登錄鍵計�
 Python 算好（欄序 主問題 q:main → question（SQ／AQ）→ method → validation → result → figure → decision，主問題獨占
 最左一欄並在 SQ／AQ 欄的第一筆與最後一筆之間居中；每欄固定序：問題依 lanes、方法依
 （問題, 版本）、驗證依（問題, item 序）、結果依（問題, 主要→其他→dangling, 現行 plan 宣告序）、決策依 id；
-x／y 為收合檢視，另給 col／order 讓 JS 展開時重排），HTML 只照座標畫 SVG，渲染確定性。
+x／y 為收合檢視，另給 col／order 讓 JS 展開時重排），HTML 只照座標畫 SVG，渲染確定性。邊的走線由 route_edges
+決定：同來源往同目標欄的可見邊合併成一條垂直幹線＋每個目標一條水平分支，每個欄間走道以區間圖貪婪著色分車道
+（車道間距 8px、最多用走道 80% 寬——走道 120px 即 13 條，超過折回並記 INFO），JS 端同一套演算法在展開／點選時重算。
 
 exit code: 0 完成; 2 BLOCKER（專案根目錄不存在、IR 未通過自身 schema 驗證——後者不落檔）。
 診斷訊息（BLOCKER／WARNING／INFO）在無旗標時印到 stdout，--dry-run 或 --json 時改印 stderr。
@@ -946,7 +948,7 @@ GRAPH_COL = {t: i + 1 for i, (t, _) in enumerate(NODE_TYPES)}
 def node_col(nid: str, ntype: str) -> int:
     """主問題獨占欄 0；其餘依 type：question 1、method 2、validation 3、result 4、figure 5、decision 6。"""
     return 0 if nid == MAIN_ID else GRAPH_COL[ntype]
-NODE_W, NODE_H, COL_GAP, ROW_GAP, GRAPH_PAD = 260, 36, 330, 48, 20
+NODE_W, NODE_H, COL_PITCH, ROW_GAP, GRAPH_PAD = 260, 36, 380, 48, 20   # COL_PITCH＝欄距（節點寬 260＋走道 120）；JS 端同名常數須同值
 DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
 TABLE_ROWS_MAX = 200
 EMBED_MAX_BYTES = 5 * 1024 * 1024
@@ -1551,7 +1553,7 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         for i, nid in enumerate(ids):
             n = g.nodes[nid]
             n['order'] = i
-            n['x'] = GRAPH_PAD + c * COL_GAP + (SUB_INDENT if n.get('subtype') == 'sensitivity' else 0)
+            n['x'] = GRAPH_PAD + c * COL_PITCH + (SUB_INDENT if n.get('subtype') == 'sensitivity' else 0)
             if n['collapsed']:
                 n['y'] = last_y
             else:
@@ -1864,10 +1866,10 @@ CSS = """
 :root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
 --done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
 --badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;
---t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
+--t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--up:#d55e00;--down:#0072b2;--path:#aa3377;--edge:#9aa3ad;--edge-thin:#b9c0c7;--edge-faint:#d3d8dd;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
 @media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
 --done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;
---t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
+--t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--edge:#6b7480;--edge-thin:#565e68;--edge-faint:#3e454d;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px}
@@ -2051,17 +2053,21 @@ GRAPH_CSS = """
 .gnode .tbar{fill:var(--pending)}
 .gnode.t-question .tbar{fill:var(--t-question)}.gnode.t-method .tbar{fill:var(--t-method)}.gnode.t-validation .tbar{fill:var(--t-validation)}.gnode.t-result .tbar{fill:var(--t-result)}.gnode.t-figure .tbar{fill:var(--t-figure)}.gnode.t-decision .tbar{fill:var(--t-decision)}
 .gnode.gone,path.edge.off{display:none}
-path.edge{fill:none;stroke:var(--fg);stroke-width:1.4;opacity:.45;marker-end:url(#arrow)}
-path.edge.st-dashed{stroke-dasharray:6 4}
-path.edge.st-thin{stroke-width:.9;opacity:.3}
-path.edge.e-supersedes,path.edge.e-cites,path.edge.e-refers{opacity:.25}
+path.edge{fill:none;stroke:var(--edge);stroke-width:1.1;marker-end:url(#arrow)}
+path.trunk{fill:none;stroke:var(--edge);stroke-width:1.6}
+path.edge.st-dashed,path.trunk.st-dashed{stroke-dasharray:6 4}
+path.edge.st-thin,path.trunk.st-thin{stroke-width:.9;stroke:var(--edge-thin)}
+path.edge.e-supersedes,path.edge.e-cites,path.edge.e-refers,path.trunk.e-supersedes,path.trunk.e-cites,path.trunk.e-refers{stroke:var(--edge-faint)}
+path.trunk.up{stroke:var(--up);stroke-width:2.4}path.trunk.down{stroke:var(--down);stroke-width:2.4}path.trunk.onpath{stroke:var(--path);stroke-width:3}
+path.trunk.dim{opacity:.08}
+path.edge.hov,path.trunk.hov{stroke:var(--current)!important;opacity:1!important}
 .gnode.sel .box{stroke:var(--current);stroke-width:4}
 .gnode.up .box{stroke:var(--up);stroke-width:3}
 .gnode.down .box{stroke:var(--down);stroke-width:3}
 .gnode.onpath .box{stroke:var(--path);stroke-width:3}
 .gnode.hit .box{stroke:var(--current);stroke-width:3}
-path.edge.up{stroke:var(--up);stroke-width:2.2;opacity:1;marker-end:url(#arrow-up)}
-path.edge.down{stroke:var(--down);stroke-width:2.2;opacity:1;marker-end:url(#arrow-down)}
+path.edge.up{stroke:var(--up);stroke-width:1.8;opacity:1;marker-end:url(#arrow-up)}
+path.edge.down{stroke:var(--down);stroke-width:1.8;opacity:1;marker-end:url(#arrow-down)}
 path.edge.onpath{stroke:var(--path);stroke-width:3;opacity:1;marker-end:url(#arrow-path)}
 path.edge.own{opacity:.9}
 .gnode.sub .box{fill:var(--bg-sub)}.gnode.sub.s-done .box{fill:var(--bg-sub-done)}.gnode.sub.s-expired .box{fill:var(--bg-sub-expired)}
@@ -2076,7 +2082,7 @@ path.edge.e-sensitivity{stroke:var(--t-method);opacity:.8;marker-end:none;stroke
 #gdetail ul{margin:2px 0;padding-left:18px}#gdetail .src{color:var(--muted);font-size:12px}
 #gdetail .goto,#gdetail .expand{color:var(--current);cursor:pointer;text-decoration:underline dotted}
 #gdetail .tour{background:var(--proj);border-radius:6px;padding:6px 8px;margin-bottom:8px}
-.arrow-default{fill:var(--fg);opacity:.6}.arrow-up{fill:var(--up)}.arrow-down{fill:var(--down)}.arrow-path{fill:var(--path)}
+.arrow-default{fill:var(--edge)}.arrow-up{fill:var(--up)}.arrow-down{fill:var(--down)}.arrow-path{fill:var(--path)}
 #gdetail{width:min(560px,calc(100vw - 32px))}
 #gdetail table.rt{border-collapse:collapse;font-size:11px;margin:4px 0;max-width:100%}
 #gdetail .rt-wrap{overflow:auto;max-height:260px;border:1px solid var(--line);border-radius:6px}
@@ -2113,7 +2119,8 @@ GRAPH_JS = """
 (function(){
   var raw=document.getElementById('progress-ir');if(!raw)return;
   var ir=JSON.parse(raw.textContent);var G=ir.graph;if(!G)return;
-  var W=260,H=36,PAD=20,ROW=48,GAP=70;
+  var NODE_W=260,NODE_H=36,COL_PITCH=380,ROW_GAP=48,GRAPH_PAD=20;  // 與 Python 端同名常數同值（測試比對）
+  var W=NODE_W,H=NODE_H,PAD=GRAPH_PAD,ROW=ROW_GAP,GAP=COL_PITCH-NODE_W;
   var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});
   var typeLabel={},edgeLabel={};G.node_types.forEach(function(t){typeLabel[t.id]=t.label;});G.edge_types.forEach(function(t){edgeLabel[t.id]=t.label;});
   var stateZh={done:'完成',expired:'過期',blocked:'受阻',pending:'未到',unknown:'不明','':'—'};
@@ -2152,24 +2159,70 @@ GRAPH_JS = """
     var h=maxY+H+PAD;svg.setAttribute('height',h);svg.setAttribute('viewBox','0 0 '+svg.getAttribute('width')+' '+h);
     redrawEdges();
   }
-  function edgePath(a,b,py1,py2,lane){
-    var x1,x2,xm,fwd,ar=a.x+nodeW(a),br=b.x+nodeW(b),colb=b.x-(b.subtype==='sensitivity'?24:0);
-    if(a.col<b.col){x1=ar;x2=b.x;xm=colb-GAP+12+lane*((GAP-24)/7);fwd=1;}
-    else if(a.col>b.col){x1=a.x;x2=br;xm=br+12+lane*((GAP-24)/7);fwd=-1;}
-    else{x1=ar;x2=ar;xm=ar+12+lane*((GAP-24)/7);fwd=1;}
-    if(py1===py2&&a.col!==b.col)return 'M'+x1+','+py1+' L'+x2+','+py2;
-    var dy=py2-py1,vd=dy>0?1:-1,r=Math.min(10,Math.abs(dy)/2,Math.abs(xm-x1),Math.abs(x2-xm));
-    var d2=(x2-xm)>0?1:-1;
-    return 'M'+x1+','+py1+' L'+(xm-fwd*r)+','+py1+' Q'+xm+','+py1+' '+xm+','+(py1+vd*r)+' L'+xm+','+(py2-vd*r)+' Q'+xm+','+py2+' '+(xm+d2*r)+','+py2+' L'+x2+','+py2;
+  var LANE_GAP=8,CORNER_R=4,TRUNK_MAX_SIDE=Math.floor((0.8*GAP/2)/LANE_GAP),TRUNK_MAX_LANES=2*TRUNK_MAX_SIDE+1;
+  function num(v){var r=Math.round(v*100)/100;return String(r);}
+  function laneOffset(l){if(l===0)return 0;var k=Math.floor((l+1)/2);return (l%2===1)?k*LANE_GAP:-k*LANE_GAP;}
+  function gapCenter(g){return GRAPH_PAD+g*COL_PITCH+NODE_W+GAP/2;}
+  function bendPath(sx,sy,tx,ty,ex){
+    if(ty===sy)return 'M'+num(sx)+','+num(sy)+' H'+num(ex);
+    var d1=tx>sx?1:-1,v=ty>sy?1:-1,d2=ex>tx?1:-1,r=Math.min(CORNER_R,Math.abs(ty-sy)/2);
+    return 'M'+num(sx)+','+num(sy)+' H'+num(tx-d1*r)+' Q'+num(tx)+','+num(sy)+' '+num(tx)+','+num(sy+v*r)+' V'+num(ty-v*r)+' Q'+num(tx)+','+num(ty)+' '+num(tx+d2*r)+','+num(ty)+' H'+num(ex);
   }
+  // 與 Python route_edges 同一套：同來源併幹線、走道分車道（決定性）
+  function routeEdges(drawn){
+    var cy=function(n){return n.y+H/2;},right=function(n){return n.x+nodeW(n);};
+    var items={},members={},i,e,a,b,kind,gap,key;
+    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(e.type==='sensitivity')continue;a=nodes[e.from];b=nodes[e.to];
+      if(a.col<b.col){kind='fwd';gap=a.col;}else if(a.col>b.col){kind='back';gap=a.col-1;}else{kind='same';gap=a.col;}
+      key=e.from+'|'+b.col+'|'+e.type+'|'+e.style+'|'+kind;items[i]={e:e,a:a,b:b,kind:kind,gap:gap,key:key};(members[key]=members[key]||[]).push(i);}
+    Object.keys(members).forEach(function(k){members[k].sort(function(x,y){return x-y;});});
+    var srcSide={},syOf={};
+    Object.keys(members).forEach(function(k){var info=items[members[k][0]];var side=info.kind==='back'?'L':'R';var sk=info.e.from+' '+side;(srcSide[sk]=srcSide[sk]||[]).push(k);});
+    Object.keys(srcSide).forEach(function(sk){var sid=sk.split(' ')[0];var keys=srcSide[sk];
+      var mean=function(k){var ms=members[k],s=0;for(var j=0;j<ms.length;j++)s+=cy(items[ms[j]].b);return Math.round(s/ms.length*100)/100;};
+      keys.sort(function(x,y){var mx=mean(x),my=mean(y);return mx!==my?mx-my:(x<y?-1:x>y?1:0);});
+      keys.forEach(function(k,ki){syOf[k]=Math.round((nodes[sid].y+H*(ki+1)/(keys.length+1))*100)/100;});});
+    var dstSide={},tyOf={};
+    Object.keys(items).forEach(function(ii){var info=items[ii];var side=info.kind==='fwd'?'L':'R';var dk=info.e.to+' '+side;(dstSide[dk]=dstSide[dk]||[]).push(+ii);});
+    Object.keys(dstSide).forEach(function(dk){var tid=dk.split(' ')[0];var idxs=dstSide[dk];idxs.sort(function(x,y){var ax=cy(items[x].a),ay=cy(items[y].a);return ax!==ay?ax-ay:x-y;});
+      idxs.forEach(function(ii,ki){tyOf[ii]=Math.round((nodes[tid].y+H*(ki+1)/(idxs.length+1))*100)/100;});});
+    var trunks={};
+    Object.keys(members).forEach(function(k){var ms=members[k],info=items[ms[0]],sy=syOf[k],tys=ms.map(function(ii){return tyOf[ii];});
+      var direct=ms.length===1&&info.kind!=='same'&&Math.abs(sy-tys[0])<ROW/2;var all=[sy].concat(tys);
+      trunks[k]={gap:info.gap,kind:info.kind,sy:sy,span:[Math.min.apply(null,all),Math.max.apply(null,all)],direct:direct,src:info.e.from,type:info.e.type,style:info.e.style};});
+    var laneOf={},laneMax={},overflow=[],byGap={};
+    Object.keys(trunks).forEach(function(k){if(!trunks[k].direct)(byGap[trunks[k].gap]=byGap[trunks[k].gap]||[]).push(k);});
+    Object.keys(byGap).map(Number).sort(function(x,y){return x-y;}).forEach(function(g){var keys=byGap[g].slice().sort(function(x,y){var sx=trunks[x].span,sy2=trunks[y].span;return sx[0]!==sy2[0]?sx[0]-sy2[0]:sx[1]!==sy2[1]?sx[1]-sy2[1]:(x<y?-1:x>y?1:0);});
+      var lanes=[],wrapped=false;keys.forEach(function(k){var s0=trunks[k].span[0],s1=trunks[k].span[1],chosen=-1;
+        for(var li=0;li<lanes.length;li++){var ok=true;for(var q=0;q<lanes[li].length;q++){var iv=lanes[li][q];if(!(s1<iv[0]||s0>iv[1])){ok=false;break;}}if(ok){chosen=li;break;}}
+        if(chosen<0){chosen=lanes.length;lanes.push([]);}lanes[chosen].push([s0,s1]);laneOf[k]=chosen;if(chosen>=TRUNK_MAX_LANES)wrapped=true;});
+      laneMax[g]=Math.max.apply(null,keys.map(function(k){return laneOf[k];}));if(wrapped)overflow.push(g);});
+    var paths={},trunkOf={},trunkOut=[];
+    Object.keys(members).forEach(function(k){var t=trunks[k],ms=members[k],src=nodes[t.src],sx=t.kind==='back'?src.x:right(src),sy=t.sy;
+      if(t.direct){var ii=ms[0],bb=items[ii].b,ex=t.kind==='fwd'?bb.x:right(bb);paths[ii]='M'+num(sx)+','+num(sy)+' L'+num(ex)+','+num(tyOf[ii]);trunkOf[ii]='';return;}
+      var lane=laneOf[k],tx=gapCenter(t.gap)+laneOffset(lane%TRUNK_MAX_LANES);
+      ms.forEach(function(ii){var bb=items[ii].b,ex=t.kind==='fwd'?bb.x:right(bb);paths[ii]=bendPath(sx,sy,tx,tyOf[ii],ex);trunkOf[ii]=k;});
+      trunkOut.push({key:k,src:t.src,gap:t.gap,lane:lane,span:t.span,type:t.type,style:t.style,d:'M'+num(sx)+','+num(sy)+' H'+num(tx)+' M'+num(tx)+','+num(t.span[0])+' V'+num(t.span[1])});});
+    trunkOut.sort(function(x,y){return x.key<y.key?-1:x.key>y.key?1:0;});
+    return {paths:paths,trunkOf:trunkOf,trunks:trunkOut,laneMax:laneMax,overflow:overflow};
+  }
+  var trunkGroup=document.getElementById('graph-trunks');
   function redrawEdges(){
     var drawn=[];G.edges.forEach(function(e,i){var ok=edgeDrawn(i);edgeEls[i].classList.toggle('off',!ok);if(ok)drawn.push(i);});
-    var outs={},ins={};drawn.forEach(function(i){var e=G.edges[i];if(e.type==='sensitivity')return;(outs[e.from]=outs[e.from]||[]).push(i);(ins[e.to]=ins[e.to]||[]).push(i);});
-    var py1={},py2={};
-    Object.keys(outs).forEach(function(id){var l=outs[id].slice().sort(function(i,j){return (nodes[G.edges[i].to].y-nodes[G.edges[j].to].y)||(i-j);});l.forEach(function(i,k){py1[i]=nodes[id].y+H*(k+1)/(l.length+1);});});
-    Object.keys(ins).forEach(function(id){var l=ins[id].slice().sort(function(i,j){return (nodes[G.edges[i].from].y-nodes[G.edges[j].from].y)||(i-j);});l.forEach(function(i,k){py2[i]=nodes[id].y+H*(k+1)/(l.length+1);});});
-    drawn.forEach(function(i,k){var e=G.edges[i];if(e.type==='sensitivity'){edgeEls[i].setAttribute('d',lPath(nodes[e.from],nodes[e.to]));return;}edgeEls[i].setAttribute('d',edgePath(nodes[e.from],nodes[e.to],py1[i],py2[i],k%8));});
+    var route=routeEdges(drawn);
+    drawn.forEach(function(i){var e=G.edges[i],el=edgeEls[i];if(e.type==='sensitivity'){el.setAttribute('d',lPath(nodes[e.from],nodes[e.to]));el.removeAttribute('data-trunk');return;}
+      el.setAttribute('d',route.paths[i]);if(route.trunkOf[i])el.setAttribute('data-trunk',route.trunkOf[i]);else el.removeAttribute('data-trunk');});
+    while(trunkGroup.firstChild)trunkGroup.removeChild(trunkGroup.firstChild);
+    route.trunks.forEach(function(t){var pth=document.createElementNS(svg.namespaceURI,'path');pth.setAttribute('class','trunk e-'+t.type+' st-'+t.style);pth.setAttribute('data-trunk',t.key);pth.setAttribute('data-gap',t.gap);pth.setAttribute('data-lane',t.lane);pth.setAttribute('d',t.d);trunkGroup.appendChild(pth);});
+    syncTrunks();
   }
+  function syncTrunks(){var byKey={};edgeEls.forEach(function(el){if(!el)return;var k=el.getAttribute('data-trunk');if(k)(byKey[k]=byKey[k]||[]).push(el);});
+    Array.prototype.forEach.call(trunkGroup.children,function(tp){var ms=byKey[tp.getAttribute('data-trunk')]||[];['up','down','onpath','own','dim'].forEach(function(c){tp.classList.remove(c);});
+      var any=function(c){return ms.some(function(el){return el.classList.contains(c);});};
+      if(any('onpath'))tp.classList.add('onpath');else if(any('up'))tp.classList.add('up');else if(any('down'))tp.classList.add('down');
+      if(any('own'))tp.classList.add('own');if(ms.length&&ms.every(function(el){return el.classList.contains('dim');}))tp.classList.add('dim');});}
+  svg.addEventListener('mouseover',function(e){var t=e.target.closest&&e.target.closest('[data-trunk]');if(!t)return;var k=t.getAttribute('data-trunk');Array.prototype.forEach.call(svg.querySelectorAll('[data-trunk]'),function(el){el.classList.toggle('hov',el.getAttribute('data-trunk')===k);});});
+  svg.addEventListener('mouseout',function(e){var t=e.target.closest&&e.target.closest('[data-trunk]');if(!t)return;Array.prototype.forEach.call(svg.querySelectorAll('.hov'),function(el){el.classList.remove('hov');});});
   boxOld.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
   boxDec.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
   boxAll.addEventListener('change',function(){redrawEdges();});
@@ -2186,14 +2239,14 @@ GRAPH_JS = """
   window.addEventListener('mouseup',function(){drag=null;wrap.classList.remove('dragging');});
   function center(id){var n=nodes[id];if(!n)return;tx=wrap.clientWidth/2-(n.x+W/2)*sc;ty=wrap.clientHeight/2-(n.y+H/2)*sc;apply();}
   // ---- 高亮 ----
-  function clearClasses(){Object.keys(nodeEls).forEach(function(id){nodeEls[id].classList.remove('sel','up','down','onpath','hit','dim');});edgeEls.forEach(function(el){if(el)el.classList.remove('up','down','onpath','dim','own');});}
+  function clearClasses(){Object.keys(nodeEls).forEach(function(id){nodeEls[id].classList.remove('sel','up','down','onpath','hit','dim');});edgeEls.forEach(function(el){if(el)el.classList.remove('up','down','onpath','dim','own');});Array.prototype.forEach.call(trunkGroup.children,function(tp){['up','down','onpath','own','dim'].forEach(function(c){tp.classList.remove(c);});});}
   function walk(start,dir){var seen={},edges={},stack=[start];while(stack.length){var c=stack.pop();var list=(dir>0?outE[c]:inE[c])||[];for(var i=0;i<list.length;i++){var ei=list[i];var e=G.edges[ei];var nxt=dir>0?e.to:e.from;if(!nodeVisible(nxt))continue;edges[ei]=true;if(!seen[nxt]&&nxt!==start){seen[nxt]=true;stack.push(nxt);}}}return {nodes:seen,edges:edges};}
   function select(id,doCenter){
     if(!nodes[id])return;selected=id;pathEdges={};pathNodes=null;clearClasses();redrawEdges();
     var up=walk(id,-1),down=walk(id,1);
     Object.keys(nodeEls).forEach(function(k){var el=nodeEls[k];if(k===id)el.classList.add('sel');else if(up.nodes[k])el.classList.add('up');else if(down.nodes[k])el.classList.add('down');else el.classList.add('dim');});
     edgeEls.forEach(function(el,i){if(!el)return;var e=G.edges[i];if(e.from===id||e.to===id)el.classList.add('own');if(up.edges[i])el.classList.add('up');else if(down.edges[i])el.classList.add('down');else el.classList.add('dim');});
-    renderPanel(id,up,down);if(doCenter)center(id);
+    syncTrunks();renderPanel(id,up,down);if(doCenter)center(id);
   }
   function clearAll(){selected=null;pathEdges={};pathNodes=null;tour=null;clearClasses();redrawEdges();panel.hidden=true;}
   function shortestPath(a,b){
@@ -2211,7 +2264,7 @@ GRAPH_JS = """
       h+='<p>共 '+p.edges.length+' 步（無向最短路徑，含預設隱藏的邊）：</p><ol>';
       for(var i=0;i<p.edges.length;i++){var e=G.edges[p.edges[i]];var from=p.nodes[i],to=p.nodes[i+1];var dirTxt=(e.from===from)?'→':'←';h+='<li><span class="goto" data-goto="'+esc(from)+'">'+esc(nodes[from].label)+'</span> '+dirTxt+' '+esc(edgeLabel[e.type]||e.type)+' '+dirTxt+' <span class="goto" data-goto="'+esc(to)+'">'+esc(nodes[to].label)+'</span></li>';}
       h+='</ol>';}
-    body.innerHTML=h;panel.hidden=false;
+    syncTrunks();body.innerHTML=h;panel.hidden=false;
   }
   function plainCaption(c){return String(c||'').replace(/\*{1,2}/g,'');}
   function figSrc(f){return f.meta.data_uri||f.meta.file||'';}
@@ -2298,7 +2351,7 @@ GRAPH_JS = """
   var hits=[];
   function runSearch(){var q=search.value.trim().toLowerCase();hits=[];clearClasses();if(!q){document.getElementById('graph-search-count').textContent='';if(selected)select(selected,false);return;}
     G.nodes.forEach(function(n){if(!nodeVisible(n.id))return;if(n.label.toLowerCase().indexOf(q)>=0||n.title.toLowerCase().indexOf(q)>=0)hits.push(n.id);});
-    var set={};hits.forEach(function(i){set[i]=true;});Object.keys(nodeEls).forEach(function(k){nodeEls[k].classList.add(set[k]?'hit':'dim');});edgeEls.forEach(function(el){if(el)el.classList.add('dim');});
+    var set={};hits.forEach(function(i){set[i]=true;});Object.keys(nodeEls).forEach(function(k){nodeEls[k].classList.add(set[k]?'hit':'dim');});edgeEls.forEach(function(el){if(el)el.classList.add('dim');});syncTrunks();
     document.getElementById('graph-search-count').textContent=hits.length+' 個命中';}
   search.addEventListener('input',runSearch);
   search.addEventListener('keydown',function(e){if(e.key==='Enter'&&hits.length){select(hits[0],true);search.blur();}if(e.key==='Escape'){search.value='';runSearch();search.blur();}});
@@ -2384,65 +2437,186 @@ def _node_w(n: dict) -> int:
     return NODE_W - SUB_INDENT if n.get('subtype') == 'sensitivity' else NODE_W
 
 
+def _num(v: float) -> str:
+    """路徑座標：四捨五入到小數兩位，整數不帶小數（與 JS 端 String(Math.round(v*100)/100) 一致）。"""
+    r = round(float(v), 2)
+    return str(int(r)) if r == int(r) else repr(r)
+
+
 def _l_path(a: dict, b: dict) -> str:
-    """父→子的 L 形短線：從父節點左緣下方垂下，到子節點中線再右轉進子節點左緣（不走欄間折線、不占出入口）。"""
+    """父→子的 L 形短線：從父節點左緣下方垂下，到子節點中線再右轉進子節點左緣（不走欄間走道、不占出入口）。"""
     x0 = a['x'] + 12
     y0 = a['y'] + NODE_H
     yc = b['y'] + NODE_H / 2
     x2 = b['x']
     r = min(6, max(0, (yc - y0) / 2), max(0, (x2 - x0) / 2))
-    return f'M{x0:g},{y0:g} L{x0:g},{yc - r:g} Q{x0:g},{yc:g} {x0 + r:g},{yc:g} L{x2:g},{yc:g}'
+    return f'M{_num(x0)},{_num(y0)} L{_num(x0)},{_num(yc - r)} Q{_num(x0)},{_num(yc)} {_num(x0 + r)},{_num(yc)} L{_num(x2)},{_num(yc)}'
 
 
-def _edge_path(a: dict, b: dict, py1: float, py2: float, lane: int) -> str:
-    """直角折線（與 GRAPH_JS 的 edgePath 同一套幾何）：源節點右緣出發，水平到目標欄前的間隙、垂直、再水平進入
-    目標左緣；轉角以 Q 小弧圓角；lane（0–7）把垂直段散開在間隙裡，避免重疊。反向邊從左緣出、由右緣進。
-    子節點的右緣與父節點對齊（x 縮排 24、寬度減 24），左緣則在縮排後的位置。"""
-    gap = COL_GAP - NODE_W
-    step = (gap - 24) / 7
-    ax_right = a['x'] + _node_w(a)
-    bx_right = b['x'] + _node_w(b)
-    col_b = b['x'] - (SUB_INDENT if b.get('subtype') == 'sensitivity' else 0)
-    if a['col'] < b['col']:
-        x1, x2, xm, fwd = ax_right, b['x'], col_b - gap + 12 + lane * step, 1
-    elif a['col'] > b['col']:
-        x1, x2, xm, fwd = a['x'], bx_right, bx_right + 12 + lane * step, -1
-    else:
-        x1, x2, xm, fwd = ax_right, ax_right, ax_right + 12 + lane * step, 1
-    if py1 == py2 and a['col'] != b['col']:
-        return f'M{x1:g},{py1:g} L{x2:g},{py2:g}'
-    dy = py2 - py1
-    vd = 1 if dy > 0 else -1
-    r = min(10, abs(dy) / 2, abs(xm - x1), abs(x2 - xm))
-    d2 = 1 if (x2 - xm) > 0 else -1
-    return (f'M{x1:g},{py1:g} L{xm - fwd * r:g},{py1:g} Q{xm:g},{py1:g} {xm:g},{py1 + vd * r:g} '
-            f'L{xm:g},{py2 - vd * r:g} Q{xm:g},{py2:g} {xm + d2 * r:g},{py2:g} L{x2:g},{py2:g}')
+LANE_GAP = 8
+CORNER_R = 4
+TRUNK_MAX_SIDE = int((0.8 * (COL_PITCH - NODE_W) / 2) // LANE_GAP)   # 走道寬 120 → 每側最多 6 條車道
+TRUNK_MAX_LANES = 2 * TRUNK_MAX_SIDE + 1                             # 含中央共 7 條
 
 
-def _svg_graph(graph: dict) -> str:
+def _lane_offset(lane: int) -> int:
+    """車道索引 → 相對走道中央的 x 偏移：0 中央、1 右、2 左、3 右 2 格、4 左 2 格…"""
+    if lane == 0:
+        return 0
+    k = (lane + 1) // 2
+    return k * LANE_GAP if lane % 2 == 1 else -k * LANE_GAP
+
+
+def _gap_center(gap: int) -> float:
+    return GRAPH_PAD + gap * COL_PITCH + NODE_W + (COL_PITCH - NODE_W) / 2
+
+
+def _bend_path(sx: float, sy: float, tx: float, ty: float, ex: float) -> str:
+    """M 來源緣 H 幹線x V 目標y H 目標緣，兩個轉角 4px 圓角（與 GRAPH_JS 的 bendPath 同一套）。"""
+    if ty == sy:
+        return f'M{_num(sx)},{_num(sy)} H{_num(ex)}'
+    d1 = 1 if tx > sx else -1
+    v = 1 if ty > sy else -1
+    d2 = 1 if ex > tx else -1
+    r = min(CORNER_R, abs(ty - sy) / 2)
+    return (f'M{_num(sx)},{_num(sy)} H{_num(tx - d1 * r)} Q{_num(tx)},{_num(sy)} {_num(tx)},{_num(sy + v * r)} '
+            f'V{_num(ty - v * r)} Q{_num(tx)},{_num(ty)} {_num(tx + d2 * r)},{_num(ty)} H{_num(ex)}')
+
+
+def route_edges(nodes: dict[str, dict], edges: list[tuple[int, dict]]) -> dict:
+    """同來源合併成幹線＋分支，走道分車道（與 GRAPH_JS 的 routeEdges 同一套演算法；決定性）。
+
+    nodes: id → 節點（x／y／col／subtype）；edges: [(idx, edge)]（sensitivity 邊由呼叫端另畫 L 形線，這裡略過）。
+    步驟：(1) 每條邊依 (來源欄, 目標欄) 定方向與走道——正向走來源右側走道、反向走來源左側走道、同欄走右側走道；
+    (2) 同 (來源, 目標欄, type, style, 方向) 併成一條幹線；(3) 出口：來源每側依幹線平均目標 y 排序均分；入口：目標每側依
+    來源 y 排序均分；(4) 幹線只有一個目標且 |Δy| < 半列高 → 直線，不占車道；(5) 每個走道把幹線依 (span 起, span 終, key)
+    排序、貪婪指派最小可用車道（垂直區間相交者不共用），車道→偏移見 _lane_offset，超過走道 80% 寬則折回重用並回報；
+    (6) 每條邊輸出完整折線 d，每條幹線輸出「來源水平線＋垂直幹線」的 d。
+    回傳 {'paths': {idx: d}, 'trunk_of': {idx: key 或 ''}, 'trunks': [...], 'lane_max': {gap: 最大車道索引}, 'overflow': [gap]}。
+    """
+    def cy(n: dict) -> float:
+        return n['y'] + NODE_H / 2
+
+    def right(n: dict) -> float:
+        return n['x'] + _node_w(n)
+
+    items: dict[int, dict] = {}
+    members: dict[str, list[int]] = {}
+    for idx, e in edges:
+        if e['type'] == 'sensitivity':
+            continue
+        a, b = nodes[e['from']], nodes[e['to']]
+        if a['col'] < b['col']:
+            kind, gap = 'fwd', a['col']
+        elif a['col'] > b['col']:
+            kind, gap = 'back', a['col'] - 1
+        else:
+            kind, gap = 'same', a['col']
+        key = f"{e['from']}|{b['col']}|{e['type']}|{e['style']}|{kind}"
+        items[idx] = {'e': e, 'a': a, 'b': b, 'kind': kind, 'gap': gap, 'key': key}
+        members.setdefault(key, []).append(idx)
+    for key in members:
+        members[key].sort()
+    # 出口：來源每側（R＝正向與同欄、L＝反向）依幹線平均目標 y 排序
+    src_side: dict[tuple[str, str], list[str]] = {}
+    for key, ms in members.items():
+        info = items[ms[0]]
+        side = 'L' if info['kind'] == 'back' else 'R'
+        src_side.setdefault((info['e']['from'], side), []).append(key)
+    sy_of: dict[str, float] = {}
+    for (sid, _side), keys in src_side.items():
+        keys.sort(key=lambda k: (round(sum(cy(items[i]['b']) for i in members[k]) / len(members[k]), 2), k))
+        for k_i, k in enumerate(keys):
+            sy_of[k] = round(nodes[sid]['y'] + NODE_H * (k_i + 1) / (len(keys) + 1), 2)
+    # 入口：目標每側（L＝正向、R＝反向與同欄）依來源 y 排序
+    dst_side: dict[tuple[str, str], list[int]] = {}
+    for idx, info in items.items():
+        side = 'L' if info['kind'] == 'fwd' else 'R'
+        dst_side.setdefault((info['e']['to'], side), []).append(idx)
+    ty_of: dict[int, float] = {}
+    for (tid, _side), idxs in dst_side.items():
+        idxs.sort(key=lambda i: (cy(items[i]['a']), i))
+        for k_i, i in enumerate(idxs):
+            ty_of[i] = round(nodes[tid]['y'] + NODE_H * (k_i + 1) / (len(idxs) + 1), 2)
+    # 幹線：直線判定與垂直區間
+    trunks: dict[str, dict] = {}
+    for key, ms in members.items():
+        info = items[ms[0]]
+        sy = sy_of[key]
+        tys = [ty_of[i] for i in ms]
+        direct = len(ms) == 1 and info['kind'] != 'same' and abs(sy - tys[0]) < ROW_GAP / 2
+        trunks[key] = {'gap': info['gap'], 'kind': info['kind'], 'sy': sy, 'span': (min([sy] + tys), max([sy] + tys)),
+                       'direct': direct, 'src': info['e']['from'], 'type': info['e']['type'], 'style': info['e']['style']}
+    # 車道：每個走道各自做區間圖貪婪著色
+    lane_of: dict[str, int] = {}
+    lane_max: dict[int, int] = {}
+    overflow: list[int] = []
+    by_gap: dict[int, list[str]] = {}
+    for key, t in trunks.items():
+        if not t['direct']:
+            by_gap.setdefault(t['gap'], []).append(key)
+    for gap in sorted(by_gap):
+        keys = sorted(by_gap[gap], key=lambda k: (trunks[k]['span'][0], trunks[k]['span'][1], k))
+        lanes: list[list[tuple[float, float]]] = []
+        wrapped = False
+        for k in keys:
+            s0, s1 = trunks[k]['span']
+            chosen = -1
+            for li, ivs in enumerate(lanes):
+                if all(s1 < a0 or s0 > a1 for a0, a1 in ivs):
+                    chosen = li
+                    break
+            if chosen < 0:
+                chosen = len(lanes)
+                lanes.append([])
+            lanes[chosen].append((s0, s1))
+            lane_of[k] = chosen
+            if chosen >= TRUNK_MAX_LANES:
+                wrapped = True
+        lane_max[gap] = max(lane_of[k] for k in keys)
+        if wrapped:
+            overflow.append(gap)
+    # 路徑
+    paths: dict[int, str] = {}
+    trunk_of: dict[int, str] = {}
+    trunk_out: list[dict] = []
+    for key, t in trunks.items():
+        ms = members[key]
+        src = nodes[t['src']]
+        sx = src['x'] if t['kind'] == 'back' else right(src)
+        sy = t['sy']
+        if t['direct']:
+            i = ms[0]
+            b = items[i]['b']
+            ex = b['x'] if t['kind'] == 'fwd' else right(b)
+            paths[i] = f'M{_num(sx)},{_num(sy)} L{_num(ex)},{_num(ty_of[i])}'
+            trunk_of[i] = ''
+            continue
+        lane = lane_of[key]
+        tx = _gap_center(t['gap']) + _lane_offset(lane % TRUNK_MAX_LANES)
+        for i in ms:
+            b = items[i]['b']
+            ex = b['x'] if t['kind'] == 'fwd' else right(b)
+            paths[i] = _bend_path(sx, sy, tx, ty_of[i], ex)
+            trunk_of[i] = key
+        s0, s1 = t['span']
+        trunk_out.append({'key': key, 'src': t['src'], 'gap': t['gap'], 'lane': lane, 'span': [s0, s1], 'type': t['type'],
+                          'style': t['style'], 'd': f'M{_num(sx)},{_num(sy)} H{_num(tx)} M{_num(tx)},{_num(s0)} V{_num(s1)}'})
+    trunk_out.sort(key=lambda t: t['key'])
+    return {'paths': paths, 'trunk_of': trunk_of, 'trunks': trunk_out, 'lane_max': lane_max, 'overflow': overflow}
+
+
+def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     nodes = graph['nodes']
     by_id = {n['id']: n for n in nodes}
     shown = {n['id'] for n in nodes if not n['collapsed'] and n['type'] != 'decision'}
     drawn = [i for i, e in enumerate(graph['edges']) if e['default_visible'] and e['from'] in shown and e['to'] in shown]
-    outs: dict[str, list[int]] = {}
-    ins: dict[str, list[int]] = {}
-    for i in drawn:
-        e = graph['edges'][i]
-        if e['type'] == 'sensitivity':
-            continue   # 父子連接線走 L 形，不占出入口
-        outs.setdefault(e['from'], []).append(i)
-        ins.setdefault(e['to'], []).append(i)
-    py1: dict[int, float] = {}
-    py2: dict[int, float] = {}
-    for nid, lst in outs.items():
-        lst.sort(key=lambda i: (by_id[graph['edges'][i]['to']]['y'], i))
-        for k, i in enumerate(lst):
-            py1[i] = by_id[nid]['y'] + NODE_H * (k + 1) / (len(lst) + 1)
-    for nid, lst in ins.items():
-        lst.sort(key=lambda i: (by_id[graph['edges'][i]['from']]['y'], i))
-        for k, i in enumerate(lst):
-            py2[i] = by_id[nid]['y'] + NODE_H * (k + 1) / (len(lst) + 1)
-    lane_of = {i: k % 8 for k, i in enumerate(drawn)}
+    drawn_set = set(drawn)
+    route = route_edges(by_id, [(i, graph['edges'][i]) for i in drawn])
+    hidden_route = route_edges(by_id, [(i, e) for i, e in enumerate(graph['edges']) if i not in drawn_set])
+    for gap in route['overflow']:
+        if notes is not None:
+            notes.append(f'關聯圖走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，折回重用')
     vis_nodes = [n for n in nodes if n['id'] in shown]
     width = int(max([n['x'] for n in nodes] + [0]) + NODE_W + GRAPH_PAD)
     height = int(max([n['y'] for n in vis_nodes] + [0]) + NODE_H + GRAPH_PAD)
@@ -2451,22 +2625,27 @@ def _svg_graph(graph: dict) -> str:
     for mid, cls in (('arrow', 'arrow-default'), ('arrow-up', 'arrow-up'), ('arrow-down', 'arrow-down'), ('arrow-path', 'arrow-path')):
         out.append(f'<marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
                    f'<path class="{cls}" d="M0,0 L10,5 L0,10 z"></path></marker>')
-    out.append('</defs><g id="graph-root"><g id="graph-edges">')
+    out.append('</defs><g id="graph-root"><g id="graph-trunks">')
+    for t in route['trunks']:
+        out.append(f'<path class="trunk e-{t["type"]} st-{t["style"]}" data-trunk="{_h(t["key"])}" data-gap="{t["gap"]}" data-lane="{t["lane"]}" d="{t["d"]}"></path>')
+    out.append('</g><g id="graph-edges">')
     for i, e in enumerate(graph['edges']):
         a, b = by_id[e['from']], by_id[e['to']]
         if e['type'] == 'sensitivity':
             d = _l_path(a, b)
-            off = '' if i in lane_of else ' off'
-        elif i in lane_of:
-            d = _edge_path(a, b, py1[i], py2[i], lane_of[i])
-            off = ''
+            trunk = ''
+        elif i in drawn_set:
+            d = route['paths'][i]
+            trunk = route['trunk_of'][i]
         else:
-            d = _edge_path(a, b, a['y'] + NODE_H / 2, b['y'] + NODE_H / 2, 0)
-            off = ' off'
+            d = hidden_route['paths'].get(i, '')
+            trunk = ''
+        off = '' if i in drawn_set else ' off'
         dec = ' dec' if a['type'] == 'decision' or b['type'] == 'decision' else ''
         title = f'{e["type"]}{"（" + e["label"] + "）" if e["label"] else ""}：{e["source"]}'
         out.append(f'<path class="edge e-{e["type"]} st-{e["style"]}{dec}{off}" data-idx="{i}" data-from="{_h(e["from"])}" '
-                   f'data-to="{_h(e["to"])}" data-type="{e["type"]}" d="{d}"><title>{_h(title)}</title></path>')
+                   f'data-to="{_h(e["to"])}" data-type="{e["type"]}"' + (f' data-trunk="{_h(trunk)}"' if trunk else '') +
+                   f' d="{d}"><title>{_h(title)}</title></path>')
     out.append('</g><g id="graph-nodes">')
     for n in nodes:
         gone = ' gone' if n['id'] not in shown else ''
@@ -2499,7 +2678,7 @@ def _svg_graph(graph: dict) -> str:
     return '\n'.join(out)
 
 
-def _relations_tab(ir: dict) -> list[str]:
+def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     graph = ir['graph']
     st = graph['stats']
     lines = [
@@ -2527,7 +2706,7 @@ def _relations_tab(ir: dict) -> list[str]:
         '<span>｜</span>',
         '<span>● 完成</span><span>◐ 過期</span><span>✖ 受阻</span><span>○ 未到</span><span>◌ 不明</span>',
         '<span>｜</span>',
-        '<span><span class="esw"></span>主幹（規劃／產出／驗證）</span>',
+        '<span><span class="esw"></span>主幹（規劃／產出／驗證）；同來源的線合併成幹線＋分支，滑過任一分支整束高亮</span>',
         '<span>縮排子節點＝敏感性子分析（父→子 L 形線）</span>',
         '<span><span class="esw dashed"></span>虛線＝未宣告（results.json 掛在此 plan 但 outputs／robustness 都沒宣告）</span>',
         '<span><span class="esw thin"></span>細線＝驗證（穩健性）</span>',
@@ -2536,7 +2715,7 @@ def _relations_tab(ir: dict) -> list[str]:
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
         '</div>',
         '<div id="graph-wrap">',
-        _svg_graph(graph),
+        _svg_graph(graph, notes),
         '</div>',
         f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
@@ -2591,7 +2770,7 @@ def _current_label(stage_id: str, stage_label: dict) -> str:
     return f'{_h(label)}（{_h(stage_id)}）' if label else _h(stage_id)
 
 
-def render_html(ir: dict, root: Path) -> str:
+def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     p = ir['project']
     st = ir['stats']
     by = st['by_state']
@@ -2641,7 +2820,7 @@ def render_html(ir: dict, root: Path) -> str:
         '<aside id="detail" hidden><button type="button" class="close" id="detail-close">關閉（Esc）</button><div id="detail-body"></div></aside>',
         '</section>',
     ]
-    lines += _relations_tab(ir)
+    lines += _relations_tab(ir, notes)
     gs = ir['graph']['stats']
     lines += [
         '<footer>',
@@ -2718,11 +2897,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     ir_text = json.dumps(ir, ensure_ascii=False, indent=2) + '\n'
+    notes: list[str] = []
+    html_text = render_html(ir, root, notes) if not (args.json and args.dry_run) else ''
+    for note in notes:
+        print(f'INFO {note}', file=diag)
     if args.json:
         sys.stdout.write(ir_text)
         sys.stdout.flush()
     elif args.dry_run:
-        sys.stdout.write(render_html(ir, root))
+        sys.stdout.write(html_text)
         sys.stdout.flush()
     if args.dry_run:
         return 0
@@ -2733,7 +2916,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'{IR_NAME} 已寫入: {ir_path}')
     if not args.ir_only:
         html_path = root / HTML_NAME
-        html_path.write_text(render_html(ir, root), encoding='utf-8', newline='\n')
+        html_path.write_text(html_text, encoding='utf-8', newline='\n')
         if not args.json:
             print(f'{HTML_NAME} 已寫入: {html_path}')
     if not args.json:

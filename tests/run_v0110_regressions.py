@@ -1445,12 +1445,12 @@ def test_graph_html_tab() -> None:
         # 邊全為直角折線（M … L … Q 圓角），無三次貝茲
         edge_ds = re.findall(r'<path class="edge[^>]*? d="([^"]*)"', html_text)
         assert len(edge_ds) == len(json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]["edges"])
-        assert all(d.startswith("M") and " L" in d and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or " L" not in d][:3]
+        assert all(d.startswith("M") and (" H" in d or " L" in d) and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or (" H" not in d and " L" not in d)][:3]
         assert any(" Q" in d for d in edge_ds), "至少一條邊有圓角轉折"
         # 預設隱藏的邊帶 off、收合的節點帶 gone、未驗證旁路帶 st-dashed、state 底色與符號
         assert 'class="edge e-produces st-solid" data-idx=' in html_text and 'class="edge e-cites st-solid off"' in html_text
         assert 'class="edge e-sensitivity st-solid" data-idx=' in html_text and 'data-node-id="p:SQ1-v2#R1"' in html_text and 'class="gnode t-method s-done sub"' in html_text
-        assert 'class="edge e-robustness st-thin" data-idx=' in html_text and "細線＝驗證（穩健性）" in html_text and "path.edge.st-thin{" in html_text
+        assert 'class="edge e-robustness st-thin" data-idx=' in html_text and "細線＝驗證（穩健性）" in html_text and ".st-thin{" in html_text
         assert 'class="gnode t-method s-expired gone"' in html_text and 'class="gnode t-method s-done"' in html_text
         assert '<text class="sym" x="13" y="24">●</text>' in html_text and '<text class="sym" x="13" y="24">◐</text>' in html_text
         assert '<text class="st" x="252" y="23" text-anchor="end">完成</text>' in html_text
