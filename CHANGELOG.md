@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.14.1（未發布）
+
+進度圖加「問題 id 別名」：主問題降為附錄問題（例：SQ1 → AQ2）後，`analysis/plans/index.yaml` 的舊版條目、決策 `links`、validation item 的 `sq` 仍寫舊 id，里程與關聯圖都把它們併進現行問題，不再造一個「goals 無此問題」的占位節點。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位）。
+
+1. **`Sources.question_aliases()`**（只算一次、快取）：對 index 裡 `sq` 不在 goals（`sub_questions` ∪ `appendix_questions`）的每筆 plan，沿 index 的 `replaced_by`（缺的話用其他 plan 的 `supersedes`——index 條目或 plan yaml——反推）走到鏈的終點 plan；終點的 `sq` 在 goals 就記 `{舊 id → 現行 id}`，否則不記（該 sq 仍是孤兒，關聯圖照舊造占位節點）。有別名時印 `INFO 問題 id 別名：SQ1 → AQ2（index 舊版 SQ1-v1／SQ1-v2）`。`alias_of(sq)`／`alias_olds(qid)` 供各處查表。
+2. **里程分頁（lanes）**：`_sq_plans` 篩 plan 時把 alias 到本問題的舊版 plan 一起算（study-design 的 history 列出舊版「SQ1-v1 封版，已被 SQ1-v2 取代」、只剩 superseded 時判 expired 看得到它們；analyze-data 的 superseded 鍵歸屬與孤兒 pattern 含舊 id）；validation item 與 claims 的 `sq` 走 alias；`judge_evaluate` 的 `evaluations/*.md` 檔名含舊 id 也算證據；決策註記（`attach_annotations`）的 `question`／`links` 走 alias 後再掛泳道。
+3. **關聯圖**：index plan 的 `sq` 先換成現行 id——舊版 plan 掛到現行問題（`plans` 邊自 `q:AQ2`）、進現行版 `meta.superseded_versions`（依版本序，徽章「v1（2 舊版）」）、collapsed 且借現行版的列（舊版的敏感性分析群與子分析借現行版的群）、band 跟現行問題；plan 節點 `meta` 加 `sq`（現行 id），別名時另加 `sq_original`；validation 節點 `meta.sq` 換成現行 id、別名時加 `sq_original`，title「AQ2 驗證 …」；決策 `question`／`links` 的 `refers` 邊指到 alias 後的問題；現行問題節點 `meta.aliases: [SQ1]`（有才加）、title 尾綴「（原 SQ1；index 舊版 SQ1-v1／SQ1-v2）」；`ensure_question` 只對解析不到的 sq 造占位節點。IR `graph` 頂層加 `question_aliases: {SQ1: AQ2}`（空就 `{}`）；`validate_graph`／`validate_ir`：缺鍵 IR-11、非 mapping 或某個 value 不是存在的問題節點、key 本身就是節點 → `IR-14 graph.question_aliases[<key>]`。
+4. **面板**：現行問題節點多一行「舊 id」；plan 節點多一行「問題」（可點跳，別名時註「index 寫 SQ1，已併入 AQ2」）。
+5. **測試**：新增 `tests/run_v0141_regressions.py`（fixture：goals 只有 SQ2 與 appendix AQ2；index 有 SQ1-v1（superseded、replaced_by SQ1-v2）、SQ1-v2（superseded、replaced_by AQ2-v1）、AQ2-v1（active、supersedes SQ1-v2）、SQ2-v1、孤兒 SQ9-v1；一筆決策 links [SQ1]、一筆 question SQ1；validation V1 sq SQ1）：`question_aliases == {SQ1: AQ2}`、無 `q:SQ1`、SQ9 仍占位、AQ2 的 `aliases` 與 title、舊版 plan collapsed／supp／`meta.sq`／借列／`superseded_versions`／徽章、舊版群借現行版群、決策 refers 指 `q:AQ2`、V1 掛 AQ2 鏈、lanes 無 SQ1 且 AQ2 泳道 study-design done 帶兩筆 history、validate-results 算進 V1、註記掛 AQ2、INFO 句、拿掉 `replaced_by` 只靠 `supersedes` 反推仍解得出、終點不在 goals 就不記且兩個 id 都占位；HTML 面板錨點、無 `q:SQ1`、自含，有 Chrome 時 Python／JS 版面／邊／幹線一致；`validate_ir` 的 question_aliases 規則；文件登記與 `plugin.json ≥ 0.14.1`。既有測試無需改動。
+
 ## 0.14.0（2026-09-14）
 
 關聯圖分成上下兩個區帶：**Main**（主結果鏈）與 **Supplementary**（敏感性分析與附錄問題），每一組敏感性分析只留一條線連回它所屬分析的主要結果。skills、agents、管線階段與 SSOT schema 不變；`PROGRESS.ir.json` 的 `schema_version` 維持 1（只加欄位、一種節點 subtype 與一種邊）。

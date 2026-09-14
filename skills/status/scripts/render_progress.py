@@ -44,6 +44,10 @@ GRAPH_PAD + BAND_TITLE_H 起，main_bottom＝可見 main 節點（不計決策�
 main_bottom + BAND_GAP、supp 節點從 main_bottom + BAND_GAP + BAND_TITLE_H 起；supp 無可見節點時不畫分隔線與標題、節點從
 GRAPH_PAD 起；order 為每 (band, col) 內的整數序；q:main 只對 main 區帶的問題垂直居中；收合舊版的群／子分析／次要結果借現行版
 群的列（現行版沒有群時借 plan 的列）。stats 加 band_main_nodes／band_supp_nodes／sensitivity_groups。
+問題 id 別名（Sources.question_aliases）：index 裡 sq 不在 goals 的 plan，沿 replaced_by（或反向 supersedes）鏈走到終點 plan，
+終點的 sq 在 goals 就記 {舊 id → 現行 id}；里程分頁的 plan／validation item／claims 篩選與決策註記、關聯圖的 plan 歸屬
+（舊版進現行版的 superseded_versions、收合借列、band）、決策 refers、validation 節點都套用；現行問題節點 meta.aliases 與
+title 尾綴標出舊 id，IR graph 頂層 question_aliases（空就 {}）。只有解析不到的 sq 才造「goals 無此問題」占位節點。
 再加第五欄圖表 f:（analysis/figures/manifest.json，r → f depicts「呈現於」；state 依 status 與檔案存在與否；
 results_keys 指到不在圖裡的鍵不建邊、徽章「無對應結果鍵」並 WARNING），結果節點 meta 帶表（columns／rows 最多
 200 列／n_rows／truncated）或 value／display／unit，面板可直接看表與圖。
@@ -182,6 +186,7 @@ class Sources:
         self._cache: dict[str, tuple[str, dict | None, str]] = {}
         self.warnings: list[str] = []
         self.infos: list[str] = []
+        self._aliases: dict[str, str] | None = None
 
     def _load(self, key: str) -> tuple[str, dict | None, str]:
         if key in self._cache:
@@ -239,6 +244,60 @@ class Sources:
         if not d.is_dir():
             return []
         return sorted(p.name for p in d.glob(pattern) if p.is_file())
+
+    def question_aliases(self) -> dict[str, str]:
+        """問題 id 別名 {舊 sq id → 現行問題 id}（只算一次、快取）。
+
+        index.yaml 裡 `sq` 不在 goals（sub_questions ∪ appendix_questions）的每筆 plan，沿 index 的 `replaced_by`
+        （缺的話用其他 plan 的 `supersedes`——plan yaml 或 index 條目——反推）走到鏈的終點 plan；終點的 `sq` 在 goals 就記
+        alias，否則不記（那個 sq 仍是孤兒，關聯圖照舊造占位節點）。用途：主問題降為附錄問題（SQ1 → AQ2）後，舊版 plan、
+        決策 links、validation item 的 `sq` 仍寫舊 id，里程與關聯圖都要把它們歸到現行問題。"""
+        if self._aliases is not None:
+            return self._aliases
+        proj = self.data('project') if self.status('project') == 'ok' else {}
+        goals = _dict(proj.get('goals'))
+        goal_ids = {_text(_dict(q).get('id')) for name in ('sub_questions', 'appendix_questions') for q in _list(goals.get(name))}
+        goal_ids.discard('')
+        index = self.data('index') if self.status('index') == 'ok' else {}
+        entries = [p for p in _list(index.get('plans')) if isinstance(p, dict) and _text(p.get('plan_id'))]
+        sq_of = {_text(p.get('plan_id')): _text(p.get('sq')) for p in entries}
+        next_of: dict[str, str] = {}
+        for p in entries:   # index 的 replaced_by 為準
+            if _text(p.get('replaced_by')):
+                next_of[_text(p.get('plan_id'))] = _text(p.get('replaced_by'))
+        for p in entries:   # 沒有 replaced_by 的，用「誰 supersedes 我」反推（index 條目或 plan yaml）
+            pid = _text(p.get('plan_id'))
+            sup = _text(p.get('supersedes'))
+            if not sup:
+                doc = self.yaml_rel(_text(p.get('path')) or f'analysis/plans/{pid}.yaml')
+                sup = _text(doc.get('supersedes')) if doc else ''
+            if sup and sup not in next_of and sup in sq_of:
+                next_of[sup] = pid
+        alias: dict[str, str] = {}
+        for p in entries:
+            pid, sq = _text(p.get('plan_id')), _text(p.get('sq'))
+            if not sq or sq in goal_ids or sq in alias:
+                continue
+            cur, seen = pid, {pid}
+            while cur in next_of and next_of[cur] not in seen:
+                cur = next_of[cur]
+                seen.add(cur)
+            term = sq_of.get(cur, '')
+            if term and term in goal_ids and term != sq:
+                alias[sq] = term
+        self._aliases = alias
+        for old, new in alias.items():
+            olds = '／'.join(pid for pid, s in sq_of.items() if s == old)
+            self.infos.append(f'問題 id 別名：{old} → {new}（index 舊版 {olds}）')
+        return alias
+
+    def alias_of(self, sq: str) -> str:
+        """把可能是舊 id 的問題 id 換成現行 id；不是別名就原樣回傳。"""
+        return self.question_aliases().get(sq, sq)
+
+    def alias_olds(self, qid: str) -> list[str]:
+        """回傳指向 qid 的全部舊 id（index 順序）。"""
+        return [old for old, new in self.question_aliases().items() if new == qid]
 
 
 # ---------- 欄位取值 ----------
@@ -301,7 +360,7 @@ def _sq_plans(src: Sources, lane_id: str) -> tuple[dict | None, list[dict], list
     index = src.data('index')
     active_map = _dict(index.get('active'))
     active_id = _text(active_map.get(lane_id))
-    entries = [p for p in _list(index.get('plans')) if isinstance(p, dict) and _text(p.get('sq')) == lane_id]
+    entries = [p for p in _list(index.get('plans')) if isinstance(p, dict) and src.alias_of(_text(p.get('sq'))) == lane_id]
     # active map 是權威來源；map 缺或指到不存在的 plan_id 時退回 status == active 的第一筆
     active = None
     if active_id:
@@ -374,7 +433,7 @@ def judge_analyze_data(src: Sources, lane: dict) -> dict:
     active_ids = {_text(active.get('plan_id'))} if active else set()
     superseded_ids = {_text(p.get('plan_id')) for p in superseded}
     listed_ids = active_ids | superseded_ids | {_text(p.get('plan_id')) for p in others}
-    pat = re.compile(re.escape(lane_id) + r'-v\d+$')
+    pat = re.compile('(' + '|'.join(re.escape(x) for x in [lane_id] + src.alias_olds(lane_id)) + r')-v\d+$')
     keys_active: list[str] = []
     keys_superseded: list[str] = []
     keys_orphan: list[str] = []
@@ -448,7 +507,7 @@ def judge_validate_results(src: Sources, lane: dict) -> dict:
     top_status = _text(doc.get('status')).lower()
     completed_at = _date(doc.get('completed_at'))
     expired_at = _date(doc.get('expired_at'))
-    items = [it for it in _list(doc.get('items')) if isinstance(it, dict) and _text(it.get('sq')) == lane_id]
+    items = [it for it in _list(doc.get('items')) if isinstance(it, dict) and src.alias_of(_text(it.get('sq'))) == lane_id]
     if not items:
         return node(stage, 'pending', summary='無 validation item',
                     evidence=[ev('value', f'items[] 無 sq={lane_id}', f'{rel}#items[]'),
@@ -482,7 +541,7 @@ def judge_evaluate(src: Sources, lane: dict) -> dict:
     reason = _clip(_text(lane.get('status_reason')), SUMMARY_MAX)
     evidence = [ev('value', f'status={status or "（缺）"}', f'{goal_path}.status')]
     for name in src.glob('evaluations', '*.md'):
-        if lane_id in name:
+        if lane_id in name or any(old in name for old in src.alias_olds(lane_id)):
             evidence.append(ev('path', f'evaluations/{name}', 'evaluations/'))
     if status == 'addressed':
         return node(stage, 'done', summary='addressed' + (f'：{reason}' if reason else ''), evidence=evidence)
@@ -503,7 +562,7 @@ def judge_interpret_results(src: Sources, lane: dict) -> dict:
     if st == 'broken':
         return _unknown(stage, rel)
     doc = src.data('claims')
-    claims = [c for c in _list(doc.get('claims')) if isinstance(c, dict) and _text(c.get('sq')) == lane_id]
+    claims = [c for c in _list(doc.get('claims')) if isinstance(c, dict) and src.alias_of(_text(c.get('sq'))) == lane_id]
     if not claims:
         return node(stage, 'pending', summary='無主張', evidence=[ev('value', f'claims[] 無 sq={lane_id}', f'{rel}#claims[]')])
     state_claims = _dict(_get(src.data('project'), 'state', 'claims'))
@@ -927,12 +986,12 @@ def attach_annotations(src: Sources, lanes: list[dict]) -> None:
             'exec_issue': _text(d.get('exec_issue')),
             'method': _text(d.get('method')),
         }
-        question = _text(d.get('question'))
+        question = src.alias_of(_text(d.get('question')))
         targets: list[str] = []
         if question in by_id and question != 'project':
             targets = [question]
         elif question in ('', 'main'):
-            targets = [t for t in dict.fromkeys(_text(x) for x in _list(d.get('links'))) if t in by_id and t != 'project']
+            targets = [t for t in dict.fromkeys(src.alias_of(_text(x)) for x in _list(d.get('links'))) if t in by_id and t != 'project']
         if not targets:
             targets = ['project']
         for t in targets:
@@ -1071,8 +1130,25 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 if link_s.startswith('results:') and len(link_s) > len('results:'):
                     cites.append((f'q:{qid}', link_s[len('results:'):], f'{source}.links'))
 
+    # 問題 id 別名：舊 sq id → 現行問題（主問題降為附錄問題後，index 舊版／決策 links／validation item 仍寫舊 id）
+    aliases = src.question_aliases()
+    for old, new in aliases.items():
+        qn = g.nodes.get(f'q:{new}')
+        if qn is None:
+            continue
+        qn['meta'].setdefault('aliases', []).append(old)
+    for new in dict.fromkeys(aliases.values()):
+        qn = g.nodes.get(f'q:{new}')
+        if qn is None:
+            continue
+        olds = qn['meta'].get('aliases', [])
+        old_plans = [_text(p.get('plan_id')) for p in _list(_dict(src.data('index') if src.status('index') == 'ok' else {}).get('plans'))
+                     if isinstance(p, dict) and _text(p.get('sq')) in olds]
+        suffix = f'（原 {"／".join(olds)}；index 舊版 {"／".join(old_plans)}）' if old_plans else f'（原 {"／".join(olds)}）'
+        qn['title'] = (qn['title'] + suffix) if qn['title'] else suffix.strip('（）')
+
     def ensure_question(sq: str, source: str) -> None:
-        if f'q:{sq}' not in g.nodes:
+        if f'q:{sq}' not in g.nodes:   # 解析不到別名的孤兒 sq 才造占位節點
             g.add_node(f'q:{sq}', 'question', sq, 'goals 無此問題（僅見於 plans index）', 'unknown', {}, source)
             question_order.append(f'q:{sq}')
 
@@ -1088,7 +1164,8 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     robustness_of: dict[tuple[str, str], str] = {}
     for entry in entries:
         pid = _text(entry.get('plan_id'))
-        sq = _text(entry.get('sq'))
+        sq_raw = _text(entry.get('sq'))
+        sq = src.alias_of(sq_raw)   # 舊 id 換成現行問題（例：SQ1 → AQ2）
         status = _text(entry.get('status')).lower()
         is_active = (_text(active_map.get(sq)) == pid) if _text(active_map.get(sq)) else status == 'active'
         rel = _text(entry.get('path')) or f'analysis/plans/{pid}.yaml'
@@ -1098,7 +1175,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         plan_active[pid] = is_active
         meta = {'version': _plan_version(pid, 0), 'status': status or 'unknown',
                 'confirmed_at': _date(entry.get('confirmed_at')), 'content_hash': _text(entry.get('content_hash')),
-                'models': []}
+                'models': [], 'sq': sq}
+        if sq_raw != sq:
+            meta['sq_original'] = sq_raw
         meta.update(_plan_doc_meta(doc))
         n = g.add_node(f'p:{pid}', 'method', pid, _text(doc.get('question')) if doc else '',
                        'expired' if not is_active else 'pending', meta, f'{REL["index"]}#plans[{pid}]')
@@ -1269,7 +1348,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         pid = _text(obj.get('plan_id'))
         if pid:
             if f'p:{pid}' not in g.nodes:
-                n = g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': []}, f'{REL["results"]}#{key}.plan_id')
+                n = g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': [], 'sq': ''}, f'{REL["results"]}#{key}.plan_id')
                 n['subtype'] = 'primary'
                 plan_sq[pid] = ''
                 plan_active[pid] = False
@@ -1362,21 +1441,24 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         vid = _text(item.get('id')) or f'items[{i}]'
         istatus = _text(item.get('status')).lower()
         state = 'expired' if top_expired else {'pass': 'done', 'qualified': 'done', 'fail': 'blocked'}.get(istatus, 'unknown')
-        meta = {'status': istatus or 'unknown', 'sq': _text(item.get('sq')), 'plan_id': _text(item.get('plan_id')),
+        sq_raw = _text(item.get('sq'))
+        meta = {'status': istatus or 'unknown', 'sq': src.alias_of(sq_raw), 'plan_id': _text(item.get('plan_id')),
                 'primary_results': [_text(k) for k in _list(item.get('primary_results')) if _text(k)],
                 'robustness_keys': list(dict.fromkeys(_text(k) for rob in _list(item.get('robustness')) if isinstance(rob, dict)
                                                       for k in _list(rob.get('result_keys')) if _text(k)))}
         if top_expired:
             meta['expired_at'] = _date(vdoc.get('expired_at'))
+        if sq_raw != meta['sq']:
+            meta['sq_original'] = sq_raw
         if _text(item.get('limitations')):
             meta['limitations'] = _clip(_text(item.get('limitations')), META_MAX)
         source = f'{REL["validation"]}#items[{vid}]'
-        g.add_node(f'v:{vid}', 'validation', vid, f'{_text(item.get("sq")) or "?"} 驗證 {istatus or "unknown"}', state, meta, source)
+        g.add_node(f'v:{vid}', 'validation', vid, f'{meta["sq"] or "?"} 驗證 {istatus or "unknown"}', state, meta, source)
         pid = _text(item.get('plan_id'))
         if pid:
             if f'p:{pid}' not in g.nodes:
-                g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': []}, f'{source}.plan_id')
-                plan_sq[pid] = _text(item.get('sq'))
+                g.add_node(f'p:{pid}', 'method', pid, 'index.yaml 無此 plan', 'unknown', {'models': [], 'sq': meta['sq']}, f'{source}.plan_id')
+                plan_sq[pid] = meta['sq']
                 plan_active[pid] = False
             g.add_edge(f'p:{pid}', f'v:{vid}', 'validated_by', f'{source}.plan_id', '驗證')
         for key in meta['primary_results']:
@@ -1387,7 +1469,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 continue  # 同一 item 同一鍵：只畫 primary，不重複
             nid = result_node(key, f'{source}.robustness[].result_keys', 'validation 指向的鍵不在 results.json', 'unknown')
             g.add_edge(f'v:{vid}', nid, 'robustness', f'{source}.robustness[].result_keys', '驗證（穩健性）', style='thin')
-        sq = _text(item.get('sq')) or plan_sq.get(pid, '')
+        sq = meta['sq'] or plan_sq.get(pid, '')
         vrank[f'v:{vid}'] = (question_order.index(f'q:{sq}') if f'q:{sq}' in question_order else BIG, i)
 
     # goals links → cites（hidden，與主幹重複）；鍵不在 results.json 視為 dangling
@@ -1512,7 +1594,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         me = f'd:{did}'
         base = f'{REL["decisions"]}#decisions[{did}]'
         hits = 0
-        question = _text(d.get('question'))
+        question = src.alias_of(_text(d.get('question')))
         if question == 'main':
             hits += 1 if g.add_edge(me, 'q:main', 'refers', f'{base}.question', visible=False) else 0
         elif question and f'q:{question}' in g.nodes:
@@ -1520,8 +1602,8 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         for link in _list(d.get('links')):
             link_s = _text(link)
             target = ''
-            if f'q:{link_s}' in g.nodes and link_s != 'main':
-                target = f'q:{link_s}'
+            if f'q:{src.alias_of(link_s)}' in g.nodes and link_s != 'main':
+                target = f'q:{src.alias_of(link_s)}'
             elif DECISION_ID_RE.fullmatch(link_s) and f'd:{link_s}' in g.nodes:
                 target = f'd:{link_s}'
             elif link_s.startswith('results.') and f'r:{link_s[len("results."):]}' in g.nodes:
@@ -1656,6 +1738,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         'nodes': list(g.nodes.values()),
         'edges': g.edges,
         'shared': shared,
+        'question_aliases': dict(aliases),
         'stats': {'nodes': len(g.nodes), 'edges': len(g.edges), 'by_type': by_type,
                   'shared_pairs': len(shared), 'dangling_result_keys': len(dangling),
                   'unvalidated_result_keys': unvalidated, 'figures_unreviewed': figures_unreviewed,
@@ -1744,7 +1827,7 @@ def validate_graph(graph) -> list[str]:
     errors: list[str] = []
     if not isinstance(graph, dict):
         return ['IR-11 graph']
-    for key in ('node_types', 'edge_types', 'nodes', 'edges', 'shared', 'stats'):
+    for key in ('node_types', 'edge_types', 'nodes', 'edges', 'shared', 'question_aliases', 'stats'):
         if key not in graph:
             errors.append(f'IR-11 graph.{key}')
     if errors:
@@ -1855,6 +1938,14 @@ def validate_graph(graph) -> list[str]:
             tg = group_targets.get(nid, [])
             if not any(v for v, _c in tg) or len({c for _v, c in tg}) != 1:
                 errors.append(f'IR-13 graph.nodes[{nid}].supplements')
+    qa = graph['question_aliases']
+    if not isinstance(qa, dict):
+        errors.append('IR-14 graph.question_aliases')
+    else:
+        for old, new in qa.items():   # 舊 id → 現行問題：value 必須是存在的問題節點，key 不得自己也是節點
+            if not isinstance(old, str) or not isinstance(new, str) or f'q:{new}' not in ids or f'q:{old}' in ids \
+                    or by_id_v.get(f'q:{new}', {}).get('type') != 'question':
+                errors.append(f'IR-14 graph.question_aliases[{old}]')
     for i, s in enumerate(graph['shared'] if isinstance(graph['shared'], list) else []):
         sub = f'graph.shared[{i}]'
         if not isinstance(s, dict) or s.get('a') not in ids or s.get('b') not in ids:
@@ -2528,7 +2619,8 @@ GRAPH_JS = """
       if(n.meta.execution_note)h+='<dt>execution_note</dt><dd>'+esc(n.meta.execution_note)+'</dd>';
       var secs=G.nodes.filter(function(m){return m.type==='result'&&m.parent===id;});
       h+='<dt>次要結果（'+secs.length+'）</dt><dd>'+(secs.length?secs.map(function(m){return '<span class="goto" data-goto="'+esc(m.id)+'">'+esc(m.label)+'</span>';}).join('、'):'無')+'</dd>';}
-    else if(n.type==='method'){skip=['models','superseded_versions','amendment_reason','sensitivity_ids'];
+    else if(n.type==='method'){skip=['models','superseded_versions','amendment_reason','sensitivity_ids','sq','sq_original'];
+      if(n.meta.sq)h+='<dt>問題</dt><dd>'+(nodes['q:'+n.meta.sq]?'<span class="goto" data-goto="q:'+esc(n.meta.sq)+'">'+esc(n.meta.sq)+'</span>':esc(n.meta.sq))+(n.meta.sq_original?'（index 寫 '+esc(n.meta.sq_original)+'，已併入 '+esc(n.meta.sq)+'）':'')+'</dd>';
       h+='<dt>models</dt><dd>'+esc((n.meta.models||[]).join('、')||'—')+'</dd>';
       var sids=n.meta.sensitivity_ids||[];h+='<dt>敏感性子分析（'+sids.length+'）</dt><dd>'+(sids.length?'<ul>'+sids.map(function(sid){var sn=nodes[sid];return '<li><span class="goto" data-goto="'+esc(sid)+'">'+esc(sn?sn.label:sid)+'</span>'+(sn?'：'+esc(stateZh[sn.state]||sn.state)+(sn.badge?'（'+esc(sn.badge)+'）':''):'')+'</li>';}).join('')+'</ul>':'無')+'</dd>';
       var sv=n.meta.superseded_versions||[];h+='<dt>superseded_versions（'+sv.length+'）</dt><dd>'+(sv.length?sv.map(function(p){return '<span class="goto" data-goto="p:'+esc(p)+'">'+esc(p)+'</span>';}).join('、')+' <span class="expand" data-expand="'+esc(id)+'">'+(expanded[id]?'收合舊版':'展開舊版')+'</span>':'無')+'</dd>';
@@ -2548,6 +2640,7 @@ GRAPH_JS = """
       var rk=(inE[id]||[]).filter(function(ei){return G.edges[ei].type==='depicts';}).map(function(ei){return G.edges[ei].from;});
       h+='<dt>結果鍵</dt><dd>'+(rk.length?rk.map(function(r){return '<span class="goto" data-goto="'+esc(r)+'">'+esc(nodes[r].label)+'</span>';}).join('、'):'無（'+esc((n.meta.results_keys||[]).join('、')||'manifest 未列')+'）')+'</dd>';
       if(n.meta.spec)h+='<dt>spec</dt><dd>'+esc(typeof n.meta.spec==='object'?JSON.stringify(n.meta.spec):n.meta.spec)+'</dd>';}
+    if(n.type==='question')skip=skip.concat(['aliases']);
     h+='<dt>meta</dt><dd>'+metaRows(n.meta,skip)+'</dd>';
     if(n.type==='result'){
       if(n.meta.table)h+='<dt>表</dt><dd>'+tableBlock(n.meta.table)+'</dd>';
@@ -2556,6 +2649,7 @@ GRAPH_JS = """
       h+='<dt>圖表（'+figs.length+'）</dt><dd>'+(figs.length?figs.map(figBlock).join(''):'無')+'</dd>';}
     h+='<dt>進邊（上游 '+Object.keys(up.nodes).length+' 個節點）</dt><dd>'+edgeList(inE[id],-1)+'</dd>';
     h+='<dt>出邊（下游 '+Object.keys(down.nodes).length+' 個節點）</dt><dd>'+edgeList(outE[id],1)+'</dd>';
+    if(n.type==='question'&&(n.meta.aliases||[]).length)h+='<dt>舊 id</dt><dd>'+esc(n.meta.aliases.join('、'))+'（index 舊版、決策 links、validation item 仍寫舊 id，已併入本問題）</dd>';
     if(n.type==='question'){var sh=G.shared.filter(function(s){return s.a===id||s.b===id;});h+='<dt>共用關係</dt><dd>';
       if(!sh.length)h+='無';else{h+='<ul>';sh.forEach(function(s){var other=s.a===id?s.b:s.a;var parts=[];
         var mods=s.via.filter(function(v){return v.indexOf('model:')===0;}).map(function(v){return esc(v.slice(6));});if(mods.length)parts.push('方法 '+mods.join('、'));
