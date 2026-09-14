@@ -49,3 +49,5 @@ write-manuscript 必須確認：claims/source fingerprints 與最近 audit 一�
 ## 收尾
 
 申報：「本階段更新：state.claim_audit → pass（claims fingerprint <...>）；經使用者確認後 state.claims.confirmed → true；下一站：figure-design 或 write-manuscript」。
+
+收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: claim-audit`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

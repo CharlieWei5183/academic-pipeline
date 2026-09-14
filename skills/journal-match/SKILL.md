@@ -36,3 +36,4 @@ metadata:
 - 本 skill 不改研究內容與主張；改裝只動格式、結構與敘事裁剪。
 - 層級建議只是建議；引用期刊聲望指標時須註明年份與來源。
 - 收尾申報一行：「本階段更新：target →{journal, submission_format, csl}（轉投時另列 cascade）；下一站：<skill 名>」。
+- 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: journal-match`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。

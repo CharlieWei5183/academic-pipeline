@@ -30,6 +30,7 @@ metadata:
 2. **組裝成稿** `manuscript/zh/si-v1.md`（既有版本取號遞增，不覆蓋）：章節慣例——補充方法、補充表（含敏感度分析彙總表）、補充圖；圖說直接取 manifest.json 的 `caption` 欄位，不另行重寫。每個 SI 項目在正文須有至少一處引用（如「見補充圖 S1」）；缺引用的項目列清單請使用者決定——正文補引用，或該項目不進 SI。
 
 3. **收尾**：更新 `project.yaml` 的 `state.si_latest`；建議下一步 check-consistency（正文與 SI 同批檢核）。收尾申報一行：「本階段更新：state.si_latest <舊值>→<新值>；下一站：check-consistency」。此後 SI 隨行整條管線：peer-review 送審含 SI、translate-en 同流程翻譯、submission-prep 的 checklist 含 SI 項。
+4. 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: write-supplementary`、`checkpoint: 階段收尾`，並填 `method`（本階段採用的方法）、`problem`（本階段解決的問題）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
 
 ## 硬性規則
 

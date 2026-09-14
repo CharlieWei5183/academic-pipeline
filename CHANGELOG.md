@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.11.0（未發布）
+
+`decisions.yaml` 補齊進度時間軸所需的資料來源：條目加三個選填欄位、每個 pipeline stage skill 收尾強制記一筆階段收尾 D#、checker 對「state 已有紀錄卻無該 stage 條目」發 WARNING。skills（26）、agents（18）與管線階段不變；新欄位一律選填，舊專案缺欄位只列 WARNING／INFO、不改 exit code，無破壞性變更，故為 MINOR bump。
+
+1. **移除 zz-canary**：0.10.2 為驗證 marketplace 同步而暫放的 canary skill 已移除，不再隨 plugin 出貨。
+2. **`decisions.yaml` 條目新增選填 `method`／`problem`／`evidence`**（`project-init` 步驟 5 的 schema 註解，置於 `links` 之前）：`method` 為本決策採用的方法或做法（一句話）、`problem` 為本決策要解決的問題（一句話）、`evidence` 為執行憑據——指令、腳本路徑、fingerprint 或輸出檔路徑的字串清單。記錄類別由三類擴為四類，新增 (d) 階段收尾；示範條目的 `date` 改為有引號的 ISO 8601 字串，與 0.8.1 起的範本寫法一致。
+3. **22 個 stage skill 收尾強制記 D#**：除 `status`、兩個潤稿站與 `debug-pipeline`（維持既有的條件式記錄）外，每個 skill 的收尾緊接申報句加一段固定措辭——追加 `stage: <skill 名>`、`checkpoint: 階段收尾` 的條目並填 `method`／`problem`／`evidence`，照建議原樣通過也要記；沒記就不會出現在進度時間軸上。SKILL.md frontmatter 一律未動。
+4. **`check_decisions.py`**：`STAGES` 補上 `debug-pipeline`（該 skill 第 36 行本就要求寫 D#，詞彙表卻漏列）；新增模組常數 `STAGE_CLOSE_CHECKPOINT = '階段收尾'` 供 renderer 比對；選填欄位驗證（`evidence` 須為字串清單、`method`／`problem` 須為字串、`date` 經 `str()` 後須為 `YYYY-MM-DD`，全為 WARNING）；新增模組層級 `STATE_COVERAGE` 表——依 `project.yaml` 的 `state` 判斷 18 個 stage 是否已有紀錄，有紀錄卻無對應 stage 條目即 `WARNING <stage>: project.yaml state 已有紀錄，但決策日誌無此 stage 條目（收尾須記 D#）`；`state` 缺、為空或型別不對一律視為無紀錄。統計新增一行「階段收尾條目: N/總筆數」。既有「exit 0；檔案無法解析才 exit 2」契約不變。
+5. **文件**：README 的確定性腳本段補記階段收尾條目、測試清單加 `run_v0110_regressions.py`；`tests/README.md` 補覆蓋檢查說明與 `run_v0110` 段。
+6. **測試**：新增 `tests/run_v0110_regressions.py`——schema 註解錨點、`STAGES` 含 `debug-pipeline` 與 `STAGE_CLOSE_CHECKPOINT`、以暫存目錄動態建最小專案實跑 checker（state 有 `study_design.result` 而無條目 → WARNING 且 exit 0；補一筆階段收尾條目 → WARNING 消失且「階段收尾條目: 1/2」；舊格式裸日期條目 → 無新欄位 WARNING；`evidence: "not-a-list"` → WARNING 仍 exit 0）、22 個目標 SKILL.md 皆含固定措辭而四個排除者不含、README／CHANGELOG 錨點。既有八支測試全部通過；`plugin.json` 版號留到整個功能合併時再升。
+
 ## 0.10.0（2026-08-18）
 
 中文潤稿站由「選用外部 user skill」升為**本 plugin 內建 skill**，並補上結果／討論的呈現層陳述規格。

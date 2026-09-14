@@ -80,6 +80,8 @@ python3 ../../skills/evaluate/scripts/check_coverage.py project.yaml analysis/re
 # 裁決史應全列「無史料」；check_coverage 黃金答案不變
 ```
 
+`check_decisions.py` 自 0.11.0 起另做階段覆蓋檢查：讀 `project.yaml` 的 `state`，某 stage 已有紀錄（判準見腳本的 `STATE_COVERAGE` 表）而 `decisions.yaml` 沒有任何該 stage 條目時列 `WARNING <stage>: ... 無此 stage 條目`；mini-project 沒有 `decisions.yaml`，腳本在讀 `state` 之前即列 INFO 並 exit 0，故此處不會出現該 WARNING。新欄位 `method`／`problem`／`evidence` 為選填，舊條目缺欄位不報，exit code 契約不變。
+
 typeset 建置（需 pandoc；舊版 pandoc 無 citeproc 時應優雅降級並警示）：
 
 ```bash
@@ -151,3 +153,13 @@ v0.10.0 把中文潤稿站由外部 user skill 升為內建 `chinese-academic-ed
 - README skills 數為 26；`plugin.json` 精確 pin `0.10.0`，`run_v090_regressions.py` 已改為單調斷言。
 
 有牙驗證：未修補版本下 `test_hook_wording_builtin`／`test_trigger_evals_no_collision`／`test_docs_and_version` 三段各自失敗；只放 skill 檔而不改掛點與文件時，前兩段仍失敗。
+
+## run_v0110_regressions.py
+
+v0.11.0 為進度時間軸補齊 `decisions.yaml` 的資料來源，以錨點字串與實際執行 checker 兩種方式斷言：
+
+- `project-init/SKILL.md` 的 schema 註解含 `method:`／`problem:`／`evidence:` 三個選填欄位與「階段收尾」類別。
+- `check_decisions.py` 的 `STAGES` 含 `debug-pipeline`，且匯出 `STAGE_CLOSE_CHECKPOINT`。
+- 在暫存目錄動態建最小專案實跑 checker：`state.study_design.result: pass` 而 `decisions.yaml` 只有 `project-init` 條目 → exit 0 且 stdout 含 `WARNING study-design` 與「無此 stage 條目」；補一筆 `stage: study-design`、`checkpoint: 階段收尾`、三個新欄位齊全的條目 → 該 WARNING 消失且「階段收尾條目: 1/2」；舊格式條目（無新欄位、裸日期）→ exit 0、無任何關於新欄位的 WARNING；`evidence: "not-a-list"` → 有 WARNING、仍 exit 0。暫存目錄測試結束自動清除。
+- 22 個目標 SKILL.md 每一份都含「收尾必記一筆 D#」與 `checkpoint: 階段收尾`；`status`、兩個潤稿站、`debug-pipeline` 不含該句。
+- README 含 `run_v0110_regressions.py`；CHANGELOG 含 `0.11.0`。
