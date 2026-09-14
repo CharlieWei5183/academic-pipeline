@@ -21,12 +21,20 @@ WARNING／INFO，`check_decisions.py` 維持「exit 0；檔案無法解析才 ex
 階段 3 追加新的 `render_progress.py`（研究問題里程圖：唯讀 SSOT → `PROGRESS.ir.json` →
 schema 驗證 → 自含 `PROGRESS.html`）的測試：完整 fixture 的逐站判定、空 fixture、無法解析
 → unknown、雜湊紅線、旗標正交、HTML 自含與逸出、確定性、IR 驗證關卡與登記錨點。
+
+階段 4「自動觸發」追加 plugin 級 `hooks/hooks.json`（`SessionEnd` → `progress_hook.py`）與
+`skills/status/scripts/progress_hook.py` 的測試：hook 從 stdin JSON 取 `cwd`，在 cwd 本身或其一層
+子目錄找含 `project.yaml` 的專案根（跳過 `archive/`），依序 subprocess 兩支 renderer，只多寫
+`<root>/.progress-hook.log`；一律 exit 0、stdout 為空、renderer 失敗只進 log、
+`ACADEMIC_PIPELINE_PROGRESS_HOOK=off` 為逃生口。fixture 一律 `tempfile`，斷言讀磁碟實際產出，
+並逐檔 sha256 確認 SSOT 未被碰。
 """
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,6 +46,11 @@ PLUGIN = Path(__file__).resolve().parents[1]
 CHECKER = PLUGIN / "skills/status/scripts/check_decisions.py"
 TIMELINE = PLUGIN / "skills/status/scripts/render_decisions_timeline.py"
 RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
+HOOK = PLUGIN / "skills/status/scripts/progress_hook.py"
+HOOKS_JSON = PLUGIN / "hooks/hooks.json"
+HOOK_ENV = "ACADEMIC_PIPELINE_PROGRESS_HOOK"
+HOOK_LOG = ".progress-hook.log"
+HOOK_OUTPUTS = ("PROGRESS.ir.json", "PROGRESS.html", "DECISIONS-TIMELINE.md")
 STATS_RE = re.compile(r"共 (\d+) 筆記錄，其中 (\d+) 筆有完整四軸")
 LEGACY_FIELD = "prob" + "lem"  # 已停用的舊欄位名，拆開寫以免 git grep 誤中
 CLOSE_SENTENCE = "收尾必記一筆 D#"
@@ -1505,6 +1518,288 @@ def test_graph_empty_fixtures() -> None:
         assert {e["type"] for e in g["edges"]} == {"decomposes", "cites"} and g["stats"]["dangling_result_keys"] == 2
 
 
+# ---------- 階段 4：progress_hook.py（SessionEnd hook 自動重算） ----------
+
+HOOK_PROJECT = """project:
+  title_zh: "hook 測試專案"
+goals:
+  sub_questions:
+    - id: SQ1
+      question: "hook 測試問題"
+      status: open
+"""
+
+HOOK_DECISIONS = """decisions:
+  - id: D-001
+    date: "2026-09-14"
+    stage: project-init
+    checkpoint: 階段收尾
+    question: main
+    method: "研究設計"
+    evidence: ["project.yaml"]
+    decision: "建立專案"
+"""
+
+
+def _write_hook_project(root: Path, decisions: str = HOOK_DECISIONS) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "project.yaml").write_text(HOOK_PROJECT, encoding="utf-8")
+    (root / "decisions.yaml").write_text(decisions, encoding="utf-8")
+
+
+def run_hook(stdin_obj: dict | str | None, *flags: str, env_extra: dict | None = None) -> tuple[int, str, str]:
+    env = dict(os.environ)
+    env.pop(HOOK_ENV, None)
+    if env_extra:
+        env.update(env_extra)
+    if stdin_obj is None:
+        payload = ""
+    elif isinstance(stdin_obj, str):
+        payload = stdin_obj
+    else:
+        payload = json.dumps(stdin_obj)
+    proc = subprocess.run(
+        [sys.executable, str(HOOK), *flags],
+        input=payload, capture_output=True, text=True, encoding="utf-8", env=env,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _log_lines(root: Path) -> list[str]:
+    return (root / HOOK_LOG).read_text(encoding="utf-8").splitlines()
+
+
+def _assert_all_outputs(root: Path) -> None:
+    for name in HOOK_OUTPUTS:
+        assert (root / name).is_file(), f"hook 未產出 {name}"
+    assert (root / "PROGRESS.html").stat().st_size > 0
+    json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+    assert "決策時間軸" in (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+
+
+def test_hook_registered() -> None:
+    assert HOOKS_JSON.is_file(), "缺 hooks/hooks.json"
+    data = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    assert isinstance(data.get("description"), str) and data["description"]
+    ses = data["hooks"]["SessionEnd"]
+    assert isinstance(ses, list) and len(ses) == 1
+    entry = ses[0]["hooks"][0]
+    assert entry["type"] == "command"
+    assert "progress_hook.py" in entry["command"] and "${CLAUDE_PLUGIN_ROOT}" in entry["command"]
+    assert isinstance(entry["timeout"], int) and not isinstance(entry["timeout"], bool)
+    assert set(data["hooks"]) == {"SessionEnd"}, "hook 只註冊 SessionEnd"
+    # 依 codex 範本：hooks/hooks.json 放 plugin 根即自動載入，plugin.json 不需 hooks 欄位；版號未動
+    plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert plugin["name"] == "academic-pipeline"
+    assert "hooks" not in plugin, "plugin.json 不應另加 hooks 欄位（hooks/hooks.json 自動被發現）"
+    assert HOOK.is_file()
+    head = HOOK.read_text(encoding="utf-8")
+    assert "from __future__ import annotations" in head
+    assert "--find-only" in head and "--cwd" in head and HOOK_ENV in head and HOOK_LOG in head
+
+
+def test_hook_project_in_subdir() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        proj = base / "proj"
+        _write_hook_project(proj)
+        before = _sha_tree(base)
+        rc, out, err = run_hook({"cwd": tmp, "session_id": "t1", "hook_event_name": "SessionEnd", "reason": "other"})
+        assert rc == 0 and out == "", (rc, out)
+        _assert_all_outputs(proj)
+        lines = _log_lines(proj)
+        assert len(lines) == 2, lines
+        for line, script in zip(lines, ("render_progress.py", "render_decisions_timeline.py")):
+            cols = line.split("\t")
+            assert len(cols) == 5, cols
+            assert cols[1] == "t1" and cols[2] == script and cols[3] == "ok", cols
+            assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", cols[0]), cols[0]
+        # 只多出三個產物與 log；既有檔逐檔雜湊不變
+        after = _sha_tree(base)
+        assert set(after) - set(before) == {f"proj/{n}" for n in HOOK_OUTPUTS} | {f"proj/{HOOK_LOG}"}
+        for rel, digest in before.items():
+            assert after[rel] == digest, f"{rel} 被 hook 改動"
+        # 沒有任何東西寫到 cwd 本身
+        assert not (base / HOOK_LOG).exists() and not (base / "PROGRESS.html").exists()
+
+
+def test_hook_project_is_cwd() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "proj"
+        _write_hook_project(proj)
+        rc, out, _ = run_hook({"cwd": str(proj), "session_id": "t2", "hook_event_name": "SessionEnd"})
+        assert rc == 0 and out == ""
+        _assert_all_outputs(proj)
+        lines = _log_lines(proj)
+        assert len(lines) == 2 and all("\tok\t" in ln and "\tt2\t" in ln for ln in lines), lines
+        # 再跑一次：log 追加成 4 行、產物仍在
+        rc, out, _ = run_hook({"cwd": str(proj), "session_id": "t2b"})
+        assert rc == 0 and out == ""
+        lines = _log_lines(proj)
+        assert len(lines) == 4 and lines[-1].split("\t")[1] == "t2b", lines
+        # --cwd 旗標在 stdin 沒有 cwd 時生效；session_id 缺時寫 -
+        rc, out, _ = run_hook("", "--cwd", str(proj))
+        assert rc == 0 and out == ""
+        lines = _log_lines(proj)
+        assert len(lines) == 6 and lines[-1].split("\t")[1] == "-", lines
+        # stdin 不是 JSON 也不會炸：改用 --cwd
+        rc, out, _ = run_hook("not json at all", "--cwd", str(proj))
+        assert rc == 0 and out == "" and len(_log_lines(proj)) == 8
+
+
+def test_hook_no_project() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        (base / "notes.txt").write_text("x", encoding="utf-8")
+        (base / "sub").mkdir()
+        (base / "sub/README.md").write_text("no project.yaml here", encoding="utf-8")
+        before = _sha_tree(base)
+        rc, out, _ = run_hook({"cwd": tmp, "session_id": "t3"})
+        assert rc == 0 and out == ""
+        assert _sha_tree(base) == before, "找不到專案時不得落任何檔（含 log）"
+        # project.yaml 存在但不是 dict、或沒有 goals／project 鍵 → 一樣不算專案根
+        (base / "sub/project.yaml").write_text("- just\n- a list\n", encoding="utf-8")
+        (base / "project.yaml").write_text("pipeline:\n  version: 0.7\n", encoding="utf-8")
+        before = _sha_tree(base)
+        rc, out, _ = run_hook({"cwd": tmp})
+        assert rc == 0 and out == "" and _sha_tree(base) == before
+        # 完全空的目錄
+        with tempfile.TemporaryDirectory() as empty:
+            rc, out, _ = run_hook({"cwd": empty})
+            assert rc == 0 and out == "" and list(Path(empty).iterdir()) == []
+        # cwd 根本不存在
+        rc, out, _ = run_hook({"cwd": str(base / "nope/nowhere")})
+        assert rc == 0 and out == ""
+
+
+def test_hook_renderer_failure_is_logged() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "proj"
+        _write_hook_project(proj, decisions=": : :\n")
+        rc, out, _ = run_hook({"cwd": tmp, "session_id": "t5"})
+        assert rc == 0 and out == ""
+        assert (proj / "PROGRESS.html").is_file() and (proj / "PROGRESS.ir.json").is_file(), "另一支成功仍應產出"
+        assert not (proj / "DECISIONS-TIMELINE.md").exists()
+        lines = _log_lines(proj)
+        assert len(lines) == 2, lines
+        assert lines[0].split("\t")[2:4] == ["render_progress.py", "ok"], lines[0]
+        cols = lines[1].split("\t")
+        assert cols[2] == "render_decisions_timeline.py" and cols[3] == "fail rc=2", cols
+        assert "無法解析" in cols[4] and "\n" not in cols[4] and len(cols[4]) <= 200, cols[4]
+        # decisions.yaml 原文未動
+        assert (proj / "decisions.yaml").read_text(encoding="utf-8") == ": : :\n"
+
+
+def test_hook_env_off() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "proj"
+        _write_hook_project(proj)
+        before = _sha_tree(Path(tmp))
+        for value in ("off", "OFF", " off "):
+            rc, out, _ = run_hook({"cwd": tmp, "session_id": "t6"}, env_extra={HOOK_ENV: value})
+            assert rc == 0 and out == ""
+            assert _sha_tree(Path(tmp)) == before, f"{HOOK_ENV}={value!r} 仍落檔"
+        # 其他值不算關閉
+        rc, out, _ = run_hook({"cwd": tmp, "session_id": "t6"}, env_extra={HOOK_ENV: "on"})
+        assert rc == 0 and out == "" and (proj / "PROGRESS.html").is_file()
+
+
+def test_hook_skips_archive() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        # (a) cwd 底下只有 archive/ 是專案根 → 不選；data／node_modules／隱藏目錄也不選
+        for name in ("archive", "data", "node_modules", ".hidden"):
+            _write_hook_project(base / name)
+        before = _sha_tree(base)
+        rc, out, _ = run_hook({"cwd": tmp, "session_id": "t7"})
+        assert rc == 0 and out == "" and _sha_tree(base) == before, "archive／data／node_modules／隱藏目錄不得被選為專案根"
+        # (b) cwd 本身在 /archive/ 之下 → 也不選
+        rc, out, _ = run_hook({"cwd": str(base / "archive"), "session_id": "t7"})
+        assert rc == 0 and out == "" and _sha_tree(base) == before
+        # (c) 同層有 archive/ 與正常專案 → 選正常專案；子目錄依名稱排序取第一個
+        _write_hook_project(base / "zz_proj")
+        _write_hook_project(base / "aa_proj")
+        rc, out, _ = run_hook({"cwd": tmp, "session_id": "t7"})
+        assert rc == 0 and out == ""
+        assert (base / "aa_proj/PROGRESS.html").is_file() and (base / "aa_proj" / HOOK_LOG).is_file()
+        assert not (base / "zz_proj/PROGRESS.html").exists() and not (base / "archive/PROGRESS.html").exists()
+        # (d) --find-only 只印根到 stderr、不跑 renderer、不寫 log
+        _write_hook_project(base / "solo")
+        rc, out, err = run_hook({"cwd": str(base / "solo")}, "--find-only")
+        assert rc == 0 and out == "" and err.strip() == str((base / "solo").resolve())
+        assert not (base / "solo" / HOOK_LOG).exists() and not (base / "solo/PROGRESS.html").exists()
+        rc, out, err = run_hook({"cwd": str(base / "archive")}, "--find-only")
+        assert rc == 0 and out == "" and err.strip() == ""
+
+
+def test_hook_hash_redline() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "proj"
+        _write_hook_project(proj)
+        # 多放幾個 renderer 會讀的 SSOT，確認執行前後逐檔雜湊不變
+        (proj / "analysis").mkdir()
+        (proj / "analysis/results.json").write_text(json.dumps(RENDER_RESULTS, ensure_ascii=False, indent=2), encoding="utf-8")
+        (proj / "analysis/plans").mkdir()
+        (proj / "analysis/plans/index.yaml").write_text("schema_version: 1\nplans: []\n", encoding="utf-8")
+        (proj / "analysis/validation.yaml").write_text("schema_version: 1\nitems: []\n", encoding="utf-8")
+        (proj / "methodology").mkdir()
+        (proj / "methodology/route.yaml").write_text("primary: quantitative\n", encoding="utf-8")
+        # 也預放一份舊的產物與舊 log，確認產物被覆寫、log 被追加而非覆寫
+        (proj / "PROGRESS.html").write_text("stale", encoding="utf-8")
+        (proj / HOOK_LOG).write_text("old-line\n", encoding="utf-8")
+        before = _sha_tree(proj)
+        ssot = {k: v for k, v in before.items() if k not in HOOK_OUTPUTS and k != HOOK_LOG}
+        rc, out, _ = run_hook({"cwd": str(proj), "session_id": "t8"})
+        assert rc == 0 and out == ""
+        after = _sha_tree(proj)
+        for rel, digest in ssot.items():
+            assert after[rel] == digest, f"SSOT {rel} 被 hook 改動"
+        assert after["PROGRESS.html"] != before["PROGRESS.html"], "產物應被重算覆寫"
+        lines = _log_lines(proj)
+        assert lines[0] == "old-line" and len(lines) == 3, lines
+        assert set(after) - set(before) == {"PROGRESS.ir.json", "DECISIONS-TIMELINE.md"}
+
+
+def test_hook_log_rotation() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "proj"
+        _write_hook_project(proj)
+        filler = ("x" * 99 + "\n") * (2200)  # 220 KB > 200 KB
+        (proj / HOOK_LOG).write_text(filler, encoding="utf-8")
+        rc, out, _ = run_hook({"cwd": str(proj), "session_id": "t9"})
+        assert rc == 0 and out == ""
+        size = (proj / HOOK_LOG).stat().st_size
+        assert size <= 100 * 1024 + 512, size
+        lines = _log_lines(proj)
+        assert lines[-2].split("\t")[1:4] == ["t9", "render_progress.py", "ok"], lines[-2]
+        assert lines[-1].split("\t")[1:4] == ["t9", "render_decisions_timeline.py", "ok"], lines[-1]
+        assert all(len(ln) == 99 for ln in lines[:-2]), "截斷須對齊到換行，不留半行"
+
+
+def test_hook_docs_registered() -> None:
+    tokens = (HOOK_LOG, "progress_hook.py", "SessionEnd", HOOK_ENV, "hooks/hooks.json")
+    readme = text("README.md")
+    need("README.md", *tokens)
+    block = readme[readme.index("## 主要事實與治理 artifacts"):readme.index("## 相容性與升級")]
+    assert HOOK_LOG in block, "README artifacts block 缺 .progress-hook.log"
+    assert "自動重算" in readme and "逃生口" in readme
+    body = text("skills/project-init/SKILL.md")
+    tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
+    assert HOOK_LOG in tree and "hook" in tree, "project-init 步驟 4 的資料夾樹缺 .progress-hook.log"
+    need("skills/status/SKILL.md", "SessionEnd", "progress_hook.py", HOOK_LOG, HOOK_ENV)
+    changelog = text("CHANGELOG.md")
+    section = changelog[changelog.index("## 0.11.0"):changelog.index("## 0.10.0")]
+    assert "9. **" in section, "CHANGELOG 0.11.0 段缺第 9 條"
+    for token in tokens:
+        assert token in section, f"CHANGELOG 0.11.0 段缺 {token}"
+    need("tests/README.md", *tokens, "自動觸發")
+    # frontmatter 與版號未動
+    assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
+    assert text("skills/project-init/SKILL.md").startswith("---\nname: project-init\n")
+    plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert plugin["version"] == "0.10.2", "plugin.json 版號留到整個功能合併時再升"
+
+
 def main() -> int:
     test_schema_comment_has_new_fields()
     print("[regression] project-init schema 註解含 question/exec_issue/method/evidence 與階段收尾、三層語意: pass")
@@ -1580,6 +1875,26 @@ def main() -> int:
     print("[regression] validate_ir graph 規則：邊指到不存在節點／default_visible／style IR-13、id 前綴／x／col／collapsed IR-12、缺 graph IR-01；壞 IR → exit 2 不落檔: pass")
     test_graph_empty_fixtures()
     print("[regression] 空 fixture：無 goals → graph 只有 q:main；有 goals 無其他 SSOT → 只有 decomposes 邊: pass")
+    test_hook_registered()
+    print("[regression] hooks/hooks.json：只註冊 SessionEnd、command 含 progress_hook.py 與 ${CLAUDE_PLUGIN_ROOT}、timeout 為整數、plugin.json 不加 hooks 欄位: pass")
+    test_hook_project_in_subdir()
+    print("[regression] progress_hook 專案在 cwd 子目錄：exit 0、stdout 空、三個產物齊、log 兩行 ok、既有檔雜湊不變、cwd 本身無新檔: pass")
+    test_hook_project_is_cwd()
+    print("[regression] progress_hook 專案即 cwd：三個產物齊、log 追加不覆寫、--cwd 替代、session_id 缺寫 -、stdin 非 JSON 不炸: pass")
+    test_hook_no_project()
+    print("[regression] progress_hook 找不到專案（無 project.yaml／非 dict／無 goals 與 project 鍵／空目錄／cwd 不存在）→ exit 0、stdout 空、不落任何檔: pass")
+    test_hook_renderer_failure_is_logged()
+    print("[regression] progress_hook decisions.yaml 無法解析 → exit 0、stdout 空、log 含 fail rc=2 單行 ≤200 字、PROGRESS.html 仍產出、SSOT 原文未動: pass")
+    test_hook_env_off()
+    print("[regression] progress_hook ACADEMIC_PIPELINE_PROGRESS_HOOK=off（含大小寫與空白）→ exit 0、不產任何檔；其他值照跑: pass")
+    test_hook_skips_archive()
+    print("[regression] progress_hook 跳過 archive／data／node_modules／隱藏目錄、cwd 在 /archive/ 下不選、子目錄依名稱序取第一個、--find-only 只印根到 stderr 不落檔: pass")
+    test_hook_hash_redline()
+    print("[regression] progress_hook 雜湊紅線：SSOT 逐檔 sha256 不變、產物覆寫、舊 log 追加: pass")
+    test_hook_log_rotation()
+    print("[regression] progress_hook log 超過 200 KB → 截成最後 100 KB 對齊換行再追加: pass")
+    test_hook_docs_registered()
+    print("[regression] 登記：README artifacts block／自動重算段、project-init 樹、status SKILL、CHANGELOG 第 9 條、tests README 含 .progress-hook.log／progress_hook.py／SessionEnd／逃生口；版號 0.10.2 未動: pass")
     print("PASS v0.11.0 regressions")
     return 0
 
