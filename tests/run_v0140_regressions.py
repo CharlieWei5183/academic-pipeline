@@ -247,7 +247,7 @@ def test_band_assignment_groups_and_edges() -> None:
         nodes = {n["id"]: n for n in g["nodes"]}
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by",
-                                                       "primary", "robustness", "produces", "depicts", "cites", "refers"]
+                                                       "primary", "robustness", "produces", "depicts", "cites", "refers", "supports"]   # v0.16.5 加 supports
         assert {t["id"]: t["label"] for t in g["edge_types"]}["supplements"] == "敏感性對照"
         # 區帶指派（全部規則）
         expect = {

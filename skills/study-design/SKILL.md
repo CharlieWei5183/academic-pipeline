@@ -68,6 +68,8 @@ metadata:
 
 v0.7 results 每筆需帶 `plan_id`、`data_fingerprint`、`model_id`；鍵名必須出現在 active plan 的 outputs 或 robustness.expected_keys。補充分析不得覆寫舊鍵，須以 amendment 新增鍵。
 
+outputs 條目可帶選填欄位 `supports: <同 plan outputs 的另一個鍵>`（0.16.5，schema_version 不變）：宣告本結果鍵是該鍵的支撐結果——關聯圖把它縮排在主結果之下、留在同一區帶，稿件主表只列頂層結果、支撐結果歸支撐表。`check_plan.py` 驗：指向的鍵必須在同 plan outputs、不得指自己、不得成環、只允許一層（支撐結果不能再有支撐結果；BLOCKER）。缺此欄＝頂層結果。改 `supports` 用 `status` skill 的 `nest_result.py`（同一份 plan 出一版 amendment、只改該欄），不改 results.json 的歸屬。
+
 ## 回溯相容
 
 舊專案未標 `pipeline.version: 0.7.0` 時，check_plan 只提示補建；一旦建立 v0.7 route／plans，後續分析走新關卡。

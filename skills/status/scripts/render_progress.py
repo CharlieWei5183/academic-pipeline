@@ -19,8 +19,9 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 
 收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
 {present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}／promote {from, to}／
-move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}／move_result {key, to_plan, to_item, new_item?}，其他 kind 為 {}）、
-有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0；0.16.1 起六種；0.16.2 起七種）：
+move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}／move_result {key, to_plan, to_item, new_item?}／
+nest_result {key, under}，其他 kind 為 {}）、
+有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0；0.16.1 起六種；0.16.2 起七種；0.16.5 起八種）：
 問題節點拖到另一個帶 → reassign／promote、拖到同帶另一個問題上（排在它之後）→ reorder；方法節點拖到沒有 active plan 的問題上 → move_plan；
 敏感性子分析拖到別的方法上 → move_sensitivity；結果節點（主要／次要／未宣告）拖到別的方法上（A 型，成為其主要結果）或任何敏感性
 子分析上（B 型，成為其次要結果；含來源 plan 自己的 R）→ move_result；0.16.4 起結果節點也能拖到區帶：Main 帶的主要結果拖到 Supplementary 帶、
@@ -28,6 +29,11 @@ Supplementary 帶的次要（或附錄問題的主要）結果拖到 Main 帶，
 「放到哪裡」下拉——降到 Supplementary 預設「新增一個敏感性子分析（補充結果）」（payload new_item 帶預設描述、由 move_result.py --new-item 在來源 plan
 新增 R<n+1>），另列來源 plan 既有的各 R 與各附錄問題 active plan 的 outputs；升到 Main 預設「升回本 plan 的 outputs」（所屬 plan 屬主問題時），另列各
 主問題 active plan 的 outputs（沒有可放的就不算候選、toast 說明）；附錄問題 plan 的主要結果拖到 Supplementary 帶不算候選（toast「已在 Supplementary」）；
+0.16.5 結果主從：plan outputs 條目可帶 supports: <同 plan 另一鍵>（check_plan 驗：存在、不自指、不成環、只一層）——有 supports 的主要結果節點
+subtype supporting、parent＝r:<under>、縮排在主結果之下、同一區帶（band 跟主結果）、meta.supports；主結果 meta.supporting_ids、徽章「支撐 n」、
+面板可暫時收合；主結果 → 支撐結果一條 supports 型 L 形線（結果色）、plan → 支撐結果的 produces 預設不畫；stats.supporting_result_keys。
+拖放：頂層主要結果拖到同 plan 的另一個頂層主要結果上 → nest_result {key, under}（跨 plan、次要、已是支撐結果的目標 → 紅）；支撐結果拖到所在帶
+的空白處 → nest_result {key, under: ''}（拉回頂層）、拖到別的結果上 → 換主結果、拖到別帶 → 紅（先拉回頂層）。
 圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
 SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，非法落點改紅、放開不送出；放開後開表單（父節點欄位唯讀帶入、只填理由）
 → 按「送出並預覽」POST /api/inbox 建一筆，成功後不重載，同一個對話框立刻 POST /api/actions/dry-run 把變更摘要顯示出來（0.16.3），
@@ -1023,11 +1029,12 @@ MAIN_ID = 'q:main'
 N_COLS = len(NODE_TYPES) + 1   # 欄 0＝主問題，欄 1..6＝question／method／validation／result／figure／decision
 EDGE_TYPES = (('decomposes', '拆解為'), ('plans', '規劃'), ('supersedes', '取代'), ('sensitivity', '敏感性'),
               ('supplements', '敏感性對照'), ('validated_by', '驗證'), ('primary', '驗證（主要）'), ('robustness', '驗證（穩健性）'),
-              ('produces', '產出'), ('depicts', '呈現於'), ('cites', '引為證據'), ('refers', '決策關聯'))
-SUBTYPES = ('', 'primary', 'sensitivity_group', 'sensitivity', 'secondary', 'undeclared')
+              ('produces', '產出'), ('depicts', '呈現於'), ('cites', '引為證據'), ('refers', '決策關聯'), ('supports', '支撐'))
+SUBTYPES = ('', 'primary', 'sensitivity_group', 'sensitivity', 'secondary', 'undeclared', 'supporting')
 METHOD_SUBTYPES = ('primary', 'sensitivity_group', 'sensitivity')
-RESULT_SUBTYPES = ('primary', 'secondary', 'undeclared')
-INDENTED_SUBTYPES = ('sensitivity', 'secondary')   # 縮排子節點：敏感性子分析與其次要結果（敏感性分析群不縮排）
+RESULT_SUBTYPES = ('primary', 'secondary', 'undeclared', 'supporting')
+INDENTED_SUBTYPES = ('sensitivity', 'secondary', 'supporting')   # 縮排子節點：敏感性子分析與其次要結果、主結果的支撐結果（敏感性分析群不縮排）
+L_EDGE_TYPES = ('sensitivity', 'supports')   # 父 → 子的 L 形線（共用垂直段）：群 → 子分析、主結果 → 支撐結果；JS 端 isL() 同義
 SUB_INDENT = 24
 # 區帶（由上而下）：main＝主結果鏈（主問題、SQ 及其計畫／驗證／主要結果／主圖、決策）；ext＝Extended Data（只有圖表節點，依 manifest
 # role）；supp＝補充（敏感性分析群與子分析、次要結果、AQ 及其一切、補充圖表）
@@ -1040,6 +1047,7 @@ FIGURE_ROLE_BAND = {'main': 'main', 'extended': 'ext', 'extended_data': 'ext', '
 FIGURE_ROLE_BADGE = {'main': '主圖', 'ext': '延伸', 'supp': '補充'}
 GROUP_SUFFIX = '#S'
 RESULT_KIND_ZH = {'primary': '主要', 'secondary': '次要', 'undeclared': '未宣告'}
+SUPPORTING_BADGE = '支撐'   # 有 supports 的結果節點徽章；主結果徽章「支撐 n」
 EDGE_STYLES = ('solid', 'dashed', 'thin')
 NODE_PREFIX = {'question': 'q:', 'method': 'p:', 'validation': 'v:', 'result': 'r:', 'figure': 'f:', 'decision': 'd:'}
 GRAPH_COL = {t: i + 1 for i, (t, _) in enumerate(NODE_TYPES)}
@@ -1050,14 +1058,15 @@ def node_col(nid: str, ntype: str) -> int:
     return 0 if nid == MAIN_ID else GRAPH_COL[ntype]
 NODE_W, NODE_H, COL_PITCH, ROW_GAP, GRAPH_PAD = 260, 36, 380, 48, 20   # COL_PITCH＝欄距（節點寬 260＋走道 120）；JS 端同名常數須同值
 BAND_TITLE_H, BAND_GAP, BAND_TITLE_DY = 28, 40, 18   # 區帶標題列高、兩區帶間距、標題文字基線相對標題列頂的偏移；JS 端同名常數須同值
-DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites')
+DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites', 'supports')
 TABLE_ROWS_MAX = 200
 EMBED_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
 INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見', 'reassign': '降階', 'promote': '升回主問題',
-               'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果'}
-INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result')   # 與 ssot_actions_common.ACTIONS 同序
+               'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果',
+               'nest_result': '掛到主結果下'}
+INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result')   # 與 ssot_actions_common.ACTIONS 同序
 INBOX_STATUSES = ('pending', 'done', 'dismissed')
 INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
@@ -1289,6 +1298,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     rob_index: dict[tuple[str, str], tuple[int, int]] = {}   # (plan_id, key) → (子分析序, expected 序)
     sens_of: dict[str, list[str]] = {}                  # plan_id → 子節點 id（R 序）
     group_of: dict[str, str] = {}                       # plan_id → 敏感性分析群節點 id（p:<pid>#S；robustness[] 至少一項才建）
+    supports_of: dict[tuple[str, str], str] = {}        # (plan_id, key) → 該 outputs 條目的 supports（主結果鍵；0.16.5）
     for pid, doc in plan_docs.items():
         if not doc:
             continue
@@ -1298,6 +1308,8 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 key = _text(item.get('key'))
                 out_index.setdefault((pid, key), oi)
                 decl_order.setdefault((pid, key), len(decl_order))
+                if _text(item.get('supports')):
+                    supports_of.setdefault((pid, key), _text(item.get('supports')))   # 0.16.5：本鍵是同 plan 另一鍵的支撐結果
                 source = f'analysis/plans/{pid}.yaml#outputs[{key}]'
                 nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending')
                 g.nodes[nid]['meta']['declared_by'].append(f'p:{pid}')
@@ -1444,9 +1456,44 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             if cands:
                 n['parent'] = cands[0]
                 n['collapsed'] = bool(g.nodes[cands[0]]['collapsed'])
-    # 子分析 → 主要／未宣告結果的 produces 一律預設不畫（plan 自己的 outputs 已涵蓋，不分區帶）；→ 次要結果照舊可見
+    # 0.16.5 結果主從：outputs[i].supports 指向同 plan 另一個頂層主要結果 → parent＝r:<under>、subtype supporting、縮排、跟主結果收合、
+    # 同一區帶（下面 band 依 parent）；主結果徽章「支撐 n」；主結果 → 支撐結果一條 supports L 形線；plan → 支撐結果的 produces 預設不畫
+    # （避免交叉；IR 保留）。只認 results.json 所屬 plan（或該問題現行版）的宣告；主結果非頂層或不在同 plan 者不巢狀（check_plan 會擋）
+    supporting_of: dict[str, list[str]] = {}
+    for nid, n in list(g.nodes.items()):
+        if n['type'] != 'result' or n['meta'].get('result_kind') != 'primary':
+            continue
+        key = nid[2:]
+        owner = _text(n['meta'].get('plan_id'))
+        under = supports_of.get((owner, key))
+        if not under:
+            sq = plan_sq.get(owner, '')
+            cur = next((pp for pp, ss in plan_sq.items() if ss == sq and plan_active.get(pp)), '') if sq else ''
+            under = supports_of.get((cur, key), '') if cur else ''
+            if not under:
+                continue
+            owner = cur
+        pn = g.nodes.get(f'r:{under}')
+        if pn is None or pn['type'] != 'result' or pn['meta'].get('result_kind') != 'primary' or (owner, under) not in out_index \
+                or supports_of.get((owner, under)) or _text(pn['meta'].get('plan_id')) not in (owner, ''):
+            n['meta']['supports_invalid'] = under
+            continue
+        n['parent'] = f'r:{under}'
+        n['subtype'] = 'supporting'
+        n['badge'] = SUPPORTING_BADGE
+        n['meta']['supports'] = under
+        n['collapsed'] = bool(pn['collapsed'])
+        supporting_of.setdefault(f'r:{under}', []).append(nid)
+        g.add_edge(f'r:{under}', nid, 'supports', f'analysis/plans/{owner}.yaml#outputs[{key}].supports', '支撐', visible=plan_active.get(owner, False))
+    for pnid, subs in supporting_of.items():
+        g.nodes[pnid]['meta']['supporting_ids'] = list(subs)
+        g.nodes[pnid]['badge'] = f'{SUPPORTING_BADGE} {len(subs)}'
+    # 子分析 → 主要／未宣告結果的 produces 一律預設不畫（plan 自己的 outputs 已涵蓋，不分區帶）；→ 次要結果照舊可見；
+    # plan → 支撐結果的 produces 也預設不畫（主結果 → 支撐結果的 L 形線已表達歸屬）
     for e in g.edges:
         if e['type'] == 'produces' and '#' in e['from'] and g.nodes[e['to']].get('subtype') != 'secondary':
+            e['default_visible'] = False
+        elif e['type'] == 'produces' and g.nodes[e['to']].get('subtype') == 'supporting':
             e['default_visible'] = False
 
     # validation items：p → v（validated_by）、v → r（primary）
@@ -1533,6 +1580,10 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             rank_hint[nid] = (cite_rank[nid][0], BIG, 3, cite_rank[nid][3], 0, key)
         else:
             rank_hint[nid] = (BIG, BIG, 4, BIG, 0, key)
+    for pnid, subs in supporting_of.items():   # 支撐結果緊接主結果之後（主結果 rank + (1, 該鍵 outputs 序)）
+        base = rank_hint.get(pnid, (BIG,))
+        for snid in subs:
+            rank_hint[snid] = base + (1, rank_hint.get(snid, (BIG,) * 6)[3], snid)
 
     # 圖表節點（analysis/figures/manifest.json）：r → f depicts
     manifest = src.data('manifest') if src.status('manifest') == 'ok' else {}
@@ -1659,6 +1710,8 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         elif t == 'result':
             if n.get('subtype') == 'secondary':
                 n['band'] = 'supp'
+            elif n.get('subtype') == 'supporting':
+                n['band'] = ''   # 下面依主結果補
             else:
                 owner = _text(n['meta'].get('plan_id'))
                 if not (owner and f'p:{owner}' in g.nodes):
@@ -1677,6 +1730,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             pass                 # 圖表：manifest role 已在建節點時指派；缺或不認得的下面由呈現的結果推導
         else:
             n['band'] = 'main'   # decision 一律 main（版面上不參與區帶計算）
+    for nid, n in g.nodes.items():
+        if n['type'] == 'result' and n.get('subtype') == 'supporting':
+            n['band'] = g.nodes[n['parent']]['band']   # 支撐結果與主結果同一區帶
     for nid, n in g.nodes.items():
         if n['type'] == 'figure' and n['meta'].get('role_source') == 'derived':
             srcs = [g.nodes[e['from']]['band'] for e in g.edges if e['type'] == 'depicts' and e['to'] == nid]
@@ -1701,6 +1757,15 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         if e['type'] == 'produces' and e['default_visible'] and any(e['to'] in vis_res.get(v, ()) for v in vis_val.get(e['from'], ())):
             e['default_visible'] = False
             e['meta']['via_validation'] = True
+    # 0.16.5：驗證 → 支撐結果的 primary／robustness 邊，若同一個驗證 item 已有可見邊連到它的主結果，預設不畫（主結果 → 支撐結果的 L 形線
+    # 已表達巢狀；驗證邊從左側進入支撐結果會與 L 形線的垂直段相交）；IR 保留、點選或「顯示全部邊」仍顯。主結果與支撐結果由不同 item
+    # 驗證時維持可見（交叉屬資料，不是版面）
+    for e in g.edges:
+        if e['type'] in ('primary', 'robustness') and e['default_visible']:
+            tn = g.nodes[e['to']]
+            if tn.get('subtype') == 'supporting' and tn.get('parent') in vis_res.get(e['from'], ()):
+                e['default_visible'] = False
+                e['meta']['via_main_result'] = tn['parent']
 
     # shared：問題兩兩沿下游邊（plans／validated_by／primary／produces／cites，含 hidden）走；
     # via 寫 model:<model_id>（比對方法節點 meta.models）、r:<key>、v:<id>
@@ -1773,6 +1838,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     secondary = sum(1 for key in result_objs if g.nodes[f'r:{key}']['meta'].get('result_kind') == 'secondary')
     undeclared = sum(1 for key in result_objs if g.nodes[f'r:{key}']['meta'].get('result_kind') == 'undeclared')
     sensitivity_items = sum(1 for n in g.nodes.values() if n.get('subtype') == 'sensitivity')
+    supporting = sum(1 for n in g.nodes.values() if n.get('subtype') == 'supporting')
     sensitivity_groups = sum(1 for n in g.nodes.values() if n.get('subtype') == 'sensitivity_group')
     band_count = {b: sum(1 for n in g.nodes.values() if n['band'] == b) for b in BANDS}
     graph = {
@@ -1795,7 +1861,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                       'shared_pairs': len(shared), 'dangling_result_keys': len(dangling),
                       'unvalidated_result_keys': unvalidated, 'figures_unreviewed': figures_unreviewed,
                       'secondary_result_keys': secondary, 'undeclared_result_keys': undeclared,
-                      'sensitivity_items': sensitivity_items, 'sensitivity_groups': sensitivity_groups,
+                      'sensitivity_items': sensitivity_items, 'sensitivity_groups': sensitivity_groups, 'supporting_result_keys': supporting,
                       'band_main_nodes': band_count['main'], 'band_ext_nodes': band_count['ext'], 'band_supp_nodes': band_count['supp'],
                       'crossings': crossings, 'edge_node_overlaps': overlaps}
     return graph
@@ -1890,7 +1956,7 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         if not e['default_visible'] or e['from'] not in shown or e['to'] not in shown:
             continue
         drawn.append(i)
-        if e['type'] in ('sensitivity', 'supplements'):
+        if e['type'] in L_EDGE_TYPES or e['type'] == 'supplements':
             continue
         a, b = nodes[e['from']], nodes[e['to']]
         step = 1 if b['col'] > a['col'] else -1
@@ -2202,6 +2268,16 @@ def validate_graph(graph) -> list[str]:
         nid = str(n.get('id'))
         if par is None:
             errors.append(f'IR-12 graph.nodes[{i}].parent')
+        elif n.get('type') == 'result' and n.get('subtype') == 'supporting':
+            # 0.16.5 支撐結果：parent 必須是同 plan 的頂層主要結果、meta.supports＝parent 的鍵、同一區帶
+            meta = n.get('meta') if isinstance(n.get('meta'), dict) else {}
+            pmeta = par.get('meta') if isinstance(par.get('meta'), dict) else {}
+            if not (par.get('type') == 'result' and not par.get('parent') and par.get('subtype') == 'primary'
+                    and f'r:{meta.get("supports")}' == n.get('parent') and meta.get('result_kind') == 'primary'
+                    and (not pmeta.get('plan_id') or not meta.get('plan_id') or pmeta.get('plan_id') == meta.get('plan_id'))):
+                errors.append(f'IR-12 graph.nodes[{i}].parent（supports）')
+            elif n.get('band') != par.get('band'):
+                errors.append(f'IR-12 graph.nodes[{i}].band（支撐結果須與主結果同一區帶）')
         elif n.get('type') == 'result' and not (par.get('type') == 'method' and par.get('subtype') == 'sensitivity'):
             errors.append(f'IR-12 graph.nodes[{i}].parent')
         elif n.get('subtype') == 'sensitivity' and n.get('parent') != nid.split('#')[0] + GROUP_SUFFIX:
@@ -2238,6 +2314,10 @@ def validate_graph(graph) -> list[str]:
         a, b = by_id_v.get(e.get('from')), by_id_v.get(e.get('to'))
         if a is None or b is None:
             continue
+        if e.get('type') == 'supports':   # 主結果 → 支撐結果：from 頂層結果、to 的 parent 就是 from 且 subtype supporting
+            if not (a.get('type') == 'result' and not a.get('parent') and b.get('type') == 'result' and b.get('subtype') == 'supporting'
+                    and b.get('parent') == e.get('from')):
+                errors.append(f'IR-13 {sub} supports 邊兩端不是「頂層主結果 → 其支撐結果」')
         if e.get('type') == 'supplements':
             if a.get('subtype') != 'sensitivity_group':
                 errors.append(f'IR-13 {sub}.from 非敏感性分析群')   # supplements 只准從群出發
@@ -2278,8 +2358,8 @@ def validate_graph(graph) -> list[str]:
             not isinstance(stats.get('dangling_result_keys'), int) or not isinstance(stats.get('unvalidated_result_keys'), int) \
             or not isinstance(stats.get('figures_unreviewed'), int) \
             or any(not isinstance(stats.get(k), int) for k in ('secondary_result_keys', 'undeclared_result_keys', 'sensitivity_items',
-                                                                'sensitivity_groups', 'band_main_nodes', 'band_ext_nodes', 'band_supp_nodes',
-                                                                'crossings', 'edge_node_overlaps')) \
+                                                                'sensitivity_groups', 'supporting_result_keys', 'band_main_nodes', 'band_ext_nodes',
+                                                                'band_supp_nodes', 'crossings', 'edge_node_overlaps')) \
             or stats.get('crossings') < 0 or stats.get('edge_node_overlaps') < 0:
         errors.append('IR-14 graph.stats')
     elif stats.get('band_main_nodes') + stats.get('band_ext_nodes') + stats.get('band_supp_nodes') != len(ids):
@@ -2680,6 +2760,7 @@ path.edge.own{opacity:.9}
 .gnode.sub text.lbl{font-size:11px}
 #graph-svg text.st.unval{fill:var(--expired);font-weight:700}
 path.edge.e-sensitivity{stroke:var(--t-method);opacity:.8;marker-end:none;stroke-width:1.6}
+path.edge.e-supports{stroke:var(--t-result);opacity:.8;marker-end:none;stroke-width:1.6}
 path.edge.e-supplements,path.trunk.e-supplements{stroke:var(--t-method);stroke-width:1.6;opacity:.85;marker-end:url(#arrow-method)}
 #graph-bands text.band-title{font-size:12px;font-weight:600;fill:var(--muted)}
 #graph-bands line.band-divider{stroke:var(--edge-faint);stroke-width:1;stroke-dasharray:6 4}
@@ -2728,7 +2809,7 @@ path.edge.e-supplements,path.trunk.e-supplements{stroke:var(--t-method);stroke-w
 #graph-bands text.band-title.drop-ok{fill:var(--current);font-size:14px}#graph-bands text.band-title.drop-bad{fill:var(--blocked);font-size:14px}
 #graph-bands line.band-divider.drop-ok{stroke:var(--current);stroke-width:2.5;stroke-dasharray:none}
 #drag-preview path.preview{fill:none;stroke-width:2.2;stroke-dasharray:7 5;pointer-events:none}
-#drag-preview path.preview.e-plans{stroke:var(--edge)}#drag-preview path.preview.e-sensitivity{stroke:var(--t-method)}
+#drag-preview path.preview.e-plans{stroke:var(--edge)}#drag-preview path.preview.e-sensitivity{stroke:var(--t-method)}#drag-preview path.preview.e-supports{stroke:var(--t-result)}
 #drag-preview path.preview.drop-ok{stroke:var(--current)}#drag-preview path.preview.drop-bad{stroke:var(--blocked)}
 #drag-preview rect.band-hl{fill:var(--current);opacity:.07;pointer-events:none}#drag-preview rect.band-hl.drop-bad{fill:var(--blocked)}
 #drag-preview text.preview-label{font-size:12px;font-weight:600;fill:var(--current);paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round;pointer-events:none}
@@ -2776,11 +2857,13 @@ GRAPH_JS = """
   function questionKind(id){return /^q:SQ\d+$/.test(id)?'SQ':(/^q:AQ\d+$/.test(id)?'AQ':'');}
   function isActivePlan(id){var n=nodes[id];return !!(n&&n.type==='method'&&!n.parent&&!n.collapsed&&/^p:[^#]+$/.test(id));}
   function isSensItem(id){var n=nodes[id];return !!(n&&n.type==='method'&&n.subtype==='sensitivity'&&!n.collapsed&&/^p:[^#]+#R\d+$/.test(id));}
+  function isL(e){return e.type==='sensitivity'||e.type==='supports';}   // 父 → 子的 L 形線（與 Python L_EDGE_TYPES 同義）
+  var nestHidden={};   // 0.16.5 結果主從：主結果 id → true＝暫時收合它的支撐結果（只在本頁面，不寫任何檔）
   // 0.16.1：問題（SQ／AQ）、方法（active plan）、敏感性子分析、圖表都可拖；0.16.2：結果節點（主要／次要／未宣告，來源 plan 由 results.json plan_id 判、須為 active plan）也可拖；落點由 dragCandidate 依游標位置即時判定
   function resultOwner(id){var n=nodes[id];if(!n||n.type!=='result')return '';var pid=String((n.meta||{}).plan_id||'');return (pid&&isActivePlan('p:'+pid))?pid:'';}
   function isDragResult(id){return !!resultOwner(id);}
   function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)));}
-  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果'};
+  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下'};
   // ---- 分頁 ----
   var tabs={milestones:document.getElementById('tab-milestones'),relations:document.getElementById('tab-relations')};
   var cur='milestones';
@@ -2795,8 +2878,8 @@ GRAPH_JS = """
   showTab((location.hash||'').replace('#','')||'milestones',false);
   // ---- 可見性與版面 ----
   var expanded={},selected=null,pathEdges={},pathNodes=null,tour=null,stateOff={};
-  function nodeVisible(id){var n=nodes[id];if(!n)return false;if(n.type==='decision')return boxDec.checked;if(n.parent)return nodeVisible(n.parent);if(n.collapsed)return boxOld.checked||!!expanded[currentOf[id]];return true;}
-  function nodeW(n){return (n.subtype==='sensitivity'||n.subtype==='secondary')?W-24:W;}
+  function nodeVisible(id){var n=nodes[id];if(!n)return false;if(n.type==='decision')return boxDec.checked;if(n.parent){if(n.subtype==='supporting'&&nestHidden[n.parent])return false;return nodeVisible(n.parent);}if(n.collapsed)return boxOld.checked||!!expanded[currentOf[id]];return true;}
+  function nodeW(n){return (n.subtype==='sensitivity'||n.subtype==='secondary'||n.subtype==='supporting')?W-24:W;}
   function lPath(a,b){var x0=a.x+12,y0=a.y+H,yc=b.y+H/2,x2=b.x;var r=Math.min(6,Math.max(0,(yc-y0)/2),Math.max(0,(x2-x0)/2));return 'M'+x0+','+y0+' L'+x0+','+(yc-r)+' Q'+x0+','+yc+' '+(x0+r)+','+yc+' L'+x2+','+yc;}
   function edgeDrawn(i){var e=G.edges[i];if(!nodeVisible(e.from)||!nodeVisible(e.to))return false;if(pathEdges[i])return true;if(selected&&(e.from===selected||e.to===selected))return true;return boxAll.checked||e.default_visible;}
   var bandsEl=document.getElementById('graph-bands'),bandDivs={},bandTitles={};
@@ -2839,7 +2922,7 @@ GRAPH_JS = """
   function spinePath(a,b,lane){var dx=SPINE_X-(lane||0)*SPINE_LANE_GAP,x0=a.x+dx,y0=a.y,x1=b.x+dx,y1=b.y+H;return x0===x1?'M'+num(x0)+','+num(y0)+' V'+num(y1):'M'+num(x0)+','+num(y0)+' L'+num(x1)+','+num(y1);}
   // 與 Python spine_lanes 同一套：L 形線區塊固定第 0 道，對照線依（群 y, idx）序取最小不重疊的一道
   function spineLanes(drawn){var lblocks={},spines=[],i,e;
-    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(e.type==='sensitivity'){var a=nodes[e.from],b=nodes[e.to],yc=b.y+H/2;if(!lblocks[e.from])lblocks[e.from]=[a.y+H,yc];else if(yc>lblocks[e.from][1])lblocks[e.from][1]=yc;}
+    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(isL(e)){var a=nodes[e.from],b=nodes[e.to],yc=b.y+H/2;if(!lblocks[e.from])lblocks[e.from]=[a.y+H,yc];else if(yc>lblocks[e.from][1])lblocks[e.from][1]=yc;}
       else if(e.type==='supplements'){var g=nodes[e.from],p=nodes[e.to],lo=Math.min(p.y+H,g.y),hi=Math.max(p.y+H,g.y);spines.push([g.y,i,p.col,lo,hi]);}}
     spines.sort(function(x,y){return x[0]!==y[0]?x[0]-y[0]:x[1]-y[1];});
     var taken=[],out={};
@@ -2867,7 +2950,7 @@ GRAPH_JS = """
   function routeEdges(drawn){
     var cy=function(n){return n.y+H/2;},right=function(n){return n.x+nodeW(n);};
     var segs=[],segCount={},i,e;
-    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(e.type==='sensitivity'||e.type==='supplements')continue;
+    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(isL(e)||e.type==='supplements')continue;
       var chain=[nodes[e.from]];if(dummyActive(i)&&dummyY[i]){e.via.forEach(function(v){var col=v[0];chain.push({id:'~'+i+'@'+col,x:GRAPH_PAD+col*COL_PITCH,y:dummyY[i][col],col:col,subtype:''});});}
       chain.push(nodes[e.to]);segCount[i]=chain.length-1;
       for(var k=0;k<chain.length-1;k++)segs.push({sid:[i,k],e:e,a:chain[k],b:chain[k+1]});}
@@ -2911,7 +2994,7 @@ GRAPH_JS = """
   function redrawEdges(){
     var drawn=[];G.edges.forEach(function(e,i){var ok=edgeDrawn(i);edgeEls[i].classList.toggle('off',!ok);if(ok)drawn.push(i);});
     var route=routeEdges(drawn),sl=spineLanes(drawn);
-    drawn.forEach(function(i){var e=G.edges[i],el=edgeEls[i];if(e.type==='sensitivity'){el.setAttribute('d',lPath(nodes[e.from],nodes[e.to]));el.removeAttribute('data-trunk');return;}
+    drawn.forEach(function(i){var e=G.edges[i],el=edgeEls[i];if(isL(e)){el.setAttribute('d',lPath(nodes[e.from],nodes[e.to]));el.removeAttribute('data-trunk');return;}
       if(e.type==='supplements'){el.setAttribute('d',spinePath(nodes[e.from],nodes[e.to],sl[i]||0));el.removeAttribute('data-trunk');return;}
       el.setAttribute('d',route.paths[i]);if(route.trunkOf[i])el.setAttribute('data-trunk',route.trunkOf[i]);else el.removeAttribute('data-trunk');});
     while(trunkGroup.firstChild)trunkGroup.removeChild(trunkGroup.firstChild);
@@ -2975,6 +3058,23 @@ GRAPH_JS = """
       return {kind:'move_plan',ok:true,target:q2,payload:{plan:id.slice(2),to_question:q2.slice(2)}};}
     if(n.type==='figure'){var b=bandAtY(gy);if(b===n.band)return null;return {kind:'set_role',ok:true,band:b,payload:{figure:id.slice(2),role:BAND_ROLE[b]||''}};}
     if(n.type==='result'&&isDragResult(id)){var key=id.slice(2),owner=resultOwner(id),decl=(n.meta.declared_by||[]),rk=String(n.meta.result_kind||'');
+      // 0.16.5 結果主從（節點落點最優先）：頂層主要結果或支撐結果拖到同 plan 的另一個頂層主要結果上 → nest_result；跨 plan／次要／已是支撐結果的目標 → 紅
+      // 頂層主要結果＝在 outputs、沒有 parent、subtype primary；支撐結果＝subtype supporting（parent 為 r:<主結果>）
+      var isTopResult=function(k){var x=nodes[k];return !!(x&&x.type==='result'&&!x.parent&&x.subtype==='primary'&&isDragResult(k));};
+      var isSupporting=function(k){var x=nodes[k];return !!(x&&x.type==='result'&&x.subtype==='supporting'&&x.parent);};
+      var rt=hitNode(gx,gy,function(k,x){return k!==id&&x.type==='result';});
+      if(rt&&rt===n.parent)return null;   // 支撐結果放回自己的主結果上：無事可做、滑回原位
+      if(rt&&!(isTopResult(id)||isSupporting(id)))return {kind:'nest_result',ok:false,target:rt,reason:key+' 是'+({secondary:'次要',undeclared:'未宣告'}[rk]||'非主要')+'結果：只有 outputs 的主要結果能掛到主結果下（次要結果請先拖到方法上升為主要結果）'};
+      if(rt){var rn=nodes[rt],rown=resultOwner(rt);
+        if(!rown||rown!==owner)return {kind:'nest_result',ok:false,target:rt,reason:rn.label+' 屬 '+(rown||'非 active plan')+'、'+key+' 屬 '+owner+'：主從只能在同一份 plan 的 outputs 內宣告'};
+        if(String(rn.meta.result_kind||'')!=='primary')return {kind:'nest_result',ok:false,target:rt,reason:rn.label+' 是'+({secondary:'次要',undeclared:'未宣告'}[rn.meta.result_kind]||'非主要')+'結果，不能當主結果（主結果須在 outputs）'};
+        if(isSupporting(rt))return {kind:'nest_result',ok:false,target:rt,reason:rn.label+' 自己已是 '+String(rn.meta.supports||'')+' 的支撐結果，不能再當主結果（支撐結果只允許一層）'};
+        if((n.meta.supporting_ids||[]).length)return {kind:'nest_result',ok:false,target:rt,reason:key+' 自己是 '+(n.meta.supporting_ids||[]).map(function(x){return x.slice(2);}).join('／')+' 的主結果，掛到別的結果下會變兩層；請先把那些支撐結果拉回頂層'};
+        return {kind:'nest_result',ok:true,target:rt,label:(isSupporting(id)?'換主結果：成為 ':'成為 ')+rt.slice(2)+' 的支撐結果（同 plan、同一區帶）',payload:{key:key,under:rt.slice(2)}};}
+      if(isSupporting(id)){// 支撐結果：拖到自己所在帶的空白處＝拉回頂層；拖到別帶 → 先拉回頂層（紅）；拖到方法／子分析上照舊走 move_result
+        var t0=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
+        if(!t0){var b0=bandAtY(gy);if(b0===n.band)return {kind:'nest_result',ok:true,band:b0,label:'拉回頂層：'+key+' 不再是 '+String(n.meta.supports||'')+' 的支撐結果',payload:{key:key,under:''}};
+          return {kind:'move_result',ok:false,band:b0,reason:key+' 是 '+String(n.meta.supports||'')+' 的支撐結果：換帶前請先拉回頂層（拖到目前所在帶的空白處）'};}}
       var t=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
       if(!t){// 0.16.4 區帶落點（節點落點優先）：主要結果 Main → Supplementary、次要（或附錄問題的主要）結果 Supplementary → Main；放開後表單以下拉選確切落點
         var b2=bandAtY(gy);if(b2==='ext')return {kind:'move_result',ok:false,band:b2,reason:'結果只能在 Main 帶與 Supplementary 帶之間搬（Extended Data 帶只放圖表）'};
@@ -3008,7 +3108,7 @@ GRAPH_JS = """
     if(cand.band){var rc=bandRect(cand.band);var rect=document.createElementNS(SVGNS,'rect');rect.setAttribute('x',0);rect.setAttribute('y',rc.y);rect.setAttribute('width',rc.w);rect.setAttribute('height',rc.h);rect.setAttribute('class','band-hl '+cls);previewG.appendChild(rect);
       [bandTitles[cand.band],bandDivs[cand.band]].forEach(function(el){if(el)el.classList.add(cls);});}
     if(cand.target&&nodes[cand.target]){nodeEls[cand.target].classList.add(cls);var tc=nodeCenter(nodes[cand.target]);var line=document.createElementNS(SVGNS,'path');
-      line.setAttribute('d','M'+cx+','+cy+' L'+tc.x+','+tc.y);line.setAttribute('class','preview '+(cand.kind==='move_sensitivity'||(cand.kind==='move_result'&&cand.payload&&cand.payload.to_item)?'e-sensitivity':'e-plans')+' '+cls);previewG.appendChild(line);}
+      line.setAttribute('d','M'+cx+','+cy+' L'+tc.x+','+tc.y);line.setAttribute('class','preview '+(cand.kind==='nest_result'?'e-supports':(cand.kind==='move_sensitivity'||(cand.kind==='move_result'&&cand.payload&&cand.payload.to_item)?'e-sensitivity':'e-plans'))+' '+cls);previewG.appendChild(line);}
     var lbl=document.createElementNS(SVGNS,'text');lbl.setAttribute('x',cx+12);lbl.setAttribute('y',cy-10);lbl.setAttribute('class','preview-label '+cls);
     lbl.textContent=cand.ok?(ACT_LABEL[cand.kind]+(cand.label?'：'+cand.label:'')+'（放開後填理由）'):cand.reason;previewG.appendChild(lbl);}
   // 放開：無候選 → 滑回原位不開表單；非法 → toast 說原因；合法 → 開表單（父節點欄位已帶入、唯讀），使用者只填理由
@@ -3103,9 +3203,12 @@ GRAPH_JS = """
       var sids=n.meta.sensitivity_ids||[];h+='<dt>敏感性子分析（'+sids.length+'）</dt><dd>'+(sids.length?'<ul>'+sids.map(function(sid){var sn=nodes[sid];return '<li><span class="goto" data-goto="'+esc(sid)+'">'+esc(sn?sn.label:sid)+'</span>'+(sn?'：'+esc(stateZh[sn.state]||sn.state)+(sn.badge?'（'+esc(sn.badge)+'）':''):'')+'</li>';}).join('')+'</ul>':'無')+'</dd>';
       var sv=n.meta.superseded_versions||[];h+='<dt>superseded_versions（'+sv.length+'）</dt><dd>'+(sv.length?sv.map(function(p){return '<span class="goto" data-goto="p:'+esc(p)+'">'+esc(p)+'</span>';}).join('、')+' <span class="expand" data-expand="'+esc(id)+'">'+(expanded[id]?'收合舊版':'展開舊版')+'</span>':'無')+'</dd>';
       if(n.meta.amendment_reason)h+='<dt>amendment_reason</dt><dd>'+esc(n.meta.amendment_reason)+'</dd>';}
-    if(n.type==='result'){skip=['validated','validated_by','robustness_id','validation_kind','table','description','result_kind','declared_by'];
+    if(n.type==='result'){skip=['validated','validated_by','robustness_id','validation_kind','table','description','result_kind','declared_by','supports','supporting_ids','supports_invalid'];
       var rk=n.meta.result_kind||'';h+='<dt>result_kind</dt><dd>'+esc(rk==='primary'?'primary（主要結果：在 plan outputs）':rk==='secondary'?'secondary（次要結果：只在敏感性子分析的 expected_keys）':'undeclared（未宣告）')+'</dd>';
-      if(n.parent)h+='<dt>父子分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span></dd>';
+      if(n.subtype==='supporting')h+='<dt>supports（主結果）</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span>：本鍵是它的支撐結果（縮排在它之下、同一區帶；稿件歸支撐表）</dd>';
+      else if(n.parent)h+='<dt>父子分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span></dd>';
+      var sids=n.meta.supporting_ids||[];if(sids.length)h+='<dt>支撐結果（'+sids.length+'）</dt><dd><ul>'+sids.map(function(sid){var sn=nodes[sid];return '<li><span class="goto" data-goto="'+esc(sid)+'">'+esc(sn?sn.label:sid)+'</span></li>';}).join('')+'</ul><span class="expand" data-nest="'+esc(id)+'">'+(nestHidden[id]?'展開支撐結果':'收合支撐結果')+'</span></dd>';
+      if(n.meta.supports_invalid)h+='<dt>supports（無效）</dt><dd>'+esc(n.meta.supports_invalid)+'：不是同 plan 的頂層主要結果，未巢狀（check_plan 會擋）</dd>';
       h+='<dt>declared_by</dt><dd>'+((n.meta.declared_by||[]).length?n.meta.declared_by.map(function(d){return '<span class="goto" data-goto="'+esc(d)+'">'+esc(nodes[d]?nodes[d].label:d)+'</span>';}).join('、'):'無')+'</dd>';
       h+='<dt>validated</dt><dd>'+(n.meta.validated?'是':'<b>否（未驗證）</b>')+'</dd>';
       var vk=n.meta.validation_kind||'';h+='<dt>validation_kind</dt><dd>'+(vk==='primary'?'primary（在 validation item 的 primary_results）':vk==='robustness'?'robustness（只在 robustness result_keys）':'—')+'</dd>';
@@ -3144,7 +3247,7 @@ GRAPH_JS = """
     h+='</dl>';body.innerHTML=h;panel.hidden=false;bindImages();
   }
   body.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&t.getAttribute('data-goto')){var id=t.getAttribute('data-goto');if(nodes[id]&&!nodeVisible(id)&&(nodes[id].collapsed||nodes[id].parent)){var top=id;while(nodes[top]&&nodes[top].parent)top=nodes[top].parent;if(currentOf[top]){expanded[currentOf[top]]=true;relayout();}}select(id,true);return;}
-    var x=e.target.closest('.expand');if(x){expandChain(x.getAttribute('data-expand'));}});
+    var x=e.target.closest('.expand');if(x){if(x.getAttribute('data-nest')){var nid=x.getAttribute('data-nest');nestHidden[nid]=!nestHidden[nid];relayout();if(selected)select(selected,false);return;}expandChain(x.getAttribute('data-expand'));}});
   document.getElementById('gdetail-close').addEventListener('click',clearAll);
   Object.keys(nodeEls).forEach(function(id){var el=nodeEls[id];
     el.addEventListener('mousedown',function(e){if(e.button!==0||!draggable(id)||!nodeVisible(id))return;e.stopPropagation();var n=nodes[id];nodeDrag={id:id,el:el,x:e.clientX,y:e.clientY,nx:n.x,ny:n.y,moved:false};moved=false;});
@@ -3197,9 +3300,9 @@ GRAPH_JS = """
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok){enableInbox();nextAq=d.next_aq||'';nextSq=d.next_sq||'';if(d.actions_enabled)enableActions();else{var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py，但未開 --allow-apply：這裡只能看，預覽與套用請重啟 server 加 --allow-apply，或由 status skill 跑腳本。';}}}).catch(function(){});}catch(e){}}
   else{var hint0=document.getElementById('actions-hint');if(hint0)hint0.textContent='file:// 開啟的頁面無法呼叫伺服器：預覽與套用請用 progress_server.py --allow-apply 開啟，或由 status skill 跑腳本。';}
-  // ---- 結構化動作表單（七種 kind）：送收件匣後同一個對話框立刻預覽（0.16.3）----
+  // ---- 結構化動作表單（八種 kind；0.16.5 加 nest_result）：送收件匣後同一個對話框立刻預覽（0.16.3）----
   var actForm=document.getElementById('act-form'),actKind='',actPayload=null,actErr=document.getElementById('act-err');
-  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result'];
+  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result','nest-result'];
   function showActGroup(name){ACT_GROUPS.forEach(function(g){var el=document.getElementById('act-'+g+'-fields');if(el)el.hidden=(g!==name);});}
   function $v(id,val){document.getElementById(id).value=val;}
   function planLabel(pid){var n=nodes['p:'+pid];return n?n.label:pid;}
@@ -3232,6 +3335,10 @@ GRAPH_JS = """
     if(kind==='move_plan'){document.getElementById('act-form-title').textContent='搬方法：'+payload.plan+' → '+payload.to_question;showActGroup('move-plan');$v('act-mp-plan',planLabel(payload.plan));$v('act-mp-to',qLabel(payload.to_question));}
     else if(kind==='move_sensitivity'){document.getElementById('act-form-title').textContent='搬敏感性子分析：'+payload.plan+' '+payload.item+' → '+payload.to_plan;showActGroup('move-sens');$v('act-ms-plan',planLabel(payload.plan));$v('act-ms-item',(nodes['p:'+payload.plan+'#'+payload.item]||{label:payload.item}).label);$v('act-ms-to',planLabel(payload.to_plan));}
     else if(kind==='reorder'){document.getElementById('act-form-title').textContent='調順序：goals.'+payload.list;showActGroup('reorder');$v('act-ro-list',payload.list);$v('act-ro-order',payload.order.join(' → '));}
+    else if(kind==='nest_result'){var kn=nodes['r:'+payload.key]||{label:payload.key,meta:{}},kown=String((kn.meta||{}).plan_id||''),cur=String((kn.meta||{}).supports||'');
+      document.getElementById('act-form-title').textContent=payload.under?('掛到主結果下：'+payload.key+' → '+payload.under):('拉回頂層：'+payload.key);showActGroup('nest-result');
+      $v('act-nr-key',kn.label+(kown?'（'+kown+' 的主要結果'+(cur?'，現為 '+cur+' 的支撐結果':'，現為頂層')+'）':''));
+      $v('act-nr-under',payload.under?((nodes['r:'+payload.under]||{label:payload.under}).label+'（同 plan 的頂層主要結果；'+payload.key+' 縮排在它之下、同一區帶）'):'（空：拉回頂層結果）');}
     else if(kind==='move_result'){showActGroup('move-result');var sel=document.getElementById('act-mr-dest'),dw=document.getElementById('act-mr-dest-wrap');sel.innerHTML='';sel.onchange=null;
       if(options&&options.length){// 0.16.4 區帶落點：下拉選確切落點（新增子分析／既有 R／別的 plan 的 outputs），選什麼就送什麼 payload
         options.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.label;sel.appendChild(op);});sel.value='0';actPayload=options[0].payload;
@@ -3254,7 +3361,7 @@ GRAPH_JS = """
       payload={kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
     else if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return;}
       payload={kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
-    else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
+    else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'||actKind==='nest_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
     else{actErr.textContent='未知的動作';return;}
     var sb=document.getElementById('act-submit');sb.disabled=true;
     actPost('/api/inbox',payload)
@@ -3381,7 +3488,7 @@ def spine_lanes(nodes: dict[str, dict], edges: list[tuple[int, dict]]) -> dict[i
     edges 為要畫的邊（含 sensitivity 與 supplements）。"""
     lblocks: dict[str, list[float]] = {}   # 群 id → [上緣, 下緣]（L 形線垂直段）
     for _i, e in edges:
-        if e['type'] == 'sensitivity' and e['from'] in nodes and e['to'] in nodes:
+        if e['type'] in L_EDGE_TYPES and e['from'] in nodes and e['to'] in nodes:
             a, b = nodes[e['from']], nodes[e['to']]
             yc = b['y'] + NODE_H / 2
             blk = lblocks.setdefault(e['from'], [a['y'] + NODE_H, yc])
@@ -3513,7 +3620,7 @@ def route_edges(nodes: dict[str, dict], edges: list[tuple[int, dict]]) -> dict:
     seg_count: dict[int, int] = {}
     pseudo: dict[str, dict] = {}
     for idx, e in edges:
-        if e['type'] in ('sensitivity', 'supplements'):
+        if e['type'] in L_EDGE_TYPES or e['type'] == 'supplements':
             continue
         chain = [nodes[e['from']]]
         for col, y in (e.get('via') or []):
@@ -3693,7 +3800,7 @@ def default_view_lines(by_id: dict[str, dict], edges: list[dict], route: dict) -
     lanes = spine_lanes(by_id, shown_edges)
     for i, e in shown_edges:
         a, b = by_id[e['from']], by_id[e['to']]
-        if e['type'] == 'sensitivity':   # 同一父節點的 L 形線共用垂直段，視同同一幹線
+        if e['type'] in L_EDGE_TYPES:   # 同一父節點的 L 形線共用垂直段，視同同一幹線（群 → 子分析、主結果 → 支撐結果）
             x0, y0, yc, x2 = a['x'] + SPINE_X, a['y'] + NODE_H, b['y'] + NODE_H / 2, b['x']
             lines.append({'edge': i, 'trunk': 'L:' + e['from'], 'kind': 'lshape', 'type': e['type'], 'seg': ((x0, y0), (x0, yc))})
             lines.append({'edge': i, 'trunk': 'L:' + e['from'], 'kind': 'lshape', 'type': e['type'], 'seg': ((x0, yc), (x2, yc))})
@@ -3825,7 +3932,7 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     lanes = spine_lanes(by_id, [(i, graph['edges'][i]) for i in drawn])
     for i, e in enumerate(graph['edges']):
         a, b = by_id[e['from']], by_id[e['to']]
-        if e['type'] == 'sensitivity':
+        if e['type'] in L_EDGE_TYPES:
             d = _l_path(a, b)
             trunk = ''
         elif e['type'] == 'supplements':
@@ -3907,17 +4014,18 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span>三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（敏感性分析與附錄問題）；每組敏感性分析以一條短垂線（敏感性對照）連回所屬分析，其餘跨區的邊除結果→圖表外預設不畫，點選節點或「顯示全部邊」才顯示</span>',
         '<span>已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過，不與該欄節點交錯</span>',
         '<span>縮排子節點＝敏感性子分析與其次要結果（方法欄群→子 L 形線；結果欄靠產出邊連結）</span>',
+        '<span>結果主從（outputs 的 supports）：支撐結果縮排在主結果之下、同一區帶，以一條結果色的 L 形線（支撐）連自主結果；主結果徽章「支撐 n」，點選主結果可暫時收合；plan→支撐結果的產出線預設不畫</span>',
         '<span><span class="esw dashed"></span>虛線＝未宣告（results.json 掛在此 plan 但 outputs／robustness 都沒宣告）</span>',
         '<span><span class="esw thin"></span>細線＝驗證（穩健性）</span>',
         '<span><span class="st unval" style="color:var(--expired);font-weight:700">未驗證</span>＝結果沒有任何驗證邊</span>',
         '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
-        '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；圖表拖到別的帶——放開後只送收件匣</span>',
+        '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果），支撐結果拖到所在帶的空白處＝拉回頂層、拖到別的結果上＝換主結果；圖表拖到別的帶——放開後只送收件匣</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、敏感性分析群 {st["sensitivity_groups"]} 組；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
@@ -3965,7 +4073,7 @@ def _inbox_block(ir: dict) -> list[str]:
 
 
 def _actions_panel(ir: dict, labels: dict) -> list[str]:
-    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
+    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種；0.16.5 起八種）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
     或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位），0.16.3 起表單多一個
     預覽區 #act-preview-box（#act-summary 摘要、#act-dismiss 撤回／#act-keep 先留在收件匣／#act-apply 套用），送出後在同一個對話框顯示 dry-run 摘要。"""
     inbox = ir['inbox']
@@ -4004,6 +4112,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<label for="act-mr-to">to_plan（目標 plan）</label><input id="act-mr-to" readonly>',
         '<div id="act-mr-dest-wrap" hidden><label for="act-mr-dest">放到哪裡（拖到區帶時選）</label><select id="act-mr-dest"></select></div>',
         '<label for="act-mr-item">to_item（目標敏感性子分析；空＝搬到 outputs；新增子分析時為新的 R）</label><input id="act-mr-item" readonly></div>',
+        '<div id="act-nest-result-fields" hidden><label for="act-nr-key">key（要掛的結果鍵）</label><input id="act-nr-key" readonly>',
+        '<label for="act-nr-under">under（主結果的鍵；空＝拉回頂層）</label><input id="act-nr-under" readonly></div>',
         '<div id="act-reorder-fields" hidden><label for="act-ro-list">list</label><input id="act-ro-list" readonly>',
         '<label for="act-ro-order">order（新順序）</label><input id="act-ro-order" readonly></div>',
         '<div id="act-role-fields" hidden><label for="act-fig">figure</label><input id="act-fig" readonly>',
@@ -4085,7 +4195,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     lines += [
         '<footer>',
         f'<p>泳道 {st["lanes"]}、節點 {st["nodes"]}：完成 {by["done"]}、過期 {by["expired"]}、受阻 {by["blocked"]}、未到 {by["pending"]}、不明 {by["unknown"]}；決策註記 {st["annotations"]}。</p>',
-        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）；區帶 main {gs["band_main_nodes"]} 節點、ext {gs["band_ext_nodes"]} 節點、supp {gs["band_supp_nodes"]} 節點、敏感性分析群 {gs["sensitivity_groups"]} 組；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。</p>',
+        f'<p>關聯圖：節點 {gs["nodes"]}、邊 {gs["edges"]}、問題間共用 {gs["shared_pairs"]} 組、goals 指向不存在的結果鍵 {gs["dangling_result_keys"]}、未驗證的結果鍵 {gs["unvalidated_result_keys"]}、次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）；區帶 main {gs["band_main_nodes"]} 節點、ext {gs["band_ext_nodes"]} 節點、supp {gs["band_supp_nodes"]} 節點、敏感性分析群 {gs["sensitivity_groups"]} 組{"、支撐結果 " + str(gs["supporting_result_keys"]) + " 鍵" if gs.get("supporting_result_keys") else ""}；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。</p>',
         '<p>資料維護狀況：</p><ul>',
     ]
     for lane in ir['lanes']:
@@ -4118,7 +4228,8 @@ def stats_line(ir: dict) -> str:
             f'次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、'
             f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）；'
             f'區帶 main {gs["band_main_nodes"]} 節點、ext {gs["band_ext_nodes"]} 節點、supp {gs["band_supp_nodes"]} 節點、'
-            f'敏感性分析群 {gs["sensitivity_groups"]} 組；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
+            f'敏感性分析群 {gs["sensitivity_groups"]} 組' + (f'、支撐結果 {gs["supporting_result_keys"]} 鍵' if gs.get('supporting_result_keys') else '')
+            + f'；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
             f'收件匣待處理 {ir["inbox"]["pending"]}。')
 
 

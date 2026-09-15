@@ -1706,6 +1706,67 @@ def _validate_move_result(root: Path, payload) -> tuple[dict | None, str]:
     return {'key': key, 'to_plan': dst, 'to_item': rid}, ''
 
 
+def plan_supports_of(plan: dict, key: str) -> str:
+    """該鍵在 plan outputs 條目的 supports（沒有＝''）。"""
+    for o in plan.get('outputs') or []:
+        if isinstance(o, dict) and str(o.get('key')) == key:
+            return str(o.get('supports') or '').strip()
+    return ''
+
+
+def _validate_nest_result(root: Path, payload) -> tuple[dict | None, str]:
+    """結果主從（0.16.5）：key 存在於 results.json、其 plan_id 是 active plan、且該鍵在該 plan 的 outputs（次要／未宣告不能巢狀）；
+    under 為同 plan outputs 的另一個鍵（不得是自己、不得自己已是支撐結果——深度一層）、或空＝拉回頂層；已是該狀態＝無事可做。
+    正規化 dict 固定帶 {key, under}（under 空字串＝頂層）。"""
+    if not isinstance(payload, dict):
+        return None, 'nest_result 需要 payload object'
+    key = str(payload.get('key') or '').strip()
+    under = payload.get('under')
+    if under is not None and not isinstance(under, str):
+        return None, 'payload.under 須為字串（主結果的鍵；空＝拉回頂層）'
+    under = str(under or '').strip()
+    if not key:
+        return None, 'payload.key 不得為空'
+    r_path = root / 'analysis/results.json'
+    if not r_path.is_file():
+        return None, '無 analysis/results.json'
+    results = load_json(r_path)
+    obj = results.get(key) if isinstance(results, dict) else None
+    if not isinstance(obj, dict):
+        return None, f'payload.key {key} 不存在於 results.json（或為 legacy scalar）'
+    pid = str(obj.get('plan_id') or '')
+    index = plan_common.load_index(root)
+    active = set((index.get('active') or {}).values())
+    if pid not in active:
+        return None, f'{key} 的 plan_id {pid or "（空）"} 不是 active plan——請先處理該 plan 的版本'
+    p_path = root / 'analysis/plans' / f'{pid}.yaml'
+    if not p_path.is_file():
+        return None, f'plan 檔不存在 {p_path.name}'
+    plan = plan_common.load_yaml(p_path)
+    in_out, rids = plan_key_places(plan, key)
+    if not in_out:
+        where = f'只在敏感性子分析 {"／".join(rids)} 的 expected_keys（次要結果）' if rids else '未在 outputs／robustness 宣告（未宣告結果）'
+        return None, f'{key} 不在 {pid} 的 outputs（{where}）：只有 outputs 的主要結果能宣告主從'
+    cur = plan_supports_of(plan, key)
+    if under == key:
+        return None, f'payload.under 不得是自己（{key}）'
+    if under:
+        under_in, _ = plan_key_places(plan, under)
+        if not under_in:
+            return None, f'payload.under {under} 不在 {pid} 的 outputs（主結果須為同一份 plan 的 outputs 鍵）'
+        if plan_supports_of(plan, under):
+            return None, f'{under} 自己已是 {plan_supports_of(plan, under)} 的支撐結果，不能再當主結果（支撐結果只允許一層）'
+        # key 若已有支撐結果，掛到別的主結果下會使那些支撐結果變成兩層
+        deps = [str(o.get('key')) for o in (plan.get('outputs') or []) if isinstance(o, dict) and str(o.get('supports') or '').strip() == key]
+        if deps:
+            return None, f'{key} 自己是 {"／".join(deps)} 的主結果，掛到 {under} 之下會變成兩層；請先把那些支撐結果拉回頂層'
+        if cur == under:
+            return None, f'{key} 已是 {under} 的支撐結果，無事可做'
+    elif not cur:
+        return None, f'{key} 已是頂層結果，無事可做'
+    return {'key': key, 'under': under}, ''
+
+
 def _validate_reorder(root: Path, payload) -> tuple[dict | None, str]:
     if not isinstance(payload, dict):
         return None, 'reorder 需要 payload object'
@@ -1802,6 +1863,16 @@ ACTIONS: dict[str, dict[str, Any]] = {
         'title': lambda p: (f'搬結果：{p["key"]} → {p["to_plan"]}' + (f' {p["to_item"]}' if p.get('to_item') else (' 新增子分析' if p.get('new_item') else '')),
                             f'結果鍵 {p["key"]} 搬到 {p["to_plan"]}' + (f' 的敏感性子分析 {p["to_item"]}（次要結果）' if p.get('to_item') else
                                                                      (f' 新增的敏感性子分析（次要結果；change「{p["new_item"]}」）' if p.get('new_item') else ' 的 outputs（主要結果）')),
+                            f'r:{p["key"]}'),
+    },
+    'nest_result': {
+        'script': 'nest_result.py', 'label': '掛到主結果下', 'stage': 'study-design',
+        'validate': _validate_nest_result,
+        'argv': lambda p: ['--key', p['key']] + (['--under', p['under']] if p.get('under') else ['--top']),
+        'extra': lambda p, iid: f'nest_result:{p.get("key") or ""}:{p.get("under") or ""}:{iid}',
+        'title': lambda p: ((f'掛到主結果下：{p["key"]} → {p["under"]}' if p.get('under') else f'拉回頂層：{p["key"]}'),
+                            (f'結果鍵 {p["key"]} 宣告為 {p["under"]} 的支撐結果（同一份 plan；只改呈現層級，不改數字、不改歸屬）' if p.get('under') else
+                             f'結果鍵 {p["key"]} 移除 supports、拉回頂層結果（只改呈現層級，不改數字、不改歸屬）'),
                             f'r:{p["key"]}'),
     },
 }
