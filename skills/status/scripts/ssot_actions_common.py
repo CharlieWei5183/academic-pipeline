@@ -1597,11 +1597,11 @@ def _validate_move_plan(root: Path, payload) -> tuple[dict | None, str]:
     sq, aq = goals_ids(root)
     if q not in sq + aq:
         return None, f'payload.to_question {q} 不在 goals'
-    if active.get(q):
-        return None, f'payload.to_question {q} 已有 active plan {active[q]}——那是合併兩份分析計畫，不是搬移，須另行設計'
     src_q = next((k for k, v in active.items() if v == pid), '')
     if src_q == q:
         return None, f'{pid} 已在 {q} 之下'
+    if active.get(q):
+        return None, f'payload.to_question {q} 已有 active plan {active[q]}——那是合併兩份分析計畫，不是搬移，須另行設計'
     return {'plan': pid, 'to_question': q}, ''
 
 

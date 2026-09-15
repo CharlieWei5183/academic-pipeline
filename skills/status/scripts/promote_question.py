@@ -272,7 +272,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         reason_parts.append(f'全鏈只改歸屬與 metadata，{len(keys)} 鍵數字一位元未動；由 promote_question.py {VERSION} 確定性執行')
         known = (f'(1) validation 重接：results {fps["results"]}／source {fps["source"]}，各 item 內容不變\n'
                  f'(2) rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
-                 f'(3) {to} 回到主問題覆蓋：evaluate 的主覆蓋 gate 會重新對它要求「答了沒」，goals-snapshot 已更新為新基準\n'
+                 f'(3) {to} 回到主問題覆蓋：evaluate 的主問題覆蓋 gate 會重新對它要求「答了沒」，goals-snapshot 已更新為新基準\n'
                  f'(4) 歷史紀錄中的「{src}」不回改，讀到即指 {to}\n'
                  f'(5) open item：' + '；'.join(x.format(plan=new_pid, q=to) for x in C.OPEN_ITEMS))
         links = [to] + [f'results.{k}' for k in keys] + [f'analysis/plans/{new_pid}.yaml', f'analysis/plans/{old_pid}.yaml'] + ([waiver_rel] if waiver_rel else []) + [log_rel]
