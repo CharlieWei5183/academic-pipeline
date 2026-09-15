@@ -11,7 +11,7 @@
     promote（附錄問題升回主問題，{from, to?}）、set_role（圖表 role，{figure, role} 或 {figures: {id: role}}）、
     move_plan（分析計畫搬到別的問題，{plan, to_question}）、move_sensitivity（敏感性子分析搬到別的 plan，{plan, item, to_plan}）、
     reorder（問題清單調順序，{list, order}）、move_result（結果鍵搬到別的 plan 的 outputs 或某個敏感性子分析的 expected_keys，
-    {key, to_plan, to_item?}）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
+    {key, to_plan, to_item?, new_item?}；0.16.4 的 new_item＝在 to_plan 新增一個 R<n+1> 收該鍵、與 to_item 互斥）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
     （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py／
     move_result.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
