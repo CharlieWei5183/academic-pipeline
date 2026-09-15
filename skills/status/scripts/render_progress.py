@@ -1556,7 +1556,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 else:
                     mime = IMAGE_MIME.get(Path(cand).suffix.lower(), 'application/octet-stream')
                     meta['data_uri'] = f'data:{mime};base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
-        role = ''.join(_text(fig.get('role')).lower().split())   # 小寫、去空白
+        role = '_'.join(_text(fig.get('role')).lower().split())   # 小寫、去頭尾空白、內部空白視同底線（Extended Data → extended_data）
         role_band = FIGURE_ROLE_BAND.get(role, '')
         meta['role_source'] = 'manifest' if role_band else 'derived'   # band 由 manifest role 決定；缺或不認得 → 由呈現的結果推導
         meta['type'] = _text(fig.get('type'))
@@ -2777,7 +2777,20 @@ GRAPH_JS = """
   function num(v){var r=Math.round(v*100)/100;return String(r);}
   function gapCenter(g){return GRAPH_PAD+g*COL_PITCH+NODE_W+GAP/2;}
   function laneX(g,lane,nLanes){var n=Math.min(nLanes,TRUNK_MAX_LANES);return gapCenter(g)+((lane%TRUNK_MAX_LANES)-(n-1)/2)*LANE_GAP;}
-  function spinePath(a,b){var x0=a.x+12,y0=a.y,x1=b.x+12,y1=b.y+H;return x0===x1?'M'+num(x0)+','+num(y0)+' V'+num(y1):'M'+num(x0)+','+num(y0)+' L'+num(x1)+','+num(y1);}
+  var SPINE_X=12,SPINE_LANE_GAP=4;  // 對照短垂線 x 偏移與分道間距；與 Python 端同名常數同值
+  function spinePath(a,b,lane){var dx=SPINE_X-(lane||0)*SPINE_LANE_GAP,x0=a.x+dx,y0=a.y,x1=b.x+dx,y1=b.y+H;return x0===x1?'M'+num(x0)+','+num(y0)+' V'+num(y1):'M'+num(x0)+','+num(y0)+' L'+num(x1)+','+num(y1);}
+  // 與 Python spine_lanes 同一套：L 形線區塊固定第 0 道，對照線依（群 y, idx）序取最小不重疊的一道
+  function spineLanes(drawn){var lblocks={},spines=[],i,e;
+    for(var di=0;di<drawn.length;di++){i=drawn[di];e=G.edges[i];if(e.type==='sensitivity'){var a=nodes[e.from],b=nodes[e.to],yc=b.y+H/2;if(!lblocks[e.from])lblocks[e.from]=[a.y+H,yc];else if(yc>lblocks[e.from][1])lblocks[e.from][1]=yc;}
+      else if(e.type==='supplements'){var g=nodes[e.from],p=nodes[e.to],lo=Math.min(p.y+H,g.y),hi=Math.max(p.y+H,g.y);spines.push([g.y,i,p.col,lo,hi]);}}
+    spines.sort(function(x,y){return x[0]!==y[0]?x[0]-y[0]:x[1]-y[1];});
+    var taken=[],out={};
+    spines.forEach(function(sp){var i=sp[1],col=sp[2],lo=sp[3],hi=sp[4],lane=0;
+      for(;;){var busy=taken.some(function(t){return t[0]===col&&t[1]===lane&&!(hi<t[2]||lo>t[3]);});
+        if(lane===0&&!busy)busy=Object.keys(lblocks).some(function(gid){var blk=lblocks[gid];return nodes[gid].col===col&&!(hi<blk[0]||lo>blk[1]);});
+        if(!busy)break;lane++;}
+      taken.push([col,lane,lo,hi]);out[i]=lane;});
+    return out;}
   function bendPath(sx,sy,tx,ty,ex){
     if(ty===sy)return 'M'+num(sx)+','+num(sy)+' H'+num(ex);
     var d1=tx>sx?1:-1,v=ty>sy?1:-1,d2=ex>tx?1:-1,r=Math.min(CORNER_R,Math.abs(ty-sy)/2);
@@ -2839,9 +2852,9 @@ GRAPH_JS = """
   var trunkGroup=document.getElementById('graph-trunks');
   function redrawEdges(){
     var drawn=[];G.edges.forEach(function(e,i){var ok=edgeDrawn(i);edgeEls[i].classList.toggle('off',!ok);if(ok)drawn.push(i);});
-    var route=routeEdges(drawn);
+    var route=routeEdges(drawn),sl=spineLanes(drawn);
     drawn.forEach(function(i){var e=G.edges[i],el=edgeEls[i];if(e.type==='sensitivity'){el.setAttribute('d',lPath(nodes[e.from],nodes[e.to]));el.removeAttribute('data-trunk');return;}
-      if(e.type==='supplements'){el.setAttribute('d',spinePath(nodes[e.from],nodes[e.to]));el.removeAttribute('data-trunk');return;}
+      if(e.type==='supplements'){el.setAttribute('d',spinePath(nodes[e.from],nodes[e.to],sl[i]||0));el.removeAttribute('data-trunk');return;}
       el.setAttribute('d',route.paths[i]);if(route.trunkOf[i])el.setAttribute('data-trunk',route.trunkOf[i]);else el.removeAttribute('data-trunk');});
     while(trunkGroup.firstChild)trunkGroup.removeChild(trunkGroup.firstChild);
     route.trunks.forEach(function(t){var pth=document.createElementNS(svg.namespaceURI,'path');pth.setAttribute('class','trunk e-'+t.type+' st-'+t.style);pth.setAttribute('data-trunk',t.key);pth.setAttribute('data-gap',t.gap);pth.setAttribute('data-lane',t.lane);pth.setAttribute('d',t.d);trunkGroup.appendChild(pth);});
@@ -3101,14 +3114,55 @@ def _l_path(a: dict, b: dict) -> str:
     return f'M{_num(x0)},{_num(y0)} L{_num(x0)},{_num(yc - r)} Q{_num(x0)},{_num(yc)} {_num(x0 + r)},{_num(yc)} L{_num(x2)},{_num(yc)}'
 
 
-def _spine_path(grp: dict, plan: dict) -> str:
+SPINE_X = 12       # 對照短垂線的 x 偏移（相對節點左緣）；與 L 形線的垂直段同一條線
+SPINE_LANE_GAP = 4  # 同欄多條對照線（或與別的群的 L 形線）垂直範圍重疊時，往左各錯開 4px 一道
+
+
+def _spine_path(grp: dict, plan: dict, lane: int = 0) -> str:
     """敏感性分析群 → 所屬 plan 的敏感性對照短垂線：從群上緣 (x+12, y) 垂直向上到 plan 下緣 (x+12, y+NODE_H)，箭頭指向 plan；
-    同欄、不走走道、不進 route_edges（經過中間節點時位於節點之下）。與 GRAPH_JS 的 spinePath 同一套。"""
-    x0, y0 = grp['x'] + 12, grp['y']
-    x1, y1 = plan['x'] + 12, plan['y'] + NODE_H
+    同欄、不走走道、不進 route_edges（經過中間節點時位於節點之下）。lane > 0 時往左錯開 lane × SPINE_LANE_GAP（見 spine_lanes）。
+    與 GRAPH_JS 的 spinePath 同一套。"""
+    dx = SPINE_X - lane * SPINE_LANE_GAP
+    x0, y0 = grp['x'] + dx, grp['y']
+    x1, y1 = plan['x'] + dx, plan['y'] + NODE_H
     if x0 == x1:
         return f'M{_num(x0)},{_num(y0)} V{_num(y1)}'
     return f'M{_num(x0)},{_num(y0)} L{_num(x1)},{_num(y1)}'
+
+
+def spine_lanes(nodes: dict[str, dict], edges: list[tuple[int, dict]]) -> dict[int, int]:
+    """同一欄的對照短垂線分道（與 GRAPH_JS 的 spineLanes 同一套、決定性）：每條線的垂直範圍 [plan 下緣, 群上緣]；
+    L 形線的垂直段（群下緣 → 最後一個子節點的中線，x+12）固定占第 0 道；對照線依（群 y, 邊 idx）序取最小的一道，
+    條件是該道上沒有範圍重疊（閉區間）的對照線、且第 0 道另要沒有範圍重疊的 L 形線區塊。回傳 {邊 idx: lane}。
+    edges 為要畫的邊（含 sensitivity 與 supplements）。"""
+    lblocks: dict[str, list[float]] = {}   # 群 id → [上緣, 下緣]（L 形線垂直段）
+    for _i, e in edges:
+        if e['type'] == 'sensitivity' and e['from'] in nodes and e['to'] in nodes:
+            a, b = nodes[e['from']], nodes[e['to']]
+            yc = b['y'] + NODE_H / 2
+            blk = lblocks.setdefault(e['from'], [a['y'] + NODE_H, yc])
+            blk[1] = max(blk[1], yc)
+    spines = []
+    for i, e in edges:
+        if e['type'] == 'supplements' and e['from'] in nodes and e['to'] in nodes:
+            grp, plan = nodes[e['from']], nodes[e['to']]
+            lo, hi = sorted((plan['y'] + NODE_H, grp['y']))
+            spines.append((grp['y'], i, plan['col'], lo, hi))
+    spines.sort()
+    taken: list[tuple[int, int, float, float]] = []   # (col, lane, lo, hi)
+    out: dict[int, int] = {}
+    for _gy, i, col, lo, hi in spines:
+        lane = 0
+        while True:
+            busy = any(c == col and ln == lane and not (hi < a or lo > b) for c, ln, a, b in taken)
+            if lane == 0 and not busy:
+                busy = any(nodes[g]['col'] == col and not (hi < a or lo > b) for g, (a, b) in lblocks.items())
+            if not busy:
+                break
+            lane += 1
+        taken.append((col, lane, lo, hi))
+        out[i] = lane
+    return out
 
 
 LANE_GAP = 8
@@ -3391,17 +3445,18 @@ def default_view_lines(by_id: dict[str, dict], edges: list[dict], route: dict) -
     """預設檢視的全部可見線段：route_edges 的幹線出口／垂直／分支／直線／dummy 段，加上 sensitivity 的 L 形線與 supplements 的
     對照短垂線（後兩者從 path 座標拆成直線段）。"""
     lines = list(route['lines'])
-    for i, e in enumerate(edges):
-        if not e['default_visible'] or e['from'] not in by_id or e['to'] not in by_id:
-            continue
+    shown_edges = [(i, e) for i, e in enumerate(edges) if e['default_visible'] and e['from'] in by_id and e['to'] in by_id]
+    lanes = spine_lanes(by_id, shown_edges)
+    for i, e in shown_edges:
         a, b = by_id[e['from']], by_id[e['to']]
         if e['type'] == 'sensitivity':   # 同一父節點的 L 形線共用垂直段，視同同一幹線
-            x0, y0, yc, x2 = a['x'] + 12, a['y'] + NODE_H, b['y'] + NODE_H / 2, b['x']
+            x0, y0, yc, x2 = a['x'] + SPINE_X, a['y'] + NODE_H, b['y'] + NODE_H / 2, b['x']
             lines.append({'edge': i, 'trunk': 'L:' + e['from'], 'kind': 'lshape', 'type': e['type'], 'seg': ((x0, y0), (x0, yc))})
             lines.append({'edge': i, 'trunk': 'L:' + e['from'], 'kind': 'lshape', 'type': e['type'], 'seg': ((x0, yc), (x2, yc))})
         elif e['type'] == 'supplements':
+            dx = SPINE_X - lanes.get(i, 0) * SPINE_LANE_GAP
             lines.append({'edge': i, 'trunk': '', 'kind': 'spine', 'type': e['type'],
-                          'seg': ((a['x'] + 12, a['y']), (b['x'] + 12, b['y'] + NODE_H))})
+                          'seg': ((a['x'] + dx, a['y']), (b['x'] + dx, b['y'] + NODE_H))})
     return lines
 
 
@@ -3523,13 +3578,14 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     for t in route['trunks']:
         out.append(f'<path class="trunk e-{t["type"]} st-{t["style"]}" data-trunk="{_h(t["key"])}" data-gap="{t["gap"]}" data-lane="{t["lane"]}" d="{t["d"]}"></path>')
     out.append('</g><g id="graph-edges">')
+    lanes = spine_lanes(by_id, [(i, graph['edges'][i]) for i in drawn])
     for i, e in enumerate(graph['edges']):
         a, b = by_id[e['from']], by_id[e['to']]
         if e['type'] == 'sensitivity':
             d = _l_path(a, b)
             trunk = ''
         elif e['type'] == 'supplements':
-            d = _spine_path(a, b)
+            d = _spine_path(a, b, lanes.get(i, 0))
             trunk = ''
         elif i in drawn_set:
             d = route['paths'][i]
