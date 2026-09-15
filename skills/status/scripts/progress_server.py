@@ -16,6 +16,7 @@
     move_result.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
     瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
+    瀏覽器「撤回」    ─POST /api/inbox/dismiss {id, note}─► 子程序 check_inbox.py --dismiss（只動收件匣，不需 --allow-apply）
 
 安全邊界:
 - 只綁 loopback：--host 只接受 127.0.0.1／localhost／::1，其餘印 BLOCKER 並 exit 2。
@@ -48,6 +49,10 @@
                      p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 取 r:<key>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
                      清單、to 未使用或省略、figure 存在於 manifest、role 合法、plan 為 active、目標問題沒有 active plan、
                      robustness 項目存在、order 的 id 集合相同）
+- POST /api/inbox/dismiss  {id, note?} → {"ok": true, "id": "IN-002", "status": "dismissed"}；代跑 check_inbox.py --dismiss <id> --note <note>
+                     （note 省略或空白時預設「使用者在放開預覽後撤回」），只動收件匣那一筆、不需 --allow-apply；id 不存在或
+                     該筆不是 pending 回 400（不寫檔）；腳本失敗 500 且 error 帶腳本輸出原文；成功後重畫一次進度頁。
+                     0.16.3 起放開節點後的對話框「撤回」鈕用這個端點。
 - POST /api/actions/dry-run  {id} → {"ok": true, "summary": "...", "token": "..."}；未開 --allow-apply 403、
                      該筆不是 pending 的結構化項目 400、腳本失敗 200 且 ok false（summary 帶 BLOCKER 原因）
 - POST /api/actions/apply    {id, token} → {"ok": true, "decision": "D-055", "run_log": "reviews/…json", "summary"}；
@@ -361,6 +366,22 @@ def run_action(root: Path, item: dict, mode: str, daily_log: str = '', token: st
     return result
 
 
+DISMISS_NOTE_DEFAULT = '使用者在放開預覽後撤回'
+DISMISS_TIMEOUT = 60
+
+
+def run_dismiss(root: Path, item_id: str, note: str) -> dict:
+    """代跑 check_inbox.py <root> --dismiss <id> --note <note>；回 {ok, rc, summary}（summary 為腳本 stdout＋stderr ≤ 8000 字）。"""
+    argv = [sys.executable, str(SCRIPT_DIR / 'check_inbox.py'), str(root), '--dismiss', item_id, '--note', note]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', timeout=DISMISS_TIMEOUT, cwd=str(root))
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'rc': -1, 'summary': 'check_inbox.py 逾時'}
+    except OSError as exc:
+        return {'ok': False, 'rc': -1, 'summary': f'無法執行 check_inbox.py: {exc}'}
+    return {'ok': proc.returncode == 0, 'rc': proc.returncode, 'summary': ((proc.stdout or '') + (proc.stderr or ''))[-8000:]}
+
+
 def append_actions_log(root: Path, item_id: str, script: str, result: str, decision: str) -> None:
     with (root / ACTIONS_LOG_NAME).open('a', encoding='utf-8') as fh:
         fh.write('\t'.join([now_iso(), item_id, script, result, decision]) + '\n')
@@ -443,7 +464,7 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
         # --- POST ---
         def do_POST(self) -> None:
             path = unquote(urlsplit(self.path).path)
-            if path not in ('/api/inbox', '/api/actions/dry-run', '/api/actions/apply'):
+            if path not in ('/api/inbox', '/api/inbox/dismiss', '/api/actions/dry-run', '/api/actions/apply'):
                 return self._json(404 if path.startswith('/api/') else 405, {'ok': False, 'error': '無此端點' if path.startswith('/api/') else '方法不允許'})
             # 安全邊界：有 Origin 就必須是本伺服器自己的來源（不回任何 CORS header，跨來源 preflight 自然失敗）
             origin = self.headers.get('Origin')
@@ -463,6 +484,8 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
                 payload = json.loads(raw.decode('utf-8'))
             except Exception:
                 return self._json(400, {'ok': False, 'error': 'body 不是合法 JSON'})
+            if path == '/api/inbox/dismiss':
+                return self._dismiss(payload)
             if path != '/api/inbox':
                 return self._action(path, payload)
             item, err = validate_submission(root, payload)
@@ -475,6 +498,34 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
             except OSError as exc:
                 return self._json(500, {'ok': False, 'error': f'寫入失敗: {exc}'})
             self._json(201, {'ok': True, 'id': new_id})
+
+        def _dismiss(self, payload) -> None:
+            """/api/inbox/dismiss {id, note?}：代跑 check_inbox.py --dismiss（只改收件匣那一筆的 status／note），不需 --allow-apply。"""
+            if not isinstance(payload, dict) or not isinstance(payload.get('id'), str) or not payload['id'].strip():
+                return self._json(400, {'ok': False, 'error': 'body 須為 {id, note?}'})
+            item_id = payload['id'].strip()
+            note = payload.get('note') if isinstance(payload.get('note'), str) else ''
+            note = note.strip() or DISMISS_NOTE_DEFAULT
+            if len(note) > BODY_MAX:
+                return self._json(400, {'ok': False, 'error': f'note 超過 {BODY_MAX} 字'})
+            _text, data, err = load_inbox(root)
+            if err:
+                return self._json(500, {'ok': False, 'error': f'{INBOX_NAME} 無法解析: {err}'})
+            item = next((it for it in inbox_items(data) if str(it.get('id') or '') == item_id), None)
+            if item is None:
+                return self._json(400, {'ok': False, 'error': f'收件匣無 {item_id}'})
+            if str(item.get('status') or 'pending') != 'pending':
+                return self._json(400, {'ok': False, 'error': f'{item_id} 不是 pending（現為 {item.get("status")}），不能撤回'})
+            if not action_lock.acquire(blocking=False):
+                return self._json(409, {'ok': False, 'error': '另一個動作正在執行，請稍後'})
+            try:
+                result = run_dismiss(root, item_id, note)
+            finally:
+                action_lock.release()
+            if not result['ok']:
+                return self._json(500, {'ok': False, 'error': f'check_inbox.py 未完成（rc={result["rc"]}）', 'summary': result['summary']})
+            rerender(root, 'dismiss 之後')
+            self._json(200, {'ok': True, 'id': item_id, 'status': 'dismissed', 'note': note, 'summary': result['summary']})
 
         def _action(self, path: str, payload) -> None:
             """/api/actions/dry-run 與 /api/actions/apply：預設 403；只代跑腳本，不自己改任何 SSOT。"""

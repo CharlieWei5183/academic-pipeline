@@ -230,6 +230,8 @@ plugin 根的 `hooks/hooks.json` 註冊一個 `SessionEnd` hook（`python3 "${CL
 
 **結果鍵搬家（0.16.2）**：`kind: move_result`（payload `{key, to_plan, to_item?}`）由 `move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2] (--dry-run | --apply)` 完成——A 型（省略 `--to-item`）搬到目標 plan 的 outputs 成為主要結果，B 型（給 `--to-item R<n>`）搬到該敏感性子分析的 expected_keys 成為次要結果；來源由 results.json 該鍵的 plan_id 判（須為 active plan）。來源與目標各出一版（同一份 plan 只出一版；鍵未在來源宣告時來源不出新版）、results 只改 plan_id、validation 中只以該鍵為 primary_results 的 item 改掛目標、同時含別的鍵的 item 移除該鍵那一行、project.yaml 的 `results:<key>` link 跟著問題走、waiver、快照 0 tamper、模板 D#（stage study-design）。關聯圖的結果節點可拖到別的方法（A 型）或任一敏感性子分析（B 型）上，目標已含該鍵改紅。
 
+**放開即預覽（0.16.3）**：關聯圖放開節點 → 表單「送出並預覽」→ `POST /api/inbox` 建一筆後不重載，同一個對話框立刻 `POST /api/actions/dry-run` 顯示摘要，摘要下「套用」（`/api/actions/apply`，409 自動重跑預覽）、「先留在收件匣」（留 pending）、「撤回」（`POST /api/inbox/dismiss {id, note?}`——伺服器代跑 `check_inbox.py --dismiss`，只動收件匣、不需 `--allow-apply`）。「待套用動作」面板仍是第二入口，預覽／套用 JS 與對話框共用同一份。
+
 ## 相容性與升級
 
 沒有 `pipeline.version >= 0.7` 的舊專案，新增 checker 以相容模式運作：`check_gate.py` 對完全沒有 last_consistency 的專案只輸出 INFO，對已跑過 v0.6 consistency 的專案只驗既有 `result` 與 `version`。只有 `--strict` 或升版到 0.7.x 後才啟用完整 fingerprint gate。升級請先備份，再依 [`MIGRATION-v0.7.md`](MIGRATION-v0.7.md) 補 route、integrity、protocol/plans、audit、validation、evidence 與 claim-audit。
@@ -253,6 +255,7 @@ python3 tests/run_v0150_regressions.py
 python3 tests/run_v0160_regressions.py
 python3 tests/run_v0161_regressions.py
 python3 tests/run_v0162_regressions.py
+python3 tests/run_v0163_regressions.py
 ```
 
 `tests/mini-project` 保留黃金答案；smoke 測試動態建立 v0.7 專案，驗證七種 adapter 的 plan／validation 契約、clean-room 重跑、資料稽核、results schema、evidence fingerprint、claim-audit、integrity 與中英文 consistency 的 source-staleness gate。腳本需要 Python 3.10+ 與 PyYAML；排版另依 typeset 說明使用 pandoc／LaTeX。
