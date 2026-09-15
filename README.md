@@ -224,6 +224,8 @@ plugin 根的 `hooks/hooks.json` 註冊一個 `SessionEnd` hook（`python3 "${CL
 
 `python3 skills/status/scripts/progress_server.py <root> [--port N]` 只綁 loopback（`--host` 非 127.0.0.1／localhost／::1 直接 BLOCKER），`GET /` 先重跑 `render_progress.py` 再回頁面，靜態檔只提供 root 底下白名單副檔名（svg／png／jpg／pdf／json／yaml／md／html／css／js／tsv／csv／txt；路徑含 `..` 或 resolve 後跑出 root 一律 403），`POST /api/inbox` 驗 `kind`（new_question／new_analysis／comment）、`title`／`body` 非空、`target` 存在於現行 IR 節點後，鎖檔 append 一筆 `IN-###`（`status: pending`、`at` 含時區）到 `<root>/PROGRESS.inbox.yaml`——這是伺服器唯一會寫的檔。POST 若帶 `Origin` header 必須是 `http://127.0.0.1:<port>`／`http://localhost:<port>`／`http://[::1]:<port>`（否則 403 不寫檔），`Content-Type` 必須以 `application/json` 開頭（否則 415 不寫檔），且不回任何 CORS header，本機其他網頁的跨來源 POST 在瀏覽器 preflight 就會失敗。頁面用 `file://` 開時表單 disabled（沒有同源伺服器可 POST）。收件匣不是事實來源：`status` skill 在每次 session 先處理 pending，逐筆呈使用者裁決後才由既有 skill 進 goals／plans／decisions，再以 `check_inbox.py --resolve IN-xxx --by <D#／plan id>`／`--dismiss` 結案（只改該筆四個欄位，其餘位元組不動；這是唯一可以改收件匣 status 的程式）。renderer 唯讀收件匣，在 IR 頂層給 `inbox`、把 pending 項掛到節點徽章「收件 N」、頁首顯示「收件匣待處理 N 筆」。
 
+**結構化動作（0.16.0）**：兩種操作有確定性腳本，整條 SSOT 變更鏈不再由 LLM 手做——`kind: reassign`（主問題降為附錄問題，payload `{from, to?, primary_model?}`）由 `skills/status/scripts/reassign_question.py <root> --from SQ2 [--to AQ4] [--primary-model M] [--inbox IN-xxx] (--dry-run | --apply)` 九步完成（goals 搬移、新 plan 封版、results retag、validation 改掛與 fingerprint 重接、waiver 重登、coverage 快照、GLOSSARY §10.4、模板 D#、收件匣結案與重畫），`kind: set_role`（圖表 role，payload `{figure, role}`）由 `set_figure_role.py <root> --figure id=role … (--dry-run | --apply)` 完成；`--dry-run` 在暫存工作區算、不寫任何專案檔並印 token，`--apply` 核對 token 未變才動 root，所有改到的檔先備份、任一步失敗還原，步驟紀錄在 `reviews/`。在頁面上把 Main 帶的問題拖到 Supplementary、或把圖表拖到別的帶，只會送一筆收件匣；`progress_server.py --allow-apply` 才開 `POST /api/actions/dry-run`／`/api/actions/apply`（預覽與套用，token 過期 409；每次 apply 追記 `PROGRESS.actions.log`），預設仍只寫收件匣。
+
 ## 相容性與升級
 
 沒有 `pipeline.version >= 0.7` 的舊專案，新增 checker 以相容模式運作：`check_gate.py` 對完全沒有 last_consistency 的專案只輸出 INFO，對已跑過 v0.6 consistency 的專案只驗既有 `result` 與 `version`。只有 `--strict` 或升版到 0.7.x 後才啟用完整 fingerprint gate。升級請先備份，再依 [`MIGRATION-v0.7.md`](MIGRATION-v0.7.md) 補 route、integrity、protocol/plans、audit、validation、evidence 與 claim-audit。
@@ -244,6 +246,7 @@ python3 tests/run_v0130_regressions.py
 python3 tests/run_v0140_regressions.py
 python3 tests/run_v0141_regressions.py
 python3 tests/run_v0150_regressions.py
+python3 tests/run_v0160_regressions.py
 ```
 
 `tests/mini-project` 保留黃金答案；smoke 測試動態建立 v0.7 專案，驗證七種 adapter 的 plan／validation 契約、clean-room 重跑、資料稽核、results schema、evidence fingerprint、claim-audit、integrity 與中英文 consistency 的 source-staleness gate。腳本需要 Python 3.10+ 與 PyYAML；排版另依 typeset 說明使用 pandoc／LaTeX。

@@ -51,6 +51,16 @@ python3 <skill路徑>/scripts/progress_server.py <root> --port 8765   # 只綁 1
 
 伺服器啟動時先重算一次進度產物，之後只做三件事：`GET /` 先重跑 `render_progress.py` 再回 `PROGRESS.html`；提供 root 底下白名單副檔名的靜態檔（給圖用；路徑含 `..` 或跑出 root 一律 403）；`POST /api/inbox` 把表單 append 到 `<root>/PROGRESS.inbox.yaml`（IN-### 連號、`status: pending`、鎖檔後寫暫存檔再替換）。它**只綁 loopback、只寫收件匣**，不碰任何 SSOT；下次 session 由本 skill 依上面的路由逐筆處理。
 
+結構化動作（0.16.0）：頁面上把 Main 帶的問題拖到 Supplementary 帶（或面板按「降為附錄問題」）會送一筆 `kind: reassign`（payload `{from, to, primary_model}`）、把圖表拖到別的帶（或面板改 role）會送一筆 `kind: set_role`（payload `{figures: {id: role}}`），title／body 由伺服器生成。這兩種項目的整條 SSOT 變更鏈由確定性腳本完成：
+
+```bash
+python3 <skill路徑>/scripts/reassign_question.py <root> --from SQ2 [--to AQ4] [--primary-model M] --inbox IN-xxx --dry-run   # 預覽（不寫任何檔、印 token）
+python3 <skill路徑>/scripts/reassign_question.py <root> --from SQ2 [--to AQ4] [--primary-model M] --inbox IN-xxx [--daily-log daily_log/daily_log_YYYY-MM-DD.md] --apply
+python3 <skill路徑>/scripts/set_figure_role.py <root> --figure fig_x=supplementary [--figure fig_y=main] --inbox IN-xxx (--dry-run | --apply)
+```
+
+要讓頁面上的「待套用動作」面板能預覽與套用，啟動伺服器時加 `--allow-apply`（另可加 `--daily-log <path>` 透傳給腳本）：`python3 <skill路徑>/scripts/progress_server.py <root> --port 8765 --allow-apply`。開了之後 `POST /api/actions/dry-run {id}` 代跑 `--dry-run` 回摘要與 token，`POST /api/actions/apply {id, token}` 在 token 與現行 SSOT 相符時才代跑 `--apply`（不符 409，要重新預覽），每次 apply 追記 `<root>/PROGRESS.actions.log`；不加旗標時兩個端點一律 403，伺服器維持「只寫收件匣」。
+
 `render_decisions_timeline.py` 是決策時間軸：只讀 `project.yaml`、`decisions.yaml`、`analysis/results.json`，只寫 `<root>/DECISIONS-TIMELINE.md`（一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section、一筆一個 milestone，無日期的列不入圖而列於圖下）；加 `--dry-run` 不寫檔、加 `--json` 印機器可讀結果。缺欄位、缺 `decisions.yaml` 都不是錯誤（顯示 `unknown`、exit 0）；只有根目錄不存在或 `decisions.yaml` 無法解析才 exit 2。
 
 ## v0.7.1 主流程
@@ -90,6 +100,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 依第一個未通過／過期項導向：
 
 - **收件匣有 pending（`check_inbox.py <root>` 列出）→ 先於其他路由，逐筆呈使用者裁決**：`new_question` → goals 變更確認（結構性增修觸發 evaluate 的拆解審）並記 D#；`new_analysis` → study-design（新 plan 或 amendment）並記 D#；`comment` → 依內容記一筆 D#（`question`＝target 所屬問題，`exec_issue`／`method` 視內容填）或轉對應 skill。使用者裁定後跑 `python3 <skill路徑>/scripts/check_inbox.py <root> --resolve IN-xxx --by <D#／plan id／SQ id>`；不採納 → `--dismiss IN-xxx --note <理由>`。**收件匣不是事實來源，不得未經使用者確認直接改 goals／plans／decisions**；`check_inbox.py` 是唯一可以改收件匣 status 的程式。
+  - **pending 為 `reassign`（主問題降為附錄問題）或 `set_role`（圖表 role）時走腳本，不走人工**：`check_inbox.py` 已在該筆下面印出可直接執行的命令。**不得人工重做各步**（不得自己搬 goals、建 plan、retag results、改 validation、重登 waiver、寫 D#），**不得整本讀 decisions.yaml** 去仿寫先例；只跑 `reassign_question.py … --dry-run`（或 `set_figure_role.py … --dry-run`）→ 把 ≤ 30 行的摘要（要改哪些檔、搬哪段、新舊 fingerprint、預定 D#）呈給使用者 → 使用者同意後改 `--apply`（可加 `--daily-log`）。腳本會自己備份、失敗還原、結案收件匣、重畫進度圖並 append 一筆模板 D#；主 loop 驗收只看磁碟成品（`reviews/reassign-*.json`／`set-figure-role-*.json` 的步驟紀錄、新 D#、各 checker）。前置條件被擋（exit 2）或鏈失敗（exit 1，已還原）時把原因照實回報，不要繞過腳本手做。搬走最後一個主問題須明確加 `--allow-empty-main`，且要先告知使用者 `check_coverage` 會因此擋關。
 - 無 route／未確認 → methodology-router；
 - prestudy 未過 → integrity-check；
 - protocol/plans 缺或 hash 不符 → study-design；

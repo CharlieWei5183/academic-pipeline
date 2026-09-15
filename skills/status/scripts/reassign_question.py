@@ -1019,7 +1019,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         summary['files'] = sorted({f for s in log.doc['steps'] for f in s['files']})
         log.write()
         return summary
-    except ChainError as exc:
+    except Exception as exc:   # ChainError 之外的例外（權限、I/O、解析）一樣停下並還原
         for s in log.doc['steps']:
             if s['status'] == 'running':
                 log.finish(s, 'failed')

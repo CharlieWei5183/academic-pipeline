@@ -289,7 +289,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         log.doc['backups'] = summary['backups']
         log.write()
         return summary
-    except ChainError as exc:
+    except Exception as exc:   # ChainError 之外的例外（權限、I/O、解析）一樣停下並還原
         for s in log.doc['steps']:
             if s['status'] == 'running':
                 log.finish(s, 'failed')

@@ -446,7 +446,8 @@ def test_server_inbox_roundtrip() -> None:
         html_mtime = (root / "PROGRESS.html").stat().st_mtime_ns
         with Served(root) as srv:
             st, d, h = http(srv.base, "GET", "/api/ping")
-            assert st == 200 and d == {"ok": True, "root": str(root.resolve()), "inbox_pending": 0}, (st, d)
+            # 0.16.0 起 ping 另回 actions_enabled／next_aq；這裡只驗原本三個欄位
+            assert st == 200 and {k: d.get(k) for k in ("ok", "root", "inbox_pending")} == {"ok": True, "root": str(root.resolve()), "inbox_pending": 0}, (st, d)
             assert h.get("Cache-Control") == "no-store"
             st, d, _ = http(srv.base, "POST", "/api/inbox", {"kind": "new_analysis", "target": "q:SQ2", "title": "補一個模型", "body": "說明", "author": "me"})
             assert st == 201 and d == {"ok": True, "id": "IN-001"}, (st, d)
@@ -653,9 +654,10 @@ def test_renderer_reads_inbox() -> None:
         ir = json.loads(out)
         assert ir["inbox"]["present"] is True and ir["inbox"]["pending"] == 1 and ir["stats"]["inbox_pending"] == 1
         assert [it["id"] for it in ir["inbox"]["items"]] == ["IN-001", "IN-002"]
+        # 0.16.0 起 IR item 另帶 payload（非結構化 kind 為 {}）；其餘欄位不變
         assert ir["inbox"]["items"][1] == {"id": "IN-002", "at": "2026-09-14T15:01:00+08:00", "kind": "new_question", "target": "",
                                             "title": "海拔梯度", "body": "想加一個 SQ", "author": "charlie", "status": "done",
-                                            "resolved_by": "D-050", "resolved_at": "2026-09-14T16:00:00+08:00", "note": "已記入"}
+                                            "resolved_by": "D-050", "resolved_at": "2026-09-14T16:00:00+08:00", "note": "已記入", "payload": {}}
         sq2 = [n for n in ir["graph"]["nodes"] if n["id"] == "q:SQ2"][0]
         assert sq2["meta"]["inbox"] == ["IN-001"] and sq2["badge"] == "收件 1", sq2
         assert all("inbox" not in n["meta"] for n in ir["graph"]["nodes"] if n["id"] != "q:SQ2")
