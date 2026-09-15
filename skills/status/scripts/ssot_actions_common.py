@@ -1628,6 +1628,54 @@ def _validate_move_sensitivity(root: Path, payload) -> tuple[dict | None, str]:
     return {'plan': pid, 'item': rid, 'to_plan': dst}, ''
 
 
+def plan_key_places(plan: dict, key: str) -> tuple[bool, list[str]]:
+    """該鍵在 plan 裡的位置：(是否在 outputs, 引用它的 robustness id 清單)。"""
+    in_out = any(isinstance(o, dict) and str(o.get('key')) == key for o in (plan.get('outputs') or []))
+    rids = [str(r.get('id')) for r in (plan.get('robustness') or [])
+            if isinstance(r, dict) and key in [str(k) for k in (r.get('expected_keys') or [])]]
+    return in_out, rids
+
+
+def _validate_move_result(root: Path, payload) -> tuple[dict | None, str]:
+    """結果鍵搬家：key 存在於 results.json 且其 plan_id 是 active plan；to_plan 是 active plan；to_item（可省）須存在於 to_plan；
+    目標未含該鍵（A 型看 outputs、B 型看該 R 的 expected_keys；同一份 plan 且鍵已在 outputs 的 A 型＝無事可做）。"""
+    if not isinstance(payload, dict):
+        return None, 'move_result 需要 payload object'
+    key = str(payload.get('key') or '').strip()
+    dst = str(payload.get('to_plan') or '').strip()
+    rid = str(payload.get('to_item') or '').strip()
+    if not key:
+        return None, 'payload.key 不得為空'
+    r_path = root / 'analysis/results.json'
+    if not r_path.is_file():
+        return None, '無 analysis/results.json'
+    results = load_json(r_path)
+    obj = results.get(key) if isinstance(results, dict) else None
+    if not isinstance(obj, dict):
+        return None, f'payload.key {key} 不存在於 results.json（或為 legacy scalar）'
+    src = str(obj.get('plan_id') or '')
+    index = plan_common.load_index(root)
+    active = set((index.get('active') or {}).values())
+    if src not in active:
+        return None, f'{key} 的 plan_id {src or "（空）"} 不是 active plan——請先處理該 plan 的版本（該鍵所屬版本已被取代或未登記）'
+    if dst not in active:
+        return None, f'payload.to_plan {dst or "（空）"} 不是 active plan'
+    dst_path = root / 'analysis/plans' / f'{dst}.yaml'
+    if not dst_path.is_file():
+        return None, f'plan 檔不存在 {dst_path.name}'
+    dst_plan = plan_common.load_yaml(dst_path)
+    in_out, rids = plan_key_places(dst_plan, key)
+    if rid:
+        if not any(isinstance(r, dict) and str(r.get('id')) == rid for r in (dst_plan.get('robustness') or [])):
+            return None, f'{dst} 沒有 robustness 項目 {rid}'
+        if rid in rids:
+            return None, f'{dst} 的 {rid} 已含 {key}'
+    else:
+        if in_out:
+            return None, (f'{key} 已在 {dst} 的 outputs，無事可做' if src == dst else f'{dst} 的 outputs 已含 {key}')
+    return {'key': key, 'to_plan': dst, 'to_item': rid}, ''
+
+
 def _validate_reorder(root: Path, payload) -> tuple[dict | None, str]:
     if not isinstance(payload, dict):
         return None, 'reorder 需要 payload object'
@@ -1708,6 +1756,14 @@ ACTIONS: dict[str, dict[str, Any]] = {
         'extra': lambda p, iid: f'move_sensitivity:{p.get("plan") or ""}:{p.get("item") or ""}:{p.get("to_plan") or ""}:{iid}',
         'title': lambda p: (f'搬敏感性子分析：{p["plan"]} {p["item"]} → {p["to_plan"]}',
                             f'{p["plan"]} 的敏感性子分析 {p["item"]} 搬到 {p["to_plan"]}', f'p:{p["plan"]}#{p["item"]}'),
+    },
+    'move_result': {
+        'script': 'move_result.py', 'label': '搬結果', 'stage': 'study-design',
+        'validate': _validate_move_result, 'argv': lambda p: ['--key', p['key'], '--to-plan', p['to_plan']] + (['--to-item', p['to_item']] if p.get('to_item') else []),
+        'extra': lambda p, iid: f'move_result:{p.get("key") or ""}:{p.get("to_plan") or ""}:{p.get("to_item") or ""}:{iid}',
+        'title': lambda p: (f'搬結果：{p["key"]} → {p["to_plan"]}' + (f' {p["to_item"]}' if p.get('to_item') else ''),
+                            f'結果鍵 {p["key"]} 搬到 {p["to_plan"]}' + (f' 的敏感性子分析 {p["to_item"]}（次要結果）' if p.get('to_item') else ' 的 outputs（主要結果）'),
+                            f'r:{p["key"]}'),
     },
     'reorder': {
         'script': 'reorder_questions.py', 'label': '調順序', 'stage': 'evaluate',
