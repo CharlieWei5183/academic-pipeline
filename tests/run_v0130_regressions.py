@@ -218,9 +218,9 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R3", "sensitivity"), True, "solid", "敏感性")
         ev(("p:SQ1-v1#S", "p:SQ1-v1#R1", "sensitivity"), False, "solid", "敏感性")
         assert ("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity") not in edges and ("p:SQ1-v1", "p:SQ1-v1#R1", "sensitivity") not in edges
-        ev(("p:SQ1-v2", "r:k1", "produces"), True, "solid", "")
-        ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")
-        ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")   # v0.14.0：子分析 → 主要結果跨區帶，預設不畫
+        ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")   # v0.15.0：p → V1 → k1 已覆蓋，遞移隱藏（IR 保留）
+        ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")    # k2 沒有可見驗證邊覆蓋（V1 只驗 k1／k4）→ 維持可見
+        ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")   # v0.14.0：子分析 → 主要結果預設不畫（v0.15.0 起不分區帶）
         ev(("p:SQ1-v2#R2", "r:k4", "produces"), True, "solid", "")
         ev(("p:SQ1-v2#R3", "r:k6", "produces"), True, "solid", "")
         ev(("p:SQ1-v2#R3", "r:k7", "produces"), True, "solid", "")
@@ -443,12 +443,15 @@ def test_route_no_overlap_in_fixture_and_html() -> None:
                     if not (a["span"][1] < b["span"][0] or a["span"][0] > b["span"][1]):
                         assert _trunk_x(a["d"]) != _trunk_x(b["d"]), (gap, a["key"], b["key"])
         assert r["overflow"] == [] and all(v <= rp.TRUNK_MAX_LANES - 1 for v in r["lane_max"].values())
-        # 每條可見邊都有 path；同幹線的分支共用幹線 x
-        assert set(r["paths"]) == {i for i, e in drawn if e["type"] != "sensitivity"}
+        # 每條可見邊都有 path；同幹線的分支共用幹線 x（v0.15.0：supplements 對照短垂線也不進 route_edges）
+        assert set(r["paths"]) == {i for i, e in drawn if e["type"] not in ("sensitivity", "supplements")}
         html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
         assert '<g id="graph-trunks">' in html_text and 'class="trunk e-plans st-solid" data-trunk="q:main|1|decomposes|solid|fwd"' not in html_text
         assert 'class="trunk e-decomposes st-solid" data-trunk="q:main|1|decomposes|solid|fwd" data-gap="0" data-lane="0"' in html_text
-        assert 'data-trunk="p:SQ1-v2|4|produces|solid|fwd"' in html_text and "同來源的線合併成幹線＋分支" in html_text
+        # v0.15.0：p → r 跳欄邊拆成 p → dummy（走道 2）與 dummy → r（走道 3）兩段，邊的 data-trunk 列兩段的幹線 key
+        assert 'data-trunk="p:SQ1-v2|3|produces|solid|fwd' in html_text and "同來源的線合併成幹線＋分支" in html_text
+        assert re.search(r'data-trunk="p:SQ1-v2\|3\|produces\|solid\|fwd ~\d+@3\|4\|produces\|solid\|fwd"', html_text) or \
+            re.search(r'data-trunk="p:SQ1-v2\|3\|produces\|solid\|fwd"', html_text), "跳欄邊的 data-trunk"
         assert 'class="edge e-sensitivity st-solid" data-idx=' in html_text
         assert not re.search(r'class="edge e-sensitivity[^>]*data-trunk=', html_text), "sensitivity L 形線不併幹線"
         # Python 靜態版與 JS 重算一致（有 headless Chrome 才比對，沒有就略過）

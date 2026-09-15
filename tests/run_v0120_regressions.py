@@ -199,7 +199,9 @@ def test_figure_nodes_and_depicts() -> None:
         assert "data_uri" not in a["meta"], "預設不內嵌"
         assert a["source"] == "analysis/figures/manifest.json#figures[fig_a]"
         # 第二張：無 file → unknown；results_keys 指到不存在的鍵 → 不建邊、徽章改「無對應結果鍵」、WARNING
-        assert b["state"] == "unknown" and "檔案不存在" in b["title"] and b["badge"] == "無對應結果鍵", b
+        # v0.15.0：徽章以 role 為主（fig_b role supplementary →「補充」），結果鍵狀況留在 meta.keys_badge；區帶依 role → supp
+        assert b["state"] == "unknown" and "檔案不存在" in b["title"] and b["badge"] == "補充" and b["meta"]["keys_badge"] == "無對應結果鍵", b
+        assert b["band"] == "supp" and b["meta"]["role_source"] == "manifest" and a["meta"]["role_source"] == "manifest" and "keys_badge" not in a["meta"]
         assert b["meta"]["file"] == "" and b["meta"]["files"] == [] and b["meta"]["results_keys"] == ["nope"]
         assert "WARNING analysis/figures/manifest.json#figures[fig_b].results_keys 指到不在圖裡的鍵: nope" in err, err
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}

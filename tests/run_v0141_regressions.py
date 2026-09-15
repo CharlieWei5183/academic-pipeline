@@ -273,8 +273,9 @@ def test_alias_html_and_chrome() -> None:
         st_nodes, dom_nodes = _node_transforms(html_text), _node_transforms(dom)
         vis = [k for k, (c, _b, _t) in st_nodes.items() if " gone" not in c and " dec" not in c]
         assert vis and all(st_nodes[k][2] == dom_nodes[k][2] for k in vis), [(k, st_nodes[k][2], dom_nodes[k][2]) for k in vis if st_nodes[k][2] != dom_nodes[k][2]][:5]
-        band_re = r'<g id="graph-bands" class="([^"]*)"><line class="band-divider" x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"></line><text class="band-title" x="([^"]*)" y="([^"]*)">[^<]*</text><text class="band-title" x="([^"]*)" y="([^"]*)">'
-        assert re.search(band_re, html_text).groups() == re.search(band_re, dom).groups()
+        # v0.15.0：graph-bands 內每個區帶各一條分隔線＋一個標題（data-band），逐一比對 class 與 y
+        band_re = r'<(line|text) class="(band-(?:divider|title)[^"]*)" data-band="(\w+)"[^>]*? y1?="([^"]*)"'
+        assert re.findall(band_re, html_text) == re.findall(band_re, dom) != []
 
         def edge_ds(h):
             return dict(re.findall(r'<path class="edge[^"]*" data-idx="(\d+)"[^>]*? d="([^"]*)"', h))

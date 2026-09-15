@@ -1355,13 +1355,15 @@ def test_graph_full_fixture() -> None:
         ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
         ev(("v:V1", "r:k2", "robustness"), True, "thin", "驗證（穩健性）")   # 穩健性驗證：細線可見
         assert ("v:V1", "r:k2", "primary") not in edges and ("v:V1", "r:k1", "robustness") not in edges
-        ev(("p:SQ1-v2", "r:k1", "produces"), True, "solid", "")           # 每個分析有產出都連到結果，不再依驗證隱藏
-        ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")          # v0.15.0：已由 p → V1 → k1 的驗證鏈覆蓋，遞移隱藏（IR 保留）
+        ev(("p:SQ1-v2", "r:k2", "produces"), False, "solid", "")          # v0.15.0：V1 的 robustness 覆蓋 k2，同樣遞移隱藏
+        assert edges[("p:SQ1-v2", "r:k1", "produces")]["meta"].get("via_validation") is True
         ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), False, "solid", "敏感性")        # v0.14.0：plan → 群（跨區帶，預設不畫）
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")      # 群 → 子分析
         assert ("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity") not in edges
         ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")                  # v0.14.0：子分析 → 主要結果跨區帶，預設不畫
-        ev(("p:SQ1-v2#S", "r:k1", "supplements"), True, "solid", "敏感性對照")
+        ev(("p:SQ1-v2#S", "p:SQ1-v2", "supplements"), True, "solid", "敏感性對照")   # v0.15.0：群 → 所屬 plan 一條
+        assert ("p:SQ1-v2#S", "r:k1", "supplements") not in edges
         ev(("p:SQ2-v1", "r:k3", "produces"), True, "solid", "")
         ev(("p:SQ2-v1", "r:k_missing", "produces"), True, "solid", "")
         assert not any(e["type"] == "produces" and e["style"] == "dashed" for e in g["edges"]), "fixture 沒有未宣告鍵，不該有虛線 produces"
@@ -1404,7 +1406,8 @@ def test_graph_full_fixture() -> None:
                               "by_type": {"question": 4, "method": 5, "validation": 1, "result": 5, "figure": 0, "decision": 3},
                               "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1,
-                              "sensitivity_groups": 1, "band_main_nodes": 15, "band_supp_nodes": 3}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵
+                              "sensitivity_groups": 1, "band_main_nodes": 15, "band_ext_nodes": 0, "band_supp_nodes": 3,
+                              "crossings": 0, "edge_node_overlaps": 0}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵；v0.15.0：ext 與交叉計數
         # 拿掉 robustness → k2 回到未驗證：produces 邊仍可見實線、徽章仍「主要」、unvalidated 多 1、meta.validated 變 false
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
         g_n = _graph_ir(root)["graph"]
@@ -1415,7 +1418,7 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）；區帶 main 15 節點、supp 3 節點、敏感性分析群 1 組。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）；區帶 main 15 節點、ext 0 節點、supp 3 節點、敏感性分析群 1 組；預設檢視線段交叉 0、穿過節點 0。" in out, out
 
 
 def test_graph_layout_deterministic() -> None:
@@ -1452,7 +1455,7 @@ def test_graph_html_tab() -> None:
         # 邊全為直角折線（M … L … Q 圓角），無三次貝茲
         edge_ds = re.findall(r'<path class="edge[^>]*? d="([^"]*)"', html_text)
         assert len(edge_ds) == len(json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]["edges"])
-        assert all(d.startswith("M") and (" H" in d or " L" in d) and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or (" H" not in d and " L" not in d)][:3]
+        assert all(d.startswith("M") and (" H" in d or " L" in d or " V" in d) and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or (" H" not in d and " L" not in d and " V" not in d)][:3]   # v0.15.0：對照短垂線只有 V
         assert any(" Q" in d for d in edge_ds), "至少一條邊有圓角轉折"
         # 預設隱藏的邊帶 off、收合的節點帶 gone、未驗證旁路帶 st-dashed、state 底色與符號
         assert 'class="edge e-produces st-solid" data-idx=' in html_text and 'class="edge e-cites st-solid off"' in html_text
@@ -1523,7 +1526,8 @@ def test_graph_empty_fixtures() -> None:
         assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "figure": 0, "decision": 0},
                               "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 0,
-                              "sensitivity_groups": 0, "band_main_nodes": 1, "band_supp_nodes": 0}
+                              "sensitivity_groups": 0, "band_main_nodes": 1, "band_ext_nodes": 0, "band_supp_nodes": 0,
+                              "crossings": 0, "edge_node_overlaps": 0}
         rc, out, err = run_progress(root)
         assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err
         assert "<svg" in (root / "PROGRESS.html").read_text(encoding="utf-8")
