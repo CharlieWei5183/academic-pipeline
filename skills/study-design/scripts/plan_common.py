@@ -179,6 +179,44 @@ def adapter_validation_requirements(adapter: str) -> list[str]:
     return [str(x) for x in (doc.get("validation_checks") or []) if str(x).strip()]
 
 
+def validate_supports(outputs: list[Any]) -> list[str]:
+    """outputs[i].supports（選填，0.16.5）：宣告本結果鍵是同一份 plan 另一個結果鍵的支撐結果（關聯圖縮排在主結果之下、同一區帶；
+    稿件歸入支撐表）。規則（違反皆 BLOCKER）：值須為非空字串、指向同 plan outputs 的另一個鍵、不得指自己、不得成環、深度只允許一層
+    （支撐結果本身不得再有支撐結果）。缺此欄＝頂層結果。"""
+    blockers: list[str] = []
+    entries = [(i, item) for i, item in enumerate(outputs or [], 1) if isinstance(item, dict) and str(item.get("key") or "")]
+    keys = {str(item["key"]) for _i, item in entries}
+    sup: dict[str, str] = {}
+    for i, item in entries:
+        if "supports" not in item or item.get("supports") is None:
+            continue
+        key = str(item["key"])
+        target = item.get("supports")
+        if not isinstance(target, str) or not target.strip():
+            blockers.append(f"outputs[{i}].supports 須為非空字串（同 plan outputs 的另一個鍵）")
+            continue
+        target = target.strip()
+        if target == key:
+            blockers.append(f"outputs[{i}].supports 不得指向自己（{key}）")
+            continue
+        if target not in keys:
+            blockers.append(f"outputs[{i}].supports 指向的鍵 {target} 不在本 plan 的 outputs")
+            continue
+        sup[key] = target
+    seen_cycle: set[tuple[str, str]] = set()
+    for key, target in sup.items():
+        if target in sup:
+            # 目標自己也是支撐結果：兩鍵互指＝環（只報一次）；否則＝深度兩層
+            if sup[target] == key:
+                pair = tuple(sorted((key, target)))
+                if pair not in seen_cycle:
+                    seen_cycle.add(pair)
+                    blockers.append(f"outputs supports 成環：{pair[0]} ⇄ {pair[1]}")
+            else:
+                blockers.append(f"outputs[{key}].supports 指向的 {target} 自己已是 {sup[target]} 的支撐結果（支撐結果只允許一層）")
+    return blockers
+
+
 def validate_plan_shape(plan: dict[str, Any]) -> tuple[list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -289,6 +327,7 @@ def validate_plan_shape(plan: dict[str, Any]) -> tuple[list[str], list[str]]:
             blockers.append(f"outputs[{i}].kind 無效")
         if item.get("kind") in {"inferential", "prediction-metric"} and not _nonempty(item.get("uncertainty")):
             blockers.append(f"outputs[{i}] 推論／預測量缺 uncertainty")
+    blockers.extend(validate_supports(outputs))
 
     validation = plan.get("validation") or {}
     if not isinstance(validation, dict) or not isinstance(validation.get("required"), list) or not validation.get("required"):

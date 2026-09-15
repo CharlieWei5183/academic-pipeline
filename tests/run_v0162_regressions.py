@@ -262,7 +262,7 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
     assert vp(root, 'move_result', {'key': 'm1', 'to_plan': 'SQ1-v1', 'to_item': 'R9'})[1] == 'SQ1-v1 沒有 robustness 項目 R9'
     assert vp(root, 'move_result', {'key': 'a1', 'to_plan': 'AQ1-v1', 'to_item': 'R1'})[1] == 'AQ1-v1 的 R1 已含 a1'
     assert vp(root, 'move_result', 'k2')[1] == 'move_result 需要 payload object'
-    assert ps.ACTION_KINDS == C.ACTION_KINDS == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result')
+    assert ps.ACTION_KINDS == C.ACTION_KINDS and C.ACTION_KINDS[:7] == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result')   # 0.16.5 起尾端再加 nest_result
     assert C.action_argv(root, 'move_result', {'key': 'r2', 'to_plan': 'AQ1-v1', 'to_item': 'R1'}, 'IN-009', 'dry-run')[3:] == ['--key', 'r2', '--to-plan', 'AQ1-v1', '--to-item', 'R1', '--inbox', 'IN-009', '--dry-run']
     assert C.action_argv(root, 'move_result', {'key': 'k2', 'to_plan': 'SQ2-v1', 'to_item': ''}, '', 'apply', token='t')[3:] == ['--key', 'k2', '--to-plan', 'SQ2-v1', '--expect-token', 't', '--apply']
     # title／body／target 由 dispatch 表生成
@@ -287,7 +287,7 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
     assert [(it['id'], it['kind'], it['payload'], it['target']) for it in ir['inbox']['items']][1:] == [
         ('IN-002', 'move_result', {'key': 'k2', 'to_plan': 'SQ2-v1', 'to_item': ''}, 'r:k2'), ('IN-003', 'move_result', {'key': 'r2', 'to_plan': 'AQ1-v1', 'to_item': 'R1'}, 'r:r2')]
     html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
-    assert '待套用動作 3 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果；由腳本確定性執行）' in html
+    assert '待套用動作 3 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果' in html   # 0.16.5 起清單尾端再加「掛到主結果下」
     for iid in ('IN-001', 'IN-002', 'IN-003'):
         assert f'<tr data-act-id="{iid}">' in html, iid
     assert '收件 1' in html   # r:k2／r:r2 節點掛徽章

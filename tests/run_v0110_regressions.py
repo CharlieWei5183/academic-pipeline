@@ -1273,7 +1273,7 @@ def test_graph_full_fixture() -> None:
             assert nid in nodes, f"graph 缺節點 {nid}: {sorted(nodes)}"
         assert not any(nid.startswith("m:") for nid in nodes), "不得再有 m: 節點"
         assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"]
-        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by", "primary", "robustness", "produces", "depicts", "cites", "refers"]   # v0.14.0 加 supplements
+        assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by", "primary", "robustness", "produces", "depicts", "cites", "refers", "supports"]   # v0.14.0 加 supplements、v0.16.5 加 supports
         assert [t["label"] for t in g["edge_types"] if t["id"] == "robustness"] == ["驗證（穩健性）"]
         assert nodes["q:main"]["title"] == "主問題一句" and nodes["q:main"]["state"] == ""
         assert nodes["q:SQ1"]["state"] == "done" and nodes["q:SQ2"]["state"] == "blocked" and nodes["q:AQ1"]["state"] == "pending"
@@ -1406,7 +1406,7 @@ def test_graph_full_fixture() -> None:
                               "by_type": {"question": 4, "method": 5, "validation": 1, "result": 5, "figure": 0, "decision": 3},
                               "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1,
-                              "sensitivity_groups": 1, "band_main_nodes": 15, "band_ext_nodes": 0, "band_supp_nodes": 3,
+                              "sensitivity_groups": 1, "supporting_result_keys": 0, "band_main_nodes": 15, "band_ext_nodes": 0, "band_supp_nodes": 3,
                               "crossings": 0, "edge_node_overlaps": 0}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵；v0.15.0：ext 與交叉計數
         # 拿掉 robustness → k2 回到未驗證：produces 邊仍可見實線、徽章仍「主要」、unvalidated 多 1、meta.validated 變 false
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
@@ -1526,7 +1526,7 @@ def test_graph_empty_fixtures() -> None:
         assert g["stats"] == {"nodes": 1, "edges": 0, "by_type": {"question": 1, "method": 0, "validation": 0, "result": 0, "figure": 0, "decision": 0},
                               "shared_pairs": 0, "dangling_result_keys": 0, "unvalidated_result_keys": 0, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 0,
-                              "sensitivity_groups": 0, "band_main_nodes": 1, "band_ext_nodes": 0, "band_supp_nodes": 0,
+                              "sensitivity_groups": 0, "supporting_result_keys": 0, "band_main_nodes": 1, "band_ext_nodes": 0, "band_supp_nodes": 0,
                               "crossings": 0, "edge_node_overlaps": 0}
         rc, out, err = run_progress(root)
         assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err

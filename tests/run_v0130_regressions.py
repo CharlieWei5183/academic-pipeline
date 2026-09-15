@@ -169,7 +169,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         nodes = {n["id"]: n for n in g["nodes"]}
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by", "primary",
-                                                       "robustness", "produces", "depicts", "cites", "refers"]   # v0.14.0 加 supplements
+                                                       "robustness", "produces", "depicts", "cites", "refers", "supports"]   # v0.14.0 加 supplements、v0.16.5 加 supports
         labels = {t["id"]: t["label"] for t in g["edge_types"]}
         assert labels["sensitivity"] == "敏感性" and labels["produces"] == "產出" and labels["primary"] == "驗證（主要）" and labels["robustness"] == "驗證（穩健性）"
         # 子節點：type method、subtype sensitivity、parent、label／title／meta

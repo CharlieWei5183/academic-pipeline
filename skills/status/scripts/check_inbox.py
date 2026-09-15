@@ -14,7 +14,7 @@ status／resolved_by／resolved_at／note 四行——逐行文字替換，不�
 
 輸出: `=== check_inbox: <root> ===`、每筆 `IN-001  pending  new_question  q:SQ2  <title>`、統計
 `pending a／done b／dismissed c`、WARNING（id 非連號、status 非法、kind 非法、target 不在 IR、結構化 payload 不合法）、
-`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result（結構化動作，dispatch 表與 payload 驗證在
+`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result（結構化動作，dispatch 表與 payload 驗證在
 ssot_actions_common.ACTIONS）的 pending 項目，另印一行可直接執行的建議命令（`python3 <scripts>/<腳本> <root> … --inbox IN-xxx --dry-run`），
 status skill 不得人工重做各步，一律跑腳本 --dry-run → 使用者同意 → --apply。
 exit code: 0 完成（收件匣不存在 → INFO）; 2 BLOCKER（根目錄不存在、收件匣無法解析、找不到指定 id、

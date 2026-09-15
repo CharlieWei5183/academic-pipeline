@@ -313,7 +313,8 @@ def test_headless_band_drop(tmp: Path) -> bool:
 
 def test_docs_registered() -> None:
     cl = text('CHANGELOG.md')
-    assert cl.lstrip().startswith('# CHANGELOG\n\n## 0.16.4') and '--new-item' in cl.split('## 0.16.3')[0] and 'act-mr-dest' in cl.split('## 0.16.3')[0]
+    sec = cl.split('## 0.16.4')[1].split('## 0.16.3')[0]   # 0.16.5 起不再是最上面一條，改看 0.16.4 那一節
+    assert cl.lstrip().startswith('# CHANGELOG\n\n## 0.16.') and '--new-item' in sec and 'act-mr-dest' in sec
     assert '--new-item' in text('skills/status/SKILL.md') and 'new_item' in text('skills/status/SKILL.md')
     assert '--new-item' in text('README.md')
     assert 'run_v0164_regressions.py' in text('tests/README.md')
