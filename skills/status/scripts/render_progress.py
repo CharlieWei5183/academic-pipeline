@@ -18,12 +18,15 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
              HTML 以相對路徑 meta.file 顯示（HTML 在專案根，相對路徑直接可用）
 
 收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
-{present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}，其他 kind 為 {}）、
-有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0）：
-Main 帶的問題節點可拖到 Supplementary 帶或在面板按「降為附錄問題」→ 小表單 → POST /api/inbox kind reassign；圖表節點可拖到別的帶
-或在面板改 role 三選一 → kind set_role；頁首「待套用動作」面板列 pending 的兩種項目，「預覽變更」呼叫 /api/actions/dry-run、
+{present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}／promote {from, to}／
+move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}，其他 kind 為 {}）、
+有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0；0.16.1 起六種）：
+問題節點拖到另一個帶 → reassign／promote、拖到同帶另一個問題上（排在它之後）→ reorder；方法節點拖到沒有 active plan 的問題上 → move_plan；
+敏感性子分析拖到別的方法上 → move_sensitivity；圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
+SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，非法落點改紅、放開不送出；放開後開表單（父節點欄位唯讀帶入、只填理由）
+→ POST /api/inbox。頁首「待套用動作」面板列 pending 的六種項目，「預覽變更」呼叫 /api/actions/dry-run、
 「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）。拖放只產生收件匣項目，
-頁面不直接改任何 SSOT；
+頁面不直接改任何 SSOT、預覽不進 IR；
 頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
 ＋ 意見）只在經 progress_server.py 以 http 開啟（fetch /api/ping 成功）時啟用，file:// 一律 disabled。
 

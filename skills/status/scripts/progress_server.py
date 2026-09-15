@@ -566,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     shown = '127.0.0.1' if host in ('127.0.0.1', '::1') else host
     print(f'http://{shown}:{port}/', file=sys.stderr)
     print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}'
-          + ('；--allow-apply 已開（actions 端點代跑 reassign_question.py／set_figure_role.py，追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
+          + ('；--allow-apply 已開（actions 端點代跑六種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
           + '；Ctrl+C 結束', file=sys.stderr)
     try:
         server.serve_forever()
