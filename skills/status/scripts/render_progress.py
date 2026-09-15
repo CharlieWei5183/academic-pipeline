@@ -25,9 +25,12 @@ move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder
 敏感性子分析拖到別的方法上 → move_sensitivity；結果節點（主要／次要／未宣告）拖到別的方法上（A 型，成為其主要結果）或任何敏感性
 子分析上（B 型，成為其次要結果；含來源 plan 自己的 R）→ move_result；圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
 SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，非法落點改紅、放開不送出；放開後開表單（父節點欄位唯讀帶入、只填理由）
-→ POST /api/inbox。頁首「待套用動作」面板列 pending 的七種項目，「預覽變更」呼叫 /api/actions/dry-run、
-「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）。拖放只產生收件匣項目，
-頁面不直接改任何 SSOT、預覽不進 IR；
+→ 按「送出並預覽」POST /api/inbox 建一筆，成功後不重載，同一個對話框立刻 POST /api/actions/dry-run 把變更摘要顯示出來（0.16.3），
+摘要下三個鈕：「套用」（/api/actions/apply 帶 token；409 顯示「SSOT 已變，重新預覽」並自動再跑一次 dry-run）、「先留在收件匣」（關對話框重載，
+項目留 pending）、「撤回」（POST /api/inbox/dismiss，代跑 check_inbox.py --dismiss）；server 未開 --allow-apply 或 dry-run 前置條件不符時摘要區
+顯示原因、「套用」停用、另外兩個鈕照常。頁首「待套用動作」面板（第二入口，行為不變）列 pending 的七種項目，「預覽變更」呼叫
+/api/actions/dry-run、「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）；面板與對話框
+共用同一段預覽／套用 JS（actPreview／actApply）。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
 頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
 ＋ 意見）只在經 progress_server.py 以 http 開啟（fetch /api/ping 成功）時啟用，file:// 一律 disabled。
 
@@ -2730,8 +2733,9 @@ path.edge.e-supplements,path.trunk.e-supplements{stroke:var(--t-method);stroke-w
 #actions-panel table{border-collapse:collapse;margin-top:6px;font-size:12px;width:100%}#actions-panel td,#actions-panel th{padding:3px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
 #actions-panel button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
 #actions-panel button[disabled]{opacity:.5;cursor:not-allowed}
-#actions-panel pre.act-summary{white-space:pre-wrap;font-size:11px;max-height:320px;overflow:auto;margin:4px 0 0;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
-#actions-panel pre.act-summary:empty{display:none}
+pre.act-summary{white-space:pre-wrap;font-size:11px;max-height:320px;overflow:auto;margin:4px 0 0;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+pre.act-summary:empty{display:none}
+#act-form .err{white-space:pre-wrap}#act-form #act-preview-box .hint{margin:10px 0 4px}#act-form input:disabled,#act-form select:disabled,#act-form textarea:disabled{opacity:.7}
 #actions-panel .hint{color:var(--muted);font-size:12px}
 .act-inline{display:inline-flex;gap:6px;align-items:center}.act-inline select,.act-inline button{font:inherit;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .act-inline button{cursor:pointer}.act-inline button[disabled]{opacity:.5;cursor:not-allowed}
@@ -3172,7 +3176,7 @@ GRAPH_JS = """
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok){enableInbox();nextAq=d.next_aq||'';nextSq=d.next_sq||'';if(d.actions_enabled)enableActions();else{var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py，但未開 --allow-apply：這裡只能看，預覽與套用請重啟 server 加 --allow-apply，或由 status skill 跑腳本。';}}}).catch(function(){});}catch(e){}}
   else{var hint0=document.getElementById('actions-hint');if(hint0)hint0.textContent='file:// 開啟的頁面無法呼叫伺服器：預覽與套用請用 progress_server.py --allow-apply 開啟，或由 status skill 跑腳本。';}
-  // ---- 結構化動作表單（七種 kind）：只送收件匣 ----
+  // ---- 結構化動作表單（七種 kind）：送收件匣後同一個對話框立刻預覽（0.16.3）----
   var actForm=document.getElementById('act-form'),actKind='',actPayload=null,actErr=document.getElementById('act-err');
   var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result'];
   function showActGroup(name){ACT_GROUPS.forEach(function(g){var el=document.getElementById('act-'+g+'-fields');if(el)el.hidden=(g!==name);});}
@@ -3181,16 +3185,16 @@ GRAPH_JS = """
   function qLabel(q){var n=nodes['q:'+q];return n?(n.label+(n.title?'：'+n.title.slice(0,40):'')):q;}
   function nextAqFromIr(){var n=0;G.nodes.forEach(function(x){var m=/^q:AQ(\d+)$/.exec(x.id);if(m)n=Math.max(n,+m[1]);});(G.question_aliases?Object.keys(G.question_aliases):[]).forEach(function(k){var m=/^AQ(\d+)$/.exec(k);if(m)n=Math.max(n,+m[1]);});return 'AQ'+(n+1);}
   function planModelsFor(sq){var out=[];G.nodes.forEach(function(x){if(x.type==='method'&&!x.parent&&!x.collapsed&&x.meta&&x.meta.sq===sq){var pm=String(x.meta.primary_model||'').split('：')[0].trim();if(pm)out.push(pm);(x.meta.models||[]).forEach(function(m){if(out.indexOf(m)<0)out.push(m);});}});return out;}
-  function openReassignForm(sq){if(!serverOk)return;actKind='reassign';actErr.textContent='';document.getElementById('act-form-title').textContent='降為附錄問題（'+sq+'）';
+  function openReassignForm(sq){if(!serverOk)return;actKind='reassign';actStage('form');actErr.textContent='';document.getElementById('act-form-title').textContent='降為附錄問題（'+sq+'）';
     showActGroup('reassign');
     document.getElementById('act-from').value=sq;document.getElementById('act-to').value=nextAq||nextAqFromIr();
     var sel=document.getElementById('act-pm');sel.innerHTML='<option value="">（不改；只改歸屬）</option>';planModelsFor(sq).forEach(function(m,i){var o=document.createElement('option');o.value=m;o.textContent=m+(i===0?'（現行 primary）':'');sel.appendChild(o);});
     document.getElementById('act-reason').value='';actForm.hidden=false;document.getElementById('act-to').focus();}
-  function openRoleForm(fig,role){if(!serverOk)return;actKind='set_role';actErr.textContent='';document.getElementById('act-form-title').textContent='改圖表 role（'+fig+'）';
+  function openRoleForm(fig,role){if(!serverOk)return;actKind='set_role';actStage('form');actErr.textContent='';document.getElementById('act-form-title').textContent='改圖表 role（'+fig+'）';
     showActGroup('role');
     document.getElementById('act-fig').value=fig;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();document.getElementById('act-role').value=role||cur||'main';
     document.getElementById('act-reason').value='';actForm.hidden=false;document.getElementById('act-role').focus();}
-  function openPromoteForm(aq){if(!serverOk)return;actKind='promote';actErr.textContent='';document.getElementById('act-form-title').textContent='升回主問題（'+aq+'）';
+  function openPromoteForm(aq){if(!serverOk)return;actKind='promote';actStage('form');actErr.textContent='';document.getElementById('act-form-title').textContent='升回主問題（'+aq+'）';
     showActGroup('promote');$v('act-p-from',aq);$v('act-p-to','');document.getElementById('act-p-to').placeholder='留空＝回原號（若空著）或 '+(nextSq||'下一個 SQ 號');
     $v('act-reason','');actForm.hidden=false;document.getElementById('act-p-to').focus();}
   // 拖放後開表單：父節點欄位已帶入、唯讀可見；使用者只填理由（reassign／promote 另可改 to，reassign 另可選 primary_model）
@@ -3198,14 +3202,19 @@ GRAPH_JS = """
     if(kind==='reassign'){openReassignForm(payload.from);return;}
     if(kind==='promote'){openPromoteForm(payload.from);return;}
     if(kind==='set_role'){openRoleForm(payload.figure,payload.role);return;}
-    actKind=kind;actErr.textContent='';$v('act-reason','');
+    actKind=kind;actStage('form');actErr.textContent='';$v('act-reason','');
     if(kind==='move_plan'){document.getElementById('act-form-title').textContent='搬方法：'+payload.plan+' → '+payload.to_question;showActGroup('move-plan');$v('act-mp-plan',planLabel(payload.plan));$v('act-mp-to',qLabel(payload.to_question));}
     else if(kind==='move_sensitivity'){document.getElementById('act-form-title').textContent='搬敏感性子分析：'+payload.plan+' '+payload.item+' → '+payload.to_plan;showActGroup('move-sens');$v('act-ms-plan',planLabel(payload.plan));$v('act-ms-item',(nodes['p:'+payload.plan+'#'+payload.item]||{label:payload.item}).label);$v('act-ms-to',planLabel(payload.to_plan));}
     else if(kind==='reorder'){document.getElementById('act-form-title').textContent='調順序：goals.'+payload.list;showActGroup('reorder');$v('act-ro-list',payload.list);$v('act-ro-order',payload.order.join(' → '));}
     else if(kind==='move_result'){var rn=nodes['r:'+payload.key]||{label:payload.key,meta:{}};var own=String((rn.meta||{}).plan_id||'');document.getElementById('act-form-title').textContent='搬結果：'+payload.key+' → '+payload.to_plan+(payload.to_item?' '+payload.to_item:'');showActGroup('move-result');$v('act-mr-key',rn.label+(own?'（現屬 '+own+'，'+({primary:'主要',secondary:'次要',undeclared:'未宣告'}[rn.meta.result_kind]||'')+'結果）':''));$v('act-mr-to',planLabel(payload.to_plan));$v('act-mr-item',payload.to_item?((nodes['p:'+payload.to_plan+'#'+payload.to_item]||{label:payload.to_item}).label+'（B 型：成為次要結果）'):'（無；A 型：成為 outputs 主要結果）');}
     else return;
     actForm.hidden=false;document.getElementById('act-reason').focus();}
-  function closeActForm(){actForm.hidden=true;}
+  // 對話框兩階段：form（填理由、按「送出並預覽」）→ preview（已進收件匣；顯示 dry-run 摘要；套用／先留在收件匣／撤回）
+  var actStageNow='form',actItemId='';
+  function actStage(stage,id){actStageNow=stage;actItemId=id||'';document.getElementById('act-preview-box').hidden=(stage!=='preview');document.getElementById('act-submit-row').hidden=(stage==='preview');
+    Array.prototype.forEach.call(actForm.querySelectorAll('input,select,textarea'),function(el){el.disabled=(stage==='preview');});
+    if(stage==='preview'){document.getElementById('act-item-id').textContent=id;document.getElementById('act-summary').textContent='';var ap=document.getElementById('act-apply');ap.disabled=true;ap.title='先預覽';document.getElementById('act-keep').disabled=false;document.getElementById('act-dismiss').disabled=false;}}
+  function closeActForm(){var keep=(actStageNow==='preview');actForm.hidden=true;actStage('form');if(keep)location.reload();}
   document.getElementById('act-cancel').addEventListener('click',closeActForm);
   document.getElementById('act-form-inner').addEventListener('submit',function(e){e.preventDefault();actErr.textContent='';var reason=document.getElementById('act-reason').value.trim();var payload;
     if(actKind==='reassign'){var to=document.getElementById('act-to').value.trim();if(to&&!/^AQ\d+$/.test(to)){actErr.textContent='to 須為 AQ<數字> 或留空';return;}
@@ -3216,29 +3225,46 @@ GRAPH_JS = """
       payload={kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
     else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
     else{actErr.textContent='未知的動作';return;}
-    fetch('/api/inbox',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(d){return {status:r.status,d:d};});})
-      .then(function(x){if(x.d&&x.d.ok){closeActForm();toast('已送入收件匣 '+x.d.id+'（待預覽與套用）');setTimeout(function(){location.reload();},900);}else{actErr.textContent=(x.d&&x.d.error)||('HTTP '+x.status);}})
-      .catch(function(err){actErr.textContent='送出失敗：'+err;});});
+    var sb=document.getElementById('act-submit');sb.disabled=true;
+    actPost('/api/inbox',payload)
+      .then(function(x){sb.disabled=false;if(x.d&&x.d.ok){toast('已送入收件匣 '+x.d.id+'，正在預覽變更');actStage('preview',x.d.id);actPreview(x.d.id,actDialogUi(x.d.id));}else{actErr.textContent=(x.d&&x.d.error)||('HTTP '+x.status);}})
+      .catch(function(err){sb.disabled=false;actErr.textContent='送出失敗：'+err;});});
+  // 對話框的 ui 物件：摘要區、套用鈕、執行期間停用的兩個鈕；不再彈 confirm（摘要本身就是確認）；409 自動重跑預覽
+  function actDialogUi(id){var ui={pre:document.getElementById('act-summary'),apply:document.getElementById('act-apply'),lock:[document.getElementById('act-dismiss'),document.getElementById('act-keep')],confirm:false};ui.onStale=function(){actPreview(id,ui);};return ui;}
+  document.getElementById('act-apply').addEventListener('click',function(){if(actStageNow!=='preview'||!actItemId)return;actApply(actItemId,actDialogUi(actItemId));});
+  document.getElementById('act-keep').addEventListener('click',function(){closeActForm();});
+  document.getElementById('act-dismiss').addEventListener('click',function(){if(actStageNow!=='preview'||!actItemId)return;var id=actItemId,db=document.getElementById('act-dismiss');db.disabled=true;actErr.textContent='';
+    actPost('/api/inbox/dismiss',{id:id,note:'使用者在放開預覽後撤回'}).then(function(x){var d=x.d||{};if(d.ok){toast('已撤回 '+id);closeActForm();}else{db.disabled=false;actErr.textContent='撤回失敗：'+(d.error||('HTTP '+x.status))+(d.summary?'\\n'+d.summary:'');}})
+      .catch(function(err){db.disabled=false;actErr.textContent='撤回失敗：'+err;});});
   body.addEventListener('click',function(e){var b=e.target.closest('.act-reassign');if(b&&!b.disabled){openReassignForm(b.getAttribute('data-q'));return;}
     var pb=e.target.closest('.act-promote');if(pb&&!pb.disabled){openPromoteForm(pb.getAttribute('data-q'));return;}
     var c=e.target.closest('.act-setrole');if(c&&!c.disabled){var fig=c.getAttribute('data-fig');var sel=body.querySelector('.act-role-sel[data-fig="'+fig.replace(/"/g,'\\"')+'"]');openRoleForm(fig,sel?sel.value:'');}});
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!actForm.hidden){closeActForm();}});
-  // ---- 待套用動作面板：預覽（dry-run）→ 套用（apply，帶 token）----
+  // ---- 共用：預覽（dry-run）→ 套用（apply，帶 token）。面板每一列與放開後的對話框都走 actPreview／actApply，只有一份 ----
+  // ui = {pre: 摘要 <pre>, apply: 套用鈕, lock?: 執行期間停用的鈕, confirm?: 套用前是否再彈 confirm（面板 true、對話框 false）, onStale?: 409 時的處理（對話框自動重跑預覽；面板沒給就讓套用鈕停用）}
   var actTokens={};
   function actRow(id){return document.querySelector('#actions-panel tr[data-act-id="'+id.replace(/"/g,'\\"')+'"]');}
   function actPost(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(d){return {status:r.status,d:d};});});}
+  function actBusy(ui,on){(ui.lock||[]).forEach(function(b){if(b)b.disabled=on;});}
+  function actPreview(id,ui){actBusy(ui,true);ui.apply.disabled=true;ui.apply.title='先預覽';ui.pre.textContent='預覽中（跑腳本 --dry-run，約 5–10 秒）…';
+    return actPost('/api/actions/dry-run',{id:id}).then(function(x){actBusy(ui,false);var d=x.d||{};ui.pre.textContent=(d.summary||d.error||('HTTP '+x.status));
+      if(d.ok&&d.token){actTokens[id]=d.token;ui.apply.disabled=false;ui.apply.title='';}else{delete actTokens[id];ui.apply.title=(x.status===403?'server 未開 --allow-apply':'預覽未通過');}return x;})
+      .catch(function(err){actBusy(ui,false);delete actTokens[id];ui.pre.textContent='預覽失敗：'+err;return null;});}
+  function actApply(id,ui){if(!actTokens[id]){ui.pre.textContent='請先預覽';return Promise.resolve(null);}
+    if(ui.confirm!==false&&!window.confirm('確定套用 '+id+'？腳本會改 SSOT（改前備份、失敗還原）並記一筆決策。'))return Promise.resolve(null);
+    actBusy(ui,true);ui.apply.disabled=true;ui.pre.textContent='套用中（跑腳本 --apply）…';
+    return actPost('/api/actions/apply',{id:id,token:actTokens[id]}).then(function(x){var d=x.d||{};
+      if(x.status===409){delete actTokens[id];actBusy(ui,false);ui.pre.textContent='SSOT 已變，重新預覽：'+(d.error||'');if(ui.onStale)ui.onStale();return x;}
+      ui.pre.textContent=(d.summary||d.error||('HTTP '+x.status));
+      if(d.ok){toast('已套用，決策 '+(d.decision||'')+'；重新載入');setTimeout(function(){location.reload();},1500);}else{actBusy(ui,false);ui.apply.disabled=false;}return x;})
+      .catch(function(err){actBusy(ui,false);ui.apply.disabled=false;ui.pre.textContent='套用失敗：'+err;return null;});}
+  // ---- 待套用動作面板（第二入口，行為不變）----
+  function actRowUi(id){var row=actRow(id);return {pre:row.querySelector('.act-summary'),apply:row.querySelector('.act-apply'),lock:[row.querySelector('.act-preview')],confirm:true};}
   var actPanel=document.getElementById('actions-panel');
   if(actPanel)actPanel.addEventListener('click',function(e){
     var g=e.target.closest('.goto');if(g&&nodes[g.getAttribute('data-goto')]){showTab('relations',true);select(g.getAttribute('data-goto'),true);return;}
-    var pv=e.target.closest('.act-preview');if(pv&&!pv.disabled){var id=pv.getAttribute('data-id'),row=actRow(id),pre=row.querySelector('.act-summary'),ap=row.querySelector('.act-apply');
-      pv.disabled=true;pre.textContent='預覽中（跑腳本 --dry-run，約 5–10 秒）…';ap.disabled=true;
-      actPost('/api/actions/dry-run',{id:id}).then(function(x){pv.disabled=false;var d=x.d||{};pre.textContent=(d.summary||d.error||('HTTP '+x.status));
-        if(d.ok&&d.token){actTokens[id]=d.token;ap.disabled=false;ap.title='';}else{delete actTokens[id];ap.title='預覽未通過';}}).catch(function(err){pv.disabled=false;pre.textContent='預覽失敗：'+err;});return;}
-    var apb=e.target.closest('.act-apply');if(apb&&!apb.disabled){var id2=apb.getAttribute('data-id'),row2=actRow(id2),pre2=row2.querySelector('.act-summary');
-      if(!actTokens[id2]){pre2.textContent='請先預覽';return;}if(!window.confirm('確定套用 '+id2+'？腳本會改 SSOT（改前備份、失敗還原）並記一筆決策。'))return;
-      apb.disabled=true;pre2.textContent='套用中（跑腳本 --apply）…';
-      actPost('/api/actions/apply',{id:id2,token:actTokens[id2]}).then(function(x){var d=x.d||{};if(x.status===409){pre2.textContent='SSOT 已被改動，請重新預覽：'+(d.error||'');apb.disabled=true;delete actTokens[id2];return;}
-        pre2.textContent=(d.summary||d.error||('HTTP '+x.status));if(d.ok){toast('已套用，決策 '+(d.decision||'')+'；重新載入');setTimeout(function(){location.reload();},1500);}else{apb.disabled=false;}}).catch(function(err){apb.disabled=false;pre2.textContent='套用失敗：'+err;});return;}});
+    var pv=e.target.closest('.act-preview');if(pv&&!pv.disabled){actPreview(pv.getAttribute('data-id'),actRowUi(pv.getAttribute('data-id')));return;}
+    var apb=e.target.closest('.act-apply');if(apb&&!apb.disabled){actApply(apb.getAttribute('data-id'),actRowUi(apb.getAttribute('data-id')));return;}});
   function fillTargets(sel){fTarget.innerHTML='<option value="">（無）</option>';G.nodes.forEach(function(n){if(n.type!=='question'||n.id==='q:main')return;var o=document.createElement('option');o.value=n.id;o.textContent=n.label+(n.title?'：'+n.title.slice(0,40):'');fTarget.appendChild(o);});
     if(sel&&!Array.prototype.some.call(fTarget.options,function(o){return o.value===sel;})){var o=document.createElement('option');o.value=sel;o.textContent=(nodes[sel]?nodes[sel].label:sel);fTarget.appendChild(o);}fTarget.value=sel||'';}
   function openForm(kind,target){if(!serverOk)return;fErr.textContent='';fKind.value=kind;fillTargets(target||'');fKind.disabled=(kind==='comment');fTarget.disabled=(kind==='comment');
@@ -3909,7 +3935,8 @@ def _inbox_block(ir: dict) -> list[str]:
 
 def _actions_panel(ir: dict, labels: dict) -> list[str]:
     """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
-    或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位）。"""
+    或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位），0.16.3 起表單多一個
+    預覽區 #act-preview-box（#act-summary 摘要、#act-dismiss 撤回／#act-keep 先留在收件匣／#act-apply 套用），送出後在同一個對話框顯示 dry-run 摘要。"""
     inbox = ir['inbox']
     acts = [it for it in inbox['items'] if it['status'] == 'pending' and it['kind'] in INBOX_ACTION_KINDS]
     kinds_txt = '／'.join(INBOX_KINDS[k] for k in INBOX_ACTION_KINDS)
@@ -3950,9 +3977,14 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<div id="act-role-fields" hidden><label for="act-fig">figure</label><input id="act-fig" readonly>',
         '<label for="act-role">role</label><select id="act-role"><option value="main">main（Main 主圖）</option><option value="extended">extended（Extended Data）</option><option value="supplementary">supplementary（Supplementary）</option></select></div>',
         '<label for="act-reason">理由（選填，寫進收件匣與決策 reason）</label><textarea id="act-reason" maxlength="2000"></textarea>',
-        '<p class="src">送出只會在 PROGRESS.inbox.yaml 加一筆；SSOT 要等使用者在「待套用動作」預覽後套用，或由 status skill 跑腳本。</p>',
+        '<p class="src">按「送出並預覽」先在 PROGRESS.inbox.yaml 加一筆，接著立刻代跑腳本 --dry-run（不寫檔）把變更摘要顯示在這裡；看過摘要再決定套用、先留在收件匣或撤回。</p>',
         '<div class="err" id="act-err"></div>',
-        '<div class="row"><button type="button" id="act-cancel">取消</button><button type="submit" id="act-submit">送入收件匣</button></div>',
+        '<div class="row" id="act-submit-row"><button type="button" id="act-cancel">取消</button><button type="submit" id="act-submit">送出並預覽</button></div>',
+        '<div id="act-preview-box" hidden><p class="hint">已送入收件匣 <b id="act-item-id"></b>。變更預覽（腳本 --dry-run 的輸出，還沒寫任何檔）：</p>',
+        '<pre id="act-summary" class="act-summary"></pre>',
+        '<div class="row"><button type="button" id="act-dismiss" title="標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT">撤回</button>'
+        '<button type="button" id="act-keep" title="關掉對話框，項目留在收件匣 pending；之後可在「待套用動作」面板預覽與套用">先留在收件匣</button>'
+        '<button type="button" id="act-apply" disabled title="先預覽">套用</button></div></div>',
         '</form></div>',
     ]
     return lines

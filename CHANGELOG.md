@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.16.3（2026-09-15）
+
+進度頁面拖放流程縮短一步：放開節點、填理由、按「送出並預覽」之後，**同一個對話框立刻顯示 dry-run 摘要**，不必先送收件匣、等頁面重載、再到「待套用動作」面板按預覽。看過摘要再決定「套用」「先留在收件匣」或「撤回」。skills、agents、管線階段與 SSOT schema 不變；收件匣 `schema_version` 維持 1；七種 kind 與各腳本不動。
+
+1. **`render_progress.py` 前端——對話框兩階段**：form 階段與 0.16.1 相同（父節點欄位唯讀帶入、只填理由），送出鈕改名「送出並預覽」；`POST /api/inbox` 成功後**不重載**，對話框切到 preview 階段——欄位鎖住、顯示「已送入收件匣 IN-xxx」，立刻 `POST /api/actions/dry-run {id}`，摘要進同一個對話框的 `<pre id="act-summary">`（沿用面板的 `act-summary` 樣式，改為面板與對話框共用），期間顯示「預覽中…」。摘要下三個鈕：**套用**（`POST /api/actions/apply {id, token}`；成功 toast「已套用，決策 D-xxx」後重載；409 顯示「SSOT 已變，重新預覽」並自動再跑一次 dry-run；對話框不再另彈 confirm——摘要本身就是確認，面板那個 confirm 照舊）、**先留在收件匣**（關對話框、重載，項目留 pending，之後可在面板預覽套用）、**撤回**（走新端點 `/api/inbox/dismiss`，成功後關對話框、重載）。server 未開 `--allow-apply`（403）或 dry-run 前置條件不符（腳本 exit 2）時，摘要區顯示 server／腳本的原文、「套用」停用（title 說明原因）、另外兩個鈕照常；Esc 或「先留在收件匣」都是關掉並重載。
+2. **預覽／套用 JS 只有一份**：`actPreview(id, ui)`／`actApply(id, ui)`（`ui = {pre, apply, lock?, confirm?, onStale?}`）抽成共用函式，「待套用動作」面板每一列（`actRowUi`）與對話框（`actDialogUi`）都走這兩支；面板行為不變、仍是第二入口。
+3. **`progress_server.py`：`POST /api/inbox/dismiss {id, note?}`**——代跑 `check_inbox.py <root> --dismiss <id> --note <note>`（note 省略時預設「使用者在放開預覽後撤回」），只動收件匣那一筆的 status／note，**不需 `--allow-apply`**（與 `/api/inbox` 同級：只寫收件匣）；id 不存在或該筆不是 pending 回 400 不寫檔、腳本失敗 500 帶輸出原文、成功後重畫一次進度產物；Origin／Content-Type／body 大小檢查與 `/api/inbox` 相同，與 actions 端點共用同一把鎖（另一個動作執行中回 409）。
+4. **文件**：`status` SKILL.md server 端點段補 `/api/inbox/dismiss` 與新流程；README 收件匣段補端點；`tests/README.md` 登記。
+6. **測試**：新增 `tests/run_v0163_regressions.py`（fixture 沿用 v0.16.1）：`/api/inbox/dismiss` 成功（預設／自訂 note、只動收件匣與進度產物、IR 與 ping 重算）、非 pending 400、不存在 400、缺 id 400、note 過長 400、415／跨來源 403、不需 `--allow-apply`、開了之後 dismissed 那筆不能再 dry-run／apply；對話框 HTML／JS 錨點（`act-preview-box`／`act-summary`／`act-dismiss`／`act-keep`／`act-apply`、「送出並預覽」、`actPreview`／`actApply` 各一份、dry-run／apply 的 fetch 各只出現一次、409 自動重跑、403 說明）、`node --check`；**headless Chrome 端到端**（有 google-chrome／chromium 才跑，沒有就印一行跳過；用 stdlib 寫的最小 CDP client）：在 server 起的頁面上以 MouseEvent 模擬拖 `r:k2` 到 `p:SQ2-v1` 放開 → 表單帶入 → 送出 → 同對話框出現 A 型摘要與 token、套用啟用 → 撤回 → 收件匣 dismissed；再拖 `r:r2` 到 `p:AQ1-v1#R1` → 摘要 → 外部改 `decisions.yaml` → 套用 409 → 自動重跑預覽（新 token、未寫檔）→ 再套用 → D-003、收件匣 done；未開 `--allow-apply` 的 server 送出後摘要區顯示 403 原因、套用停用、撤回可用。既有 17 支 `tests/run_v0*.py` 全過。
+
 ## 0.16.2（2026-09-15）
 
 收件匣結構化動作補第七種：結果鍵搬家（`move_result`）——把 results.json 的某個結果鍵搬到另一份 active plan 的 outputs（成為主要結果）或某個敏感性子分析 `R<n>` 的 expected_keys（成為次要結果）；關聯圖的結果節點跟著可拖。skills、agents、管線階段與 SSOT schema 不變；收件匣 `schema_version` 維持 1。骨架沿用 0.16.0 的 `ssot_actions_common.py`，結構照 0.16.1 的 `move_sensitivity.py`。
