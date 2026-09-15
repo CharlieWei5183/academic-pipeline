@@ -1757,6 +1757,13 @@ ACTIONS: dict[str, dict[str, Any]] = {
         'title': lambda p: (f'搬敏感性子分析：{p["plan"]} {p["item"]} → {p["to_plan"]}',
                             f'{p["plan"]} 的敏感性子分析 {p["item"]} 搬到 {p["to_plan"]}', f'p:{p["plan"]}#{p["item"]}'),
     },
+    'reorder': {
+        'script': 'reorder_questions.py', 'label': '調順序', 'stage': 'evaluate',
+        'validate': _validate_reorder, 'argv': lambda p: ['--list', p['list'], '--order', ','.join(p['order'])],
+        'extra': lambda p, iid: f'reorder:{p.get("list") or ""}:{",".join(p.get("order") or [])}:{iid}',
+        'title': lambda p: (f'調順序：{p["list"]} → {"、".join(p["order"])}', f'goals.{p["list"]} 改為 {"、".join(p["order"])}',
+                            f'q:{p["order"][0]}' if p.get('order') else ''),
+    },
     'move_result': {
         'script': 'move_result.py', 'label': '搬結果', 'stage': 'study-design',
         'validate': _validate_move_result, 'argv': lambda p: ['--key', p['key'], '--to-plan', p['to_plan']] + (['--to-item', p['to_item']] if p.get('to_item') else []),
@@ -1764,13 +1771,6 @@ ACTIONS: dict[str, dict[str, Any]] = {
         'title': lambda p: (f'搬結果：{p["key"]} → {p["to_plan"]}' + (f' {p["to_item"]}' if p.get('to_item') else ''),
                             f'結果鍵 {p["key"]} 搬到 {p["to_plan"]}' + (f' 的敏感性子分析 {p["to_item"]}（次要結果）' if p.get('to_item') else ' 的 outputs（主要結果）'),
                             f'r:{p["key"]}'),
-    },
-    'reorder': {
-        'script': 'reorder_questions.py', 'label': '調順序', 'stage': 'evaluate',
-        'validate': _validate_reorder, 'argv': lambda p: ['--list', p['list'], '--order', ','.join(p['order'])],
-        'extra': lambda p, iid: f'reorder:{p.get("list") or ""}:{",".join(p.get("order") or [])}:{iid}',
-        'title': lambda p: (f'調順序：{p["list"]} → {"、".join(p["order"])}', f'goals.{p["list"]} 改為 {"、".join(p["order"])}',
-                            f'q:{p["order"][0]}' if p.get('order') else ''),
     },
 }
 ACTION_KINDS = tuple(ACTIONS)

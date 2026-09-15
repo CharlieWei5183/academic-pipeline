@@ -461,7 +461,7 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
     assert vp(root, 'reorder', {'order': ['AQ1', 'AQ9']})[1] == 'payload.order 的 id 集合須與 goals.appendix_questions 相同（現為 AQ1、AQ2）'
     assert vp(root, 'reorder', {'list': 'nope', 'order': []})[1] == 'payload.list 須為 sub_questions 或 appendix_questions'
     assert vp(root, 'reorder', {'order': 'AQ2,AQ1'})[1] == 'payload.order 須為 id 清單'
-    assert ps.ACTION_KINDS == C.ACTION_KINDS == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder')
+    assert ps.ACTION_KINDS == C.ACTION_KINDS and C.ACTION_KINDS[:6] == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder')   # 0.16.2 起後面再加 move_result
     # title／body／target 由 dispatch 表生成；四種 kind 各寫一筆
     subs = [({'kind': 'promote', 'payload': {'from': 'AQ1'}, 'reason': 'r1'}, '升回主問題：AQ1 → （原號或下一個 SQ 號）', 'q:AQ1'),
             ({'kind': 'move_plan', 'payload': {'plan': 'AQ1-v1', 'to_question': 'AQ2'}}, '搬方法：AQ1-v1 → AQ2', 'p:AQ1-v1'),
@@ -491,7 +491,7 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
         ('IN-002', 'promote', {'from': 'AQ1', 'to': ''}), ('IN-003', 'move_plan', {'plan': 'AQ1-v1', 'to_question': 'AQ2'}),
         ('IN-004', 'move_sensitivity', {'plan': 'SQ1-v1', 'item': 'R2', 'to_plan': 'SQ2-v1'}), ('IN-005', 'reorder', {'list': 'appendix_questions', 'order': ['AQ2', 'AQ1']})]
     html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
-    assert '待套用動作 5 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序；由腳本確定性執行）' in html
+    assert '待套用動作 5 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序' in html   # 0.16.2 起清單尾端再加「／搬結果」
     for iid in ('IN-001', 'IN-002', 'IN-003', 'IN-004', 'IN-005'):
         assert f'<tr data-act-id="{iid}">' in html, iid
 

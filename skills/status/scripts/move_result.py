@@ -163,8 +163,8 @@ def add_key_to_plan(p: dict, ctx: dict[str, Any], did: str, date: str) -> str:
     r = next(r for r in p['robustness'] if isinstance(r, dict) and str(r.get('id')) == rid)
     r['expected_keys'] = [str(k) for k in (r.get('expected_keys') or [])] + [key]
     src_where = '本 plan 的 outputs' if ctx['same'] and ctx['src_kind'] == 'primary' else (
-        f'{ctx["src_pid"]} 的 outputs' if ctx['src_kind'] == 'primary' else (f'{ctx["src_pid"]} 的 {"／".join(ctx["src_rids"])}' if ctx['src_rids'] else f'{ctx["src_pid"]}（未宣告）'))
-    note = f'〔{date} {did}〕本項 expected_keys 尾端追加 {key}（自 {src_where} 搬入，現歸本 plan 所有'
+        f' {ctx["src_pid"]} 的 outputs' if ctx['src_kind'] == 'primary' else (f' {ctx["src_pid"]} 的 {"／".join(ctx["src_rids"])}' if ctx['src_rids'] else f' {ctx["src_pid"]}（未宣告）'))
+    note = f'〔{date} {did}〕本項 expected_keys 尾端追加 {key}（自{src_where} 搬入，現歸本 plan 所有'
     if r.get('evidence_owned_by'):
         note += f'；evidence_owned_by {r["evidence_owned_by"]} 只涵蓋 evidence_keys 所列的鍵，不含本鍵'
     note += '）；本項內容其餘不動。' + (f' 原 execution_note：{r["execution_note"]}' if r.get('execution_note') else '')
@@ -273,7 +273,8 @@ def move_links(text: str, ctx: dict[str, Any], did: str, date: str, args: argpar
         C.prefix_status_reason(block2, f'〔{date} {did}〕{inbox_txt}自 {src_q} 接收結果鍵 {key}（{target_desc}，新版 {ctx["dst_new"]}）'
                                f'{"，links 尾端加 " + link if moved and link not in links2 else ""}；結果鍵換了 plan 脈絡，屬設計變更，設計審與四項關卡列為 open item。')
         lines[s2:e2] = block2
-    C.add_state_comment(lines, f'{date} {did}：結果鍵 {key} 由 {ctx["src_pid"]} 搬到 {target_desc}' + ('' if src_q == dst_q else f'（{src_q} → {dst_q}）'))
+    short = f'{ctx["dst_new"]} 的 {ctx["rid"]}' if ctx['mode'] == 'B' else f'{ctx["dst_new"]} 的 outputs'
+    C.add_state_comment(lines, f'{date} {did}：結果鍵 {key} 由 {ctx["src_pid"]} 搬到 {short}' + ('' if src_q == dst_q else f'（{src_q} → {dst_q}）'))
     return '\n'.join(lines), {'moved_links': moved}
 
 

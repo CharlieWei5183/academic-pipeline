@@ -2955,13 +2955,6 @@ GRAPH_JS = """
       if(n.band==='main'&&band==='supp')return {kind:'reassign',ok:true,band:band,payload:{from:id.slice(2)}};
       if(n.band==='supp'&&band==='main')return {kind:'promote',ok:true,band:band,payload:{from:id.slice(2)}};
       return {kind:n.band==='main'?'reassign':'promote',ok:false,band:band,reason:'主問題只能降到 Supplementary 帶、附錄問題只能升到 Main 帶'};}
-    if(isDragResult(id)){var key=id.slice(2),owner=resultOwner(id),decl=(n.meta.declared_by||[]);
-      var t=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});if(!t)return null;
-      if(isSensItem(t)){var mm=/^p:(.+)#(R\d+)$/.exec(t);
-        if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 expected_keys 已含 '+key};
-        return {kind:'move_result',ok:true,target:t,label:'成為 '+mm[1]+' '+mm[2]+' 的次要結果',payload:{key:key,to_plan:mm[1],to_item:mm[2]}};}
-      if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 outputs 已含 '+key+(t==='p:'+owner?'，無事可做':'')};
-      return {kind:'move_result',ok:true,target:t,label:'成為 '+t.slice(2)+' 的主要結果'+(t==='p:'+owner?'（同一份 plan 出一版）':''),payload:{key:key,to_plan:t.slice(2),to_item:''}};}
     if(isSensItem(id)){var m=/^p:(.+)#(R\d+)$/.exec(id);
       var p=hitNode(gx,gy,function(k,x){return isActivePlan(k)&&k!=='p:'+m[1];});if(!p)return null;
       return {kind:'move_sensitivity',ok:true,target:p,payload:{plan:m[1],item:m[2],to_plan:p.slice(2)}};}
@@ -2972,6 +2965,13 @@ GRAPH_JS = """
       if(!/^AQ\d+$/.test(sq))return {kind:'move_plan',ok:false,target:q2,reason:'主問題 '+sq+' 的 active plan 不能搬走（主問題缺 active plan 是 check_plan BLOCKER），請先降階'};
       return {kind:'move_plan',ok:true,target:q2,payload:{plan:id.slice(2),to_question:q2.slice(2)}};}
     if(n.type==='figure'){var b=bandAtY(gy);if(b===n.band)return null;return {kind:'set_role',ok:true,band:b,payload:{figure:id.slice(2),role:BAND_ROLE[b]||''}};}
+    if(n.type==='result'&&isDragResult(id)){var key=id.slice(2),owner=resultOwner(id),decl=(n.meta.declared_by||[]);
+      var t=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});if(!t)return null;
+      if(isSensItem(t)){var mm=/^p:(.+)#(R\d+)$/.exec(t);
+        if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 expected_keys 已含 '+key};
+        return {kind:'move_result',ok:true,target:t,label:'成為 '+mm[1]+' '+mm[2]+' 的次要結果',payload:{key:key,to_plan:mm[1],to_item:mm[2]}};}
+      if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 outputs 已含 '+key+(t==='p:'+owner?'，無事可做':'')};
+      return {kind:'move_result',ok:true,target:t,label:'成為 '+t.slice(2)+' 的主要結果'+(t==='p:'+owner?'（同一份 plan 出一版）':''),payload:{key:key,to_plan:t.slice(2),to_item:''}};}
     return null;}
   function clearDragPreview(){if(!previewG)return;while(previewG.firstChild)previewG.removeChild(previewG.firstChild);
     Object.keys(nodeEls).forEach(function(k){nodeEls[k].classList.remove('drop-ok','drop-bad');});
