@@ -228,6 +228,8 @@ plugin 根的 `hooks/hooks.json` 註冊一個 `SessionEnd` hook（`python3 "${CL
 
 **四種搬移（0.16.1）**：`kind: promote`（附錄問題升回主問題，payload `{from, to?}`）由 `promote_question.py <root> --from AQ4 [--to SQ2] (--dry-run | --apply)` 完成（reassign 的反向；`--to` 省略時回原號、原號被占用就接最大 SQ 號 +1）；`kind: move_plan`（active plan 搬到沒有 active plan 的問題之下，payload `{plan, to_question}`）由 `move_plan.py <root> --plan AQ2-v2 --to-question AQ5`；`kind: move_sensitivity`（robustness 項目搬到另一個 active plan、兩邊各出一版，payload `{plan, item, to_plan}`）由 `move_sensitivity.py <root> --plan SQ5-v6 --item R2 --to-plan AQ3-v1`；`kind: reorder`（goals 清單調順序，payload `{list, order}`）由 `reorder_questions.py <root> --list appendix_questions --order AQ1,AQ3,AQ2,AQ4`。關聯圖拖曳時依游標位置即時畫出候選落點（問題 → 區帶或同帶另一個問題、方法 → 問題、敏感性子分析 → 別的方法、圖表 → 區帶），非法落點線與外框改紅、放開不送出；放開才開表單，父節點欄位唯讀帶入、只填理由。
 
+**結果鍵搬家（0.16.2）**：`kind: move_result`（payload `{key, to_plan, to_item?}`）由 `move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2] (--dry-run | --apply)` 完成——A 型（省略 `--to-item`）搬到目標 plan 的 outputs 成為主要結果，B 型（給 `--to-item R<n>`）搬到該敏感性子分析的 expected_keys 成為次要結果；來源由 results.json 該鍵的 plan_id 判（須為 active plan）。來源與目標各出一版（同一份 plan 只出一版；鍵未在來源宣告時來源不出新版）、results 只改 plan_id、validation 中只以該鍵為 primary_results 的 item 改掛目標、同時含別的鍵的 item 移除該鍵那一行、project.yaml 的 `results:<key>` link 跟著問題走、waiver、快照 0 tamper、模板 D#（stage study-design）。關聯圖的結果節點可拖到別的方法（A 型）或任一敏感性子分析（B 型）上，目標已含該鍵改紅。
+
 ## 相容性與升級
 
 沒有 `pipeline.version >= 0.7` 的舊專案，新增 checker 以相容模式運作：`check_gate.py` 對完全沒有 last_consistency 的專案只輸出 INFO，對已跑過 v0.6 consistency 的專案只驗既有 `result` 與 `version`。只有 `--strict` 或升版到 0.7.x 後才啟用完整 fingerprint gate。升級請先備份，再依 [`MIGRATION-v0.7.md`](MIGRATION-v0.7.md) 補 route、integrity、protocol/plans、audit、validation、evidence 與 claim-audit。
@@ -250,6 +252,7 @@ python3 tests/run_v0141_regressions.py
 python3 tests/run_v0150_regressions.py
 python3 tests/run_v0160_regressions.py
 python3 tests/run_v0161_regressions.py
+python3 tests/run_v0162_regressions.py
 ```
 
 `tests/mini-project` 保留黃金答案；smoke 測試動態建立 v0.7 專案，驗證七種 adapter 的 plan／validation 契約、clean-room 重跑、資料稽核、results schema、evidence fingerprint、claim-audit、integrity 與中英文 consistency 的 source-staleness gate。腳本需要 Python 3.10+ 與 PyYAML；排版另依 typeset 說明使用 pandoc／LaTeX。

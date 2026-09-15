@@ -126,7 +126,7 @@ def test_apply_a_then_b(tmp: Path) -> None:
     pt = (root / 'project.yaml').read_text(encoding='utf-8')
     assert '# 行尾註解' in pt and '  # 2026-09-15 D-003：結果鍵 k2 由 SQ1-v1 搬到 SQ2-v2 的 outputs（SQ1 → SQ2）' in pt, pt[:2000]
     g = plan_common.load_yaml(root / 'project.yaml')['goals']['sub_questions']
-    assert g[0]['status_reason'].startswith('〔2026-09-15 D-003〕結果鍵 k2 已依使用者裁定搬到 SQ2（SQ2-v2 的 outputs（主要結果））') and g[0]['status_reason'].endswith('原本的理由一') and g[1]['status_reason'].endswith('原本的理由二')
+    assert g[0]['status_reason'].startswith('〔2026-09-15 D-003〕結果鍵 k2 已依使用者裁定搬到 SQ2（SQ2-v2 的 outputs、主要結果）') and g[0]['status_reason'].endswith('原本的理由一') and g[1]['status_reason'].endswith('原本的理由二')
     assert g[1]['status_reason'].startswith('〔2026-09-15 D-003〕依使用者裁定自 SQ1 接收結果鍵 k2') and 'links 尾端加 results:k2' in g[1]['status_reason']
     d = decision(root, 'D-003')
     assert d['stage'] == 'study-design' and d['question'] == 'SQ2' and d['checkpoint'] == '結果鍵 k2 由 SQ1-v1 搬到 SQ2-v2 的 outputs（A 型、主要結果）；兩邊出新版、數字不動'
@@ -186,7 +186,7 @@ def test_same_plan_one_version(tmp: Path) -> None:
     assert vitems(root) == [('V1', 'SQ1', 'SQ1-v2', ['k1', 'k2']), ('V2', 'SQ2', 'SQ2-v1', ['m1']), ('V3', 'AQ1', 'AQ1-v1', ['a1'])]   # 同一問題：不改掛、不移除
     assert links(root)['SQ1'] == ['results:k1', 'results:k2']
     g = plan_common.load_yaml(root / 'project.yaml')['goals']['sub_questions'][0]
-    assert g['status_reason'].startswith('〔2026-09-15 D-003〕依使用者裁定把結果鍵 k1 在本問題的 active plan 內改列為 SQ1-v2 的敏感性子分析 R1（次要結果）')
+    assert g['status_reason'].startswith('〔2026-09-15 D-003〕依使用者裁定把結果鍵 k1 在本問題的 active plan 內改列為次要結果（R1 的 expected_keys）（新版 SQ1-v2）')
     d = decision(root, 'D-003')
     assert d['checkpoint'] == '結果鍵 k1 由 SQ1-v1 搬到 SQ1-v2 的 R1（B 型、次要結果）；同一份 plan 出一版、數字不動'
     assert 'SQ1 的 links 不動（同一問題）' in d['decision'] and '（同一份 plan 只出一版）：k1 由 outputs 改列為 R1 的 expected_keys' in d['decision'] and d['links'].count('SQ1') == 1

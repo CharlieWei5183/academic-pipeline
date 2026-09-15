@@ -247,12 +247,12 @@ def move_links(text: str, ctx: dict[str, Any], did: str, date: str, args: argpar
     dst_list = 'sub_questions' if dst_q in sq_ids else 'appendix_questions'
     lines = text.split('\n')
     link = f'results:{key}'
-    target_desc = f'{ctx["dst_new"]} 的敏感性子分析 {ctx["rid"]}（次要結果）' if ctx['mode'] == 'B' else f'{ctx["dst_new"]} 的 outputs（主要結果）'
+    target_desc = f'{ctx["dst_new"]} 的敏感性子分析 {ctx["rid"]}、次要結果' if ctx['mode'] == 'B' else f'{ctx["dst_new"]} 的 outputs、主要結果'
     moved: list[str] = []
     if src_q == dst_q:
         s, e = C.question_block(lines, src_list, src_q)
         block = lines[s:e]
-        C.prefix_status_reason(block, f'〔{date} {did}〕{inbox_txt}把結果鍵 {key} 在本問題的 active plan 內改列為 {target_desc}（新版 {ctx["dst_new"]}）；'
+        C.prefix_status_reason(block, f'〔{date} {did}〕{inbox_txt}把結果鍵 {key} 在本問題的 active plan 內改列為{"次要結果（" + ctx["rid"] + " 的 expected_keys）" if ctx["mode"] == "B" else "主要結果（outputs）"}（新版 {ctx["dst_new"]}）；'
                                f'數字不動；設計審與四項關卡列為 open item。')
         lines[s:e] = block
     else:

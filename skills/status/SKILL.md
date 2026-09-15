@@ -66,7 +66,10 @@ python3 <skill路徑>/scripts/promote_question.py <root> --from AQ4 [--to SQ2] -
 python3 <skill路徑>/scripts/move_plan.py <root> --plan AQ2-v2 --to-question AQ5 --inbox IN-xxx (--dry-run | --apply)              # 目標須沒有 active plan；來源須為附錄問題
 python3 <skill路徑>/scripts/move_sensitivity.py <root> --plan SQ5-v6 --item R2 --to-plan AQ3-v1 --inbox IN-xxx (--dry-run | --apply)
 python3 <skill路徑>/scripts/reorder_questions.py <root> --list appendix_questions --order AQ1,AQ3,AQ2,AQ4 --inbox IN-xxx (--dry-run | --apply)
+python3 <skill路徑>/scripts/move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2] --inbox IN-xxx (--dry-run | --apply)   # 0.16.2：省略 --to-item＝搬到 outputs（主要結果）；給 R<n>＝搬到該子分析的 expected_keys（次要結果）
 ```
+
+結果鍵搬家（0.16.2）也走腳本：結果節點拖到別的方法上 → `kind: move_result`（payload `{key, to_plan}`，A 型）；拖到任一敏感性子分析上 → 同 kind 加 `to_item`（B 型）。來源由 results.json 該鍵的 plan_id 判，須為 active plan；目標已含該鍵會被擋。來源與目標各出一版（同一份 plan 只出一版），數字不動；validation 中只以該鍵為 primary_results 的 item 改掛目標、同時含別的鍵的 item 會移除該鍵那一行（該鍵在目標問題下的驗證列為 open item）。
 
 要讓頁面上的「待套用動作」面板能預覽與套用，啟動伺服器時加 `--allow-apply`（另可加 `--daily-log <path>` 透傳給腳本）：`python3 <skill路徑>/scripts/progress_server.py <root> --port 8765 --allow-apply`。開了之後 `POST /api/actions/dry-run {id}` 代跑 `--dry-run` 回摘要與 token，`POST /api/actions/apply {id, token}` 在 token 與現行 SSOT 相符時才代跑 `--apply`（不符 409，要重新預覽），每次 apply 追記 `<root>/PROGRESS.actions.log`；不加旗標時兩個端點一律 403，伺服器維持「只寫收件匣」。
 
@@ -109,7 +112,7 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 依第一個未通過／過期項導向：
 
 - **收件匣有 pending（`check_inbox.py <root>` 列出）→ 先於其他路由，逐筆呈使用者裁決**：`new_question` → goals 變更確認（結構性增修觸發 evaluate 的拆解審）並記 D#；`new_analysis` → study-design（新 plan 或 amendment）並記 D#；`comment` → 依內容記一筆 D#（`question`＝target 所屬問題，`exec_issue`／`method` 視內容填）或轉對應 skill。使用者裁定後跑 `python3 <skill路徑>/scripts/check_inbox.py <root> --resolve IN-xxx --by <D#／plan id／SQ id>`；不採納 → `--dismiss IN-xxx --note <理由>`。**收件匣不是事實來源，不得未經使用者確認直接改 goals／plans／decisions**；`check_inbox.py` 是唯一可以改收件匣 status 的程式。
-  - **pending 為 `reassign`（主問題降為附錄問題）、`promote`（升回主問題）、`set_role`（圖表 role）、`move_plan`（搬方法）、`move_sensitivity`（搬敏感性子分析）或 `reorder`（調順序）時走腳本，不走人工**：`check_inbox.py` 已在該筆下面印出可直接執行的命令。**不得人工重做各步**（不得自己搬 goals、建 plan、retag results、改 validation、重登 waiver、寫 D#），**不得整本讀 decisions.yaml** 去仿寫先例；只跑對應腳本 `reassign_question.py`／`promote_question.py`／`set_figure_role.py`／`move_plan.py`／`move_sensitivity.py`／`reorder_questions.py` 的 `--dry-run`→ 把 ≤ 30 行的摘要（要改哪些檔、搬哪段、新舊 fingerprint、預定 D#）呈給使用者 → 使用者同意後改 `--apply`（可加 `--daily-log`）。腳本會自己備份、失敗還原、結案收件匣、重畫進度圖並 append 一筆模板 D#；主 loop 驗收只看磁碟成品（`reviews/reassign-*.json`／`set-figure-role-*.json` 的步驟紀錄、新 D#、各 checker）。前置條件被擋（exit 2）或鏈失敗（exit 1，已還原）時把原因照實回報，不要繞過腳本手做。搬走最後一個主問題須明確加 `--allow-empty-main`，且要先告知使用者 `check_coverage` 會因此擋關。
+  - **pending 為 `reassign`（主問題降為附錄問題）、`promote`（升回主問題）、`set_role`（圖表 role）、`move_plan`（搬方法）、`move_sensitivity`（搬敏感性子分析）、`reorder`（調順序）或 `move_result`（搬結果）時走腳本，不走人工**：`check_inbox.py` 已在該筆下面印出可直接執行的命令。**不得人工重做各步**（不得自己搬 goals、建 plan、retag results、改 validation、重登 waiver、寫 D#），**不得整本讀 decisions.yaml** 去仿寫先例；只跑對應腳本 `reassign_question.py`／`promote_question.py`／`set_figure_role.py`／`move_plan.py`／`move_sensitivity.py`／`reorder_questions.py`／`move_result.py` 的 `--dry-run`→ 把 ≤ 30 行的摘要（要改哪些檔、搬哪段、新舊 fingerprint、預定 D#）呈給使用者 → 使用者同意後改 `--apply`（可加 `--daily-log`）。腳本會自己備份、失敗還原、結案收件匣、重畫進度圖並 append 一筆模板 D#；主 loop 驗收只看磁碟成品（`reviews/reassign-*.json`／`set-figure-role-*.json` 的步驟紀錄、新 D#、各 checker）。前置條件被擋（exit 2）或鏈失敗（exit 1，已還原）時把原因照實回報，不要繞過腳本手做。搬走最後一個主問題須明確加 `--allow-empty-main`，且要先告知使用者 `check_coverage` 會因此擋關。
 - 無 route／未確認 → methodology-router；
 - prestudy 未過 → integrity-check；
 - protocol/plans 缺或 hash 不符 → study-design；
