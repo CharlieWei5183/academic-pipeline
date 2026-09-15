@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.16.4（2026-09-15）
+
+進度頁面的結果節點多一種落點：**拖到區帶**（Main／Supplementary）。主要結果拖到 Supplementary 帶、放開後在同一個表單用下拉選確切落點，預設是在本 plan 新增一個敏感性子分析收它；對應 `move_result.py` 加 `--new-item`（B 型變體：目標 plan 新增 `R<n+1>`）。skills、agents、管線階段與 SSOT schema 不變；收件匣 `schema_version` 維持 1；七種 kind 不變，`move_result` 的 payload 多一個可省的 `new_item`。
+
+1. **`move_result.py --new-item ["<change 描述>"]`（VERSION 0.16.4；與 `--to-item` 互斥，同給 exit 2）**：在目標 plan（可與來源同一份）的 robustness 尾端新增一項 `R<n+1>`——`change` 用給的描述（不給值＝預設「補充結果：<key> 由主要結果降為次要結果」，常數 `ssot_actions_common.NEW_ITEM_DEFAULT`）、`expected_keys: [<key>]`、`executed: true`、`execution_note`「〔日期 D#〕本項為新增的歸屬容器：<key> 自 … 搬入、成為本 plan 的次要結果；該鍵的 rows 逐位沿用原 run，本項只是歸屬容器，不代表另做了敏感度分析」；欄位順序照該 plan 既有 R 的形狀（只填 id／change／expected_keys／executed／execution_note 這五個必填與慣用欄位，既有 R 才有的 source／evidence 等不抄；沒有 R 的 plan 用這五個的預設序）。其餘鏈與 B 型相同：來源 outputs（或各 R 的 expected_keys）移除該鍵、results retag、validation 改掛與 fingerprint 重接、waiver 重登、快照 0 tamper、模板 D#（checkpoint／decision／known_consequences 都註明是「新增子分析」、method 帶 `--new-item "<描述>"`）、收件匣結案、重畫、`--daily-log`。同一份 plan 只出一版；run log 的 args 多 `new_item`、`to_item` 記新 R 的編號。
+2. **`ssot_actions_common.py`**：`NEW_ITEM_DEFAULT`、`new_item_text()`（空白 → 預設句）、`next_robustness_id()`（與 `move_sensitivity.py` 的追加規則同）；`_validate_move_result()` 認得 `new_item`（須為字串、與 `to_item` 互斥；有值時不再要求目標 R 存在、正規化 dict 只在非空時帶 `new_item`——0.16.2 的正規化結果不變）；`ACTIONS['move_result']` 的 argv 帶 `--new-item <描述>`、token extra 只在有 new_item 時多一段、title「搬結果：<key> → <plan> 新增子分析」。`check_inbox.py --list` 的建議命令、`progress_server.py` 的 `/api/inbox`（兩者同給 400）與 actions 端點都經同一張表，不另改。
+3. **`render_progress.py` 前端——結果節點的區帶落點**（`dragCandidate` 結果分支，節點落點優先；游標不在任何候選節點上時才看帶）：
+   - Main 帶的主要結果拖到 Supplementary 帶 → 候選＝整個帶（打亮、不畫線，與圖表落帶同一套視覺）；放開後 `move-result` 表單多一個下拉「放到哪裡」（`#act-mr-dest`）——預設「新增一個敏感性子分析（補充結果）」＝payload `{key, to_plan: <來源 plan>, new_item: <預設描述>}`，其後列來源 plan 既有的各 R（「R2：<change 前 40 字>」＝`to_item`；已含該鍵的 R 不列）與各附錄問題 active plan 的 outputs（「AQ3-v1 的 outputs」）；換選時 to_plan／to_item 欄與標題跟著換，to_item 欄對新增子分析顯示「新增 R<n+1>：<描述>」。
+   - Supplementary 帶的次要結果拖到 Main 帶 → 所屬 plan 屬主問題時預設「升回本 plan 的 outputs」、另列各主問題 active plan 的 outputs；所屬 plan 屬附錄問題（含附錄問題 plan 的主要結果）時只列各主問題 active plan 的 outputs，沒有可放的就不算候選、toast 說明。
+   - 附錄問題 plan 的主要結果拖到 Supplementary 帶（本來就在）→ 改紅、放開只 toast「已在 Supplementary」；拖到 Extended Data 帶 → 改紅（結果只在 Main／Supplementary 之間搬）；同帶無候選。未宣告結果不做區帶落點。
+   - 表單其他行為（送出並預覽、套用／先留在收件匣／撤回）沿用 0.16.3；圖例句與結果節點的動作說明補區帶落點；預設描述字串與 `NEW_ITEM_DEFAULT` 同一句（測試守住）。
+4. **文件**：`status` SKILL.md 收件匣路由段補 `--new-item` 命令與區帶落點規則；README 結構化動作段補 `--new-item`；`tests/README.md` 登記；`plugin.json` 0.16.4。
+6. **測試**：新增 `tests/run_v0164_regressions.py`（fixture 沿用 v0.16.1）：`--new-item` 同一份 plan（dry-run 不寫檔、互斥 exit 2、apply 後 R3 形狀／expected_keys／executed／execution_note、outputs 移除、retag、D-003 各欄、checker 全過、重畫後在 `SQ1-v2#R3` 之下）、跨 plan 自訂描述（兩版、AQ1-v2 多 R2）、payload／argv／title／token／server 400 與 201／`check_inbox --list`／dry-run／apply、`dragCandidate` 區帶落點 8 例（node 跑）、headless Chrome 端到端（拖主要結果到 Supplementary 帶空白處 → 帶打亮不畫線 → 下拉預設「新增…」→ 換選再換回 → 送出 → 摘要含新增子分析 R3 → 撤回；附錄主要結果拖到 Supplementary 帶 → 紅、toast）、文件登記。既有 18 支 `tests/run_v0*.py` 全過；`run_v0162_regressions.py` 兩處 `move_result.py` 版號斷言改讀腳本 `VERSION`、「主要結果拖到 `p:SQ1-v1#S` 上」那一例改為接受區帶候選（0.16.4 起不再是 None）。
+
 ## 0.16.3（2026-09-15）
 
 進度頁面拖放流程縮短一步：放開節點、填理由、按「送出並預覽」之後，**同一個對話框立刻顯示 dry-run 摘要**，不必先送收件匣、等頁面重載、再到「待套用動作」面板按預覽。看過摘要再決定「套用」「先留在收件匣」或「撤回」。skills、agents、管線階段與 SSOT schema 不變；收件匣 `schema_version` 維持 1；七種 kind 與各腳本不動。

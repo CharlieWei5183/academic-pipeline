@@ -3,13 +3,16 @@
 expected_keys（次要結果）的 SSOT 變更鏈（確定性；status skill 的機械工具）。
 
 用法:
-  python3 move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2] [--inbox IN-xxx] [--reason "..."]
+  python3 move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2 | --new-item ["<change 描述>"]] [--inbox IN-xxx] [--reason "..."]
       [--waiver-decision D-044] [--daily-log <path>] [--expect-token <token>] (--dry-run | --apply)
 
 兩種落點：A 型（--to-item 省略）搬到目標 plan 的 outputs 尾端，成為它的主要結果；B 型（--to-item R<n>）搬到目標 plan 該 R 的
 expected_keys 尾端，成為次要結果。來源由 results.json 該鍵的 plan_id 判定（須為 active plan）：鍵在來源 outputs 就是主要結果、
 只在某個 R 的 expected_keys 就是次要結果、兩者皆無為未宣告。
 
+B 型變體（0.16.4）：--new-item 在目標 plan（可與來源同一份）新增一個 robustness 項 R<n+1>——change 用給定描述（省略值時預設
+「補充結果：<key> 由主要結果降為次要結果」）、expected_keys 只有該鍵、executed: true、execution_note 註明該鍵的 rows 逐位沿用原 run、本項只是
+歸屬容器；其餘鏈與 B 型相同，D# 的 decision 註明是新增子分析。--to-item 與 --new-item 互斥（exit 2）。
 前置條件（exit 2）：鍵不在 results.json；來源或目標 plan 非 active；目標已含該鍵；--to-item 的 R 不存在；同一份 plan 且鍵已在
 outputs 的 A 型（無事可做）；來源 outputs 只剩這一個鍵（outputs 非空契約）。
 
@@ -46,14 +49,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssot_actions_common as C  # noqa: E402
 from ssot_actions_common import ChainError, plan_common  # noqa: E402
 
-VERSION = '0.16.2'
+VERSION = '0.16.4'
 REJECTED_TEMPLATE = '不改結果數字、不原地改封版 plan、不改寫條目內容、不重編 R 編號、不順帶跑四關卡、不把 validation 的判定改寫'
 OUTPUT_KINDS = {'inferential', 'descriptive', 'diagnostic', 'table', 'prediction-metric', 'qualitative', 'proof', 'synthesis', 'joint-display'}
 
 
 def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     key, dst_pid, rid = args.key, args.to_plan, (args.to_item or '')
-    norm, err = C.validate_payload(root, 'move_result', {'key': key, 'to_plan': dst_pid, 'to_item': rid})
+    new_item = C.new_item_text(key, args.new_item) if args.new_item is not None else ''
+    if rid and new_item:
+        raise ChainError('--to-item 與 --new-item 互斥：搬進既有的 R 或新增一個 R，只能選一個')
+    norm, err = C.validate_payload(root, 'move_result', {'key': key, 'to_plan': dst_pid, 'to_item': rid, 'new_item': new_item})
     if err:
         raise ChainError(err)
     results = C.load_json(root / 'analysis/results.json')
@@ -67,6 +73,8 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     in_out, src_rids = C.plan_key_places(src_plan, key)
     src_kind = 'primary' if in_out else ('secondary' if src_rids else 'undeclared')
     same = src_pid == dst_pid
+    if new_item:
+        rid = C.next_robustness_id(dst_plan)   # 新增的 R<n+1>；之後的鏈把它當 B 型的目標 R
     mode = 'B' if rid else 'A'
     n_out = len([o for o in (src_plan.get('outputs') or []) if isinstance(o, dict)])
     if in_out and n_out <= 1:
@@ -76,7 +84,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     if same and not src_new:
         raise ChainError('內部錯誤：同一份 plan 卻沒有新版號')
     other_src_keys = [k for k in C.results_keys_of_plan(root, src_pid) if k != key]
-    return {'key': key, 'mode': mode, 'same': same, 'rid': rid, 'src_q': src_q, 'dst_q': dst_q, 'src_pid': src_pid, 'dst_pid': dst_pid,
+    return {'key': key, 'mode': mode, 'same': same, 'rid': rid, 'new_item': new_item, 'src_q': src_q, 'dst_q': dst_q, 'src_pid': src_pid, 'dst_pid': dst_pid,
             'src_plan': src_plan, 'dst_plan': dst_plan, 'src_kind': src_kind, 'src_rids': src_rids, 'src_new': src_new, 'dst_new': dst_new,
             'other_src_keys': other_src_keys, 'result_obj': results[key],
             'inbox': C.check_inbox_pending(root, args.inbox), 'waiver': C.waiver_of(root, args.waiver_decision)}
@@ -154,12 +162,35 @@ def output_entry(ctx: dict[str, Any]) -> tuple[dict, str]:
     return entry, f'來源 plan 沒有該鍵的 outputs 條目（{ctx["src_kind"]}），依 {ctx["dst_pid"]} 既有條目的形狀由 results.json 補'
 
 
+NEW_ITEM_NOTE = '該鍵的 rows 逐位沿用原 run，本項只是歸屬容器，不代表另做了敏感度分析'
+
+
+def new_robustness_item(p: dict, ctx: dict[str, Any], did: str, date: str) -> dict[str, Any]:
+    """--new-item 要追加到目標 robustness 的新項：欄位順序照該 plan 既有 R 的形狀（沒有 R 時用 id／change／expected_keys／executed／execution_note），
+    只填這五個必填與慣用欄位；既有 R 才有的其他欄位（source／evidence 等）是各項自己的內容，不抄。"""
+    key, rid = ctx['key'], ctx['rid']
+    ref = next((r for r in (p.get('robustness') or []) if isinstance(r, dict) and re.fullmatch(r'R\d+', str(r.get('id') or ''))), None)
+    order = [k for k in (ref or {}) if k in ('id', 'change', 'expected_keys', 'executed', 'execution_note')]
+    for k in ('id', 'change', 'expected_keys', 'executed', 'execution_note'):
+        if k not in order:
+            order.append(k)
+    src_where = ('本 plan 的 outputs' if ctx['same'] and ctx['src_kind'] == 'primary' else
+                 (f'{ctx["src_pid"]} 的 outputs' if ctx['src_kind'] == 'primary' else
+                  (f'{ctx["src_pid"]} 的 {"／".join(ctx["src_rids"])}' if ctx['src_rids'] else f'{ctx["src_pid"]}（未宣告）')))
+    vals = {'id': rid, 'change': ctx['new_item'], 'expected_keys': [key], 'executed': True,
+            'execution_note': f'〔{date} {did}〕本項為新增的歸屬容器：{key} 自{src_where} 搬入、成為本 plan 的次要結果；{NEW_ITEM_NOTE}。'}
+    return {k: vals[k] for k in order}
+
+
 def add_key_to_plan(p: dict, ctx: dict[str, Any], did: str, date: str) -> str:
     key, rid = ctx['key'], ctx['rid']
     if ctx['mode'] == 'A':
         entry, how = output_entry(ctx)
         p['outputs'] = list(p.get('outputs') or []) + [entry]
         return how
+    if ctx.get('new_item'):
+        p['robustness'] = list(p.get('robustness') or []) + [new_robustness_item(p, ctx, did, date)]
+        return f'新增 {rid}（change「{ctx["new_item"]}」、expected_keys 只有該鍵、executed true）'
     r = next(r for r in p['robustness'] if isinstance(r, dict) and str(r.get('id')) == rid)
     r['expected_keys'] = [str(k) for k in (r.get('expected_keys') or [])] + [key]
     src_where = '本 plan 的 outputs' if ctx['same'] and ctx['src_kind'] == 'primary' else (
@@ -175,7 +206,7 @@ def add_key_to_plan(p: dict, ctx: dict[str, Any], did: str, date: str) -> str:
 def build_plans(ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace) -> tuple[dict | None, dict, dict[str, Any]]:
     key, src_pid, dst_pid, src_new, dst_new, rid = ctx['key'], ctx['src_pid'], ctx['dst_pid'], ctx['src_new'], ctx['dst_new'], ctx['rid']
     inbox_txt = f'收件匣 {args.inbox} ' if args.inbox else '使用者裁定'
-    dst_desc = f'{dst_new} 的 {rid}' if ctx['mode'] == 'B' else f'{dst_new} 的 outputs'
+    dst_desc = f'{dst_new} 的 {rid}' + ('（新增）' if ctx.get('new_item') else '') if ctx['mode'] == 'B' else f'{dst_new} 的 outputs'
     info: dict[str, Any] = {}
     if ctx['same']:
         # 同一份 plan：一版做完移除與追加
@@ -184,7 +215,7 @@ def build_plans(ctx: dict[str, Any], did: str, date: str, args: argparse.Namespa
         info['remove'] = remove_key_from_plan(p, key, keep, dst_desc, None, did, date)
         info['add_how'] = add_key_to_plan(p, ctx, did, date)
         where_from = 'outputs' if ctx['src_kind'] == 'primary' else ('／'.join(ctx['src_rids']) + ' 的 expected_keys' if ctx['src_rids'] else '未宣告')
-        where_to = f'{rid} 的 expected_keys' if ctx['mode'] == 'B' else 'outputs'
+        where_to = (f'{rid} 的 expected_keys（新增的敏感性子分析）' if ctx.get('new_item') else f'{rid} 的 expected_keys') if ctx['mode'] == 'B' else 'outputs'
         changes = [f'{key}：由本 plan 的 {where_from} 搬到 {where_to}（{info["add_how"]}）——依{inbox_txt}；'
                    + (f'被移除的項目 {"／".join(info["remove"]["touched"])} 的 execution_note 註明' if info['remove']['touched'] else '其餘項目逐字不動')
                    + (f'、{"／".join(info["remove"]["emptied"])} 因此為空改指本 plan outputs 鍵' if info['remove']['emptied'] else ''),
@@ -222,9 +253,10 @@ def build_plans(ctx: dict[str, Any], did: str, date: str, args: argparse.Namespa
     d = copy.deepcopy(ctx['dst_plan'])
     info['add_how'] = add_key_to_plan(d, ctx, did, date)
     src_where = f'{src_pid} 的 outputs' if ctx['src_kind'] == 'primary' else (f'{src_pid} 的 {"／".join(ctx["src_rids"])}' if ctx['src_rids'] else f'{src_pid}（未宣告，只掛 results.json plan_id）')
-    where_to = f'robustness {rid} 的 expected_keys' if ctx['mode'] == 'B' else 'outputs'
-    changes = [f'{where_to}：尾端追加 {key}（{info["add_how"]}）——依{inbox_txt}自 {src_where} 搬入；既有條目逐字不動'
-               + ('' if ctx['mode'] == 'A' else f'；{rid} 的 execution_note 前綴一段、其餘欄位不動'),
+    where_to = (f'robustness {rid} 的 expected_keys（新增的敏感性子分析）' if ctx.get('new_item') else f'robustness {rid} 的 expected_keys') if ctx['mode'] == 'B' else 'outputs'
+    changes = [(f'robustness：尾端新增 {rid}（{info["add_how"]}）——依{inbox_txt}自 {src_where} 搬入 {key}；既有項目逐字不動、編號不重編' if ctx.get('new_item') else
+                f'{where_to}：尾端追加 {key}（{info["add_how"]}）——依{inbox_txt}自 {src_where} 搬入；既有條目逐字不動'
+                + ('' if ctx['mode'] == 'A' else f'；{rid} 的 execution_note 前綴一段、其餘欄位不動')),
                f'檔頭：plan_id 由 {dst_pid} 改為 {dst_new}；version、supersedes、timing、created_at 對應改；amendment_reason／changes 改為本版說明；'
                f'registration.registered_into_pipeline_at 尾綴、timing_justification 加一段',
                C.unchanged_keys_sentence(d, set(C.PLAN_HEAD_KEYS) | ({'outputs'} if ctx['mode'] == 'A' else {'robustness'}), dst_pid)]
@@ -395,13 +427,14 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
     key, src_pid, dst_pid, src_new, dst_new, rid = ctx['key'], ctx['src_pid'], ctx['dst_pid'], ctx['src_new'], ctx['dst_new'], ctx['rid']
     log_rel = C.unique_report_path(root, f'move-result-{key}-{dst_pid}', date, '.json')
     ch = C.Chain(root, 'move_result', f'move_result_{key.lower()}_to_{dst_pid.lower()}', log_rel,
-                 {'key': key, 'from_plan': src_pid, 'to_plan': dst_pid, 'to_item': rid, 'mode': ctx['mode'], 'inbox': args.inbox or '',
+                 {'key': key, 'from_plan': src_pid, 'to_plan': dst_pid, 'to_item': rid, 'new_item': ctx.get('new_item') or '', 'mode': ctx['mode'], 'inbox': args.inbox or '',
                   'reason': args.reason or '', 'waiver_decision': ctx['waiver'], 'version': VERSION}, did, date, dry)
-    ch.summary.update({'key': key, 'mode': ctx['mode'], 'same': ctx['same'], 'src_pid': src_pid, 'dst_pid': dst_pid, 'to_item': rid,
+    ch.summary.update({'key': key, 'mode': ctx['mode'], 'same': ctx['same'], 'src_pid': src_pid, 'dst_pid': dst_pid, 'to_item': rid, 'new_item': ctx.get('new_item') or '',
                        'src_kind': ctx['src_kind'], 'src_new': src_new, 'dst_new': dst_new, 'src_q': ctx['src_q'], 'dst_q': ctx['dst_q']})
     inbox_txt = f'收件匣 {args.inbox} ' if args.inbox else '使用者裁定'
-    target_desc = f'{dst_new} 的 {rid}' if ctx['mode'] == 'B' else f'{dst_new} 的 outputs'
-    kind_zh = 'B 型、次要結果' if ctx['mode'] == 'B' else 'A 型、主要結果'
+    target_desc = (f'{dst_new} 新增的 {rid}' if ctx.get('new_item') else f'{dst_new} 的 {rid}') if ctx['mode'] == 'B' else f'{dst_new} 的 outputs'
+    kind_zh = ('B 型、次要結果（新增子分析）' if ctx.get('new_item') else 'B 型、次要結果') if ctx['mode'] == 'B' else 'A 型、主要結果'
+    item_argv = (f' --new-item {json.dumps(ctx["new_item"], ensure_ascii=False)}' if ctx.get('new_item') else (f' --to-item {rid}' if rid else ''))
 
     def body(ch: C.Chain) -> None:
         ch.step(1, 'project.yaml 兩邊問題的 links／status_reason')
@@ -473,11 +506,13 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                    if (new_src is not None and diff_src) else f'來源 {src_pid} 不出新版（{key} 未在該 plan 宣告，內容沒有變）')
         if ctx['same']:
             plans_txt = (f'analysis/plans/{dst_new}.yaml 以 {src_pid} 為底封版（同一份 plan 只出一版）：{key} 由 {"outputs" if ctx["src_kind"] == "primary" else "／".join(ctx["src_rids"]) or "未宣告"} 改列為 '
-                         f'{rid + " 的 expected_keys" if ctx["mode"] == "B" else "outputs"}（content_hash {sealed_dst.get("content_hash")}；leaf 差異 {diff_dst["same"]} 同、'
+                         f'{(rid + "（新增子分析，change「" + ctx["new_item"] + "」）的 expected_keys") if ctx.get("new_item") else (rid + " 的 expected_keys" if ctx["mode"] == "B" else "outputs")}（content_hash {sealed_dst.get("content_hash")}；leaf 差異 {diff_dst["same"]} 同、'
                          f'{len(diff_dst["changed"])} 改、{len(diff_dst["added"])} 增、{len(diff_dst["removed"])} 刪）')
         else:
-            plans_txt = (f'{src_txt}；analysis/plans/{dst_new}.yaml 以 {dst_pid} 為底封版、{rid + " 的 expected_keys" if ctx["mode"] == "B" else "outputs"} 尾端追加 {key}'
-                         f'（{pinfo.get("add_how")}；content_hash {sealed_dst.get("content_hash")}；{diff_dst["same"]} 同、{len(diff_dst["changed"])} 改、{len(diff_dst["added"])} 增、{len(diff_dst["removed"])} 刪）')
+            plans_txt = (f'{src_txt}；analysis/plans/{dst_new}.yaml 以 {dst_pid} 為底封版、'
+                         + (f'robustness 尾端新增子分析 {rid}（change「{ctx["new_item"]}」、expected_keys 只有 {key}）' if ctx.get('new_item') else
+                            f'{rid + " 的 expected_keys" if ctx["mode"] == "B" else "outputs"} 尾端追加 {key}')
+                         + f'（{pinfo.get("add_how")}；content_hash {sealed_dst.get("content_hash")}；{diff_dst["same"]} 同、{len(diff_dst["changed"])} 改、{len(diff_dst["added"])} 增、{len(diff_dst["removed"])} 刪）')
         decision = (f'(1) project.yaml：{ctx["src_q"]} 的 links {("搬 " + "／".join(linfo["moved_links"]) + " 到 " + ctx["dst_q"] + " links 尾端") if linfo["moved_links"] else ("原本沒有 results:" + key + "，不動" if not ctx["same"] else "不動（同一問題）")}；'
                     f'{ctx["src_q"]}{"／" + ctx["dst_q"] if ctx["dst_q"] != ctx["src_q"] else ""} status_reason 前綴；state 加一行\n'
                     f'(2) {plans_txt}；index active 更新、舊版標 superseded／replaced_by\n'
@@ -496,7 +531,8 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
             reason_parts.append(f'使用者裁定把結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（未附理由）')
         reason_parts.append(f'只改歸屬與 metadata，數字一位元未動；由 move_result.py {VERSION} 確定性執行')
         known = (f'(1) 結果鍵 {key} 換了 plan 脈絡（{src_pid} 的{"主要" if ctx["src_kind"] == "primary" else ("次要" if ctx["src_kind"] == "secondary" else "未宣告")}結果 → {dst_new} 的'
-                 f'{"敏感性子分析 " + rid + " 次要" if ctx["mode"] == "B" else "主要"}結果），屬設計變更，是否適合由 reviewer-methods 設計審判定\n'
+                 f'{("新增的敏感性子分析 " + rid + " 次要") if ctx.get("new_item") else ("敏感性子分析 " + rid + " 次要" if ctx["mode"] == "B" else "主要")}結果），屬設計變更，是否適合由 reviewer-methods 設計審判定'
+                 + ('；新增的 R 只是歸屬容器（' + NEW_ITEM_NOTE + '）' if ctx.get('new_item') else '') + '\n'
                  + (f'(2) {"／".join(strip)} 原以 {key} 為 primary_results 之一，本次移除該鍵；該鍵在 {ctx["dst_q"]} 之下尚無 validation item 覆蓋，validate-results 重判時補\n' if strip else
                     (f'(2) {"／".join(rehung)} 改掛 {ctx["dst_q"]}／{dst_new}，其判定沿用、未重做\n' if rehung else '(2) 沒有 validation item 以該鍵為 primary_results\n'))
                  + f'(3) validation 重接：results {fps["results"]}／source {fps["source"]}；rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
@@ -508,10 +544,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         C.step_decision(ch, {'id': did, 'date': date, 'stage': 'study-design',
                              'checkpoint': f'結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（{kind_zh}）；{"同一份 plan 出一版" if ctx["same"] else ("兩邊出新版" if src_new else "目標出新版")}、數字不動',
                              'question': ctx['dst_q'],
-                             'method': f'move_result.py {VERSION} --key {key} --to-plan {dst_pid}' + (f' --to-item {rid}' if rid else '') + (f' --inbox {args.inbox}' if args.inbox else '') + f' --apply；步驟紀錄 {log_rel}',
+                             'method': f'move_result.py {VERSION} --key {key} --to-plan {dst_pid}' + item_argv + (f' --inbox {args.inbox}' if args.inbox else '') + f' --apply；步驟紀錄 {log_rel}',
                              'decision': decision, 'reason': '；'.join(reason_parts), 'rejected': REJECTED_TEMPLATE, 'known_consequences': known, 'links': links, 'supersedes': ''})
         ch.step(9, '收件匣結案、重畫、daily log')
-        cmd = f'python3 move_result.py {root} --key {key} --to-plan {dst_pid}' + (f' --to-item {rid}' if rid else '') + (f' --inbox {args.inbox}' if args.inbox else '') + ' --apply'
+        cmd = f'python3 move_result.py {root} --key {key} --to-plan {dst_pid}' + item_argv + (f' --inbox {args.inbox}' if args.inbox else '') + ' --apply'
         C.step_finish(ch, args.inbox, f'move_result.py {VERSION}：{key} → {target_desc}；{did}', args.daily_log,
                       lambda c: C.daily_block(f'move_result.py {VERSION}：結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（{did}）',
                                               f'{kind_zh}；{"同一份 plan 出一版" if ctx["same"] else "來源／目標各出一版"}（{src_new or "—"}／{dst_new}），數字一位元不動。',
@@ -521,8 +557,8 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
     fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
-    kind_zh = 'B 型、次要結果' if summary['mode'] == 'B' else 'A 型、主要結果'
-    tgt = summary['dst_pid'] + (f' {summary["to_item"]}' if summary.get('to_item') else ' outputs')
+    kind_zh = ('B 型、次要結果（新增子分析 ' + summary['to_item'] + '：「' + summary['new_item'] + '」）' if summary.get('new_item') else 'B 型、次要結果') if summary['mode'] == 'B' else 'A 型、主要結果'
+    tgt = summary['dst_pid'] + ((' 新增的 ' if summary.get('new_item') else ' ') + summary['to_item'] if summary.get('to_item') else ' outputs')
     rm = summary.get('remove') or {}
     lines = [f'=== move_result {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
              f'{summary["key"]}（{summary["src_pid"]} 的{ {"primary": "主要", "secondary": "次要", "undeclared": "未宣告"}[summary["src_kind"]] }結果）→ {tgt}；{kind_zh}'
@@ -545,6 +581,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--key', required=True, metavar='KEY')
     parser.add_argument('--to-plan', required=True, metavar='AQ3-v1')
     parser.add_argument('--to-item', default='', metavar='R2', help='給了就是 B 型（搬到該 R 的 expected_keys）；省略為 A 型（搬到 outputs）')
+    parser.add_argument('--new-item', nargs='?', const='', default=None, metavar='"<change 描述>"',
+                        help='B 型變體：在目標 plan 新增一個 robustness 項 R<n+1> 收這個鍵（不給值＝預設「補充結果：<key> 由主要結果降為次要結果」）；與 --to-item 互斥')
     C.add_common_args(parser)
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -553,7 +591,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = root.resolve()
     args.root = str(root)
-    token_extra = C.action_token_extra('move_result', {'key': args.key, 'to_plan': args.to_plan, 'to_item': args.to_item or ''}, args.inbox)
+    if args.to_item and args.new_item is not None:
+        print('BLOCKER --to-item 與 --new-item 互斥：搬進既有的 R 或新增一個 R，只能選一個')
+        return 2
+    token_extra = C.action_token_extra('move_result', {'key': args.key, 'to_plan': args.to_plan, 'to_item': args.to_item or '',
+                                                       'new_item': (C.new_item_text(args.key, args.new_item) if args.new_item is not None else '')}, args.inbox)
     return C.action_main('move_result', VERSION, args, root, check_preconditions, token_extra, run_chain, print_summary)
 
 

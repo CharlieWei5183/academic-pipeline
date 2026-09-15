@@ -1636,14 +1636,40 @@ def plan_key_places(plan: dict, key: str) -> tuple[bool, list[str]]:
     return in_out, rids
 
 
+NEW_ITEM_DEFAULT = '補充結果：{key} 由主要結果降為次要結果'   # 與 render_progress.py 前端的預設描述同一句
+
+
+def new_item_text(key: str, given: str | None) -> str:
+    """--new-item／payload.new_item 的 change 描述：空字串或只有空白 → 預設句。"""
+    txt = str(given or '').strip()
+    return txt or NEW_ITEM_DEFAULT.format(key=key)
+
+
+def next_robustness_id(plan: dict) -> str:
+    """該 plan 下一個 robustness 編號 R<n+1>（與 move_sensitivity.py 的追加規則同）。"""
+    n = 0
+    for r in plan.get('robustness') or []:
+        m = re.fullmatch(r'R(\d+)', str((r or {}).get('id') or '')) if isinstance(r, dict) else None
+        if m:
+            n = max(n, int(m.group(1)))
+    return f'R{n + 1}'
+
+
 def _validate_move_result(root: Path, payload) -> tuple[dict | None, str]:
     """結果鍵搬家：key 存在於 results.json 且其 plan_id 是 active plan；to_plan 是 active plan；to_item（可省）須存在於 to_plan；
-    目標未含該鍵（A 型看 outputs、B 型看該 R 的 expected_keys；同一份 plan 且鍵已在 outputs 的 A 型＝無事可做）。"""
+    目標未含該鍵（A 型看 outputs、B 型看該 R 的 expected_keys；同一份 plan 且鍵已在 outputs 的 A 型＝無事可做）。
+    new_item（可省；0.16.4）＝B 型變體：在 to_plan 新增一個 R<n+1> 收該鍵，值是 change 描述；與 to_item 互斥。正規化後只在非空時帶 new_item。"""
     if not isinstance(payload, dict):
         return None, 'move_result 需要 payload object'
     key = str(payload.get('key') or '').strip()
     dst = str(payload.get('to_plan') or '').strip()
     rid = str(payload.get('to_item') or '').strip()
+    new_item = payload.get('new_item')
+    if new_item is not None and not isinstance(new_item, str):
+        return None, 'payload.new_item 須為字串（新增子分析的 change 描述）'
+    new_item = str(new_item or '').strip()
+    if rid and new_item:
+        return None, 'payload.to_item 與 payload.new_item 互斥：搬進既有的 R 或新增一個 R，只能選一個'
     if not key:
         return None, 'payload.key 不得為空'
     r_path = root / 'analysis/results.json'
@@ -1665,6 +1691,10 @@ def _validate_move_result(root: Path, payload) -> tuple[dict | None, str]:
         return None, f'plan 檔不存在 {dst_path.name}'
     dst_plan = plan_common.load_yaml(dst_path)
     in_out, rids = plan_key_places(dst_plan, key)
+    if new_item:
+        if not isinstance(dst_plan.get('robustness'), list):
+            return None, f'{dst} 的 robustness 不是 list，無法新增子分析'
+        return {'key': key, 'to_plan': dst, 'to_item': '', 'new_item': new_item}, ''
     if rid:
         if not any(isinstance(r, dict) and str(r.get('id')) == rid for r in (dst_plan.get('robustness') or [])):
             return None, f'{dst} 沒有 robustness 項目 {rid}'
@@ -1766,10 +1796,12 @@ ACTIONS: dict[str, dict[str, Any]] = {
     },
     'move_result': {
         'script': 'move_result.py', 'label': '搬結果', 'stage': 'study-design',
-        'validate': _validate_move_result, 'argv': lambda p: ['--key', p['key'], '--to-plan', p['to_plan']] + (['--to-item', p['to_item']] if p.get('to_item') else []),
-        'extra': lambda p, iid: f'move_result:{p.get("key") or ""}:{p.get("to_plan") or ""}:{p.get("to_item") or ""}:{iid}',
-        'title': lambda p: (f'搬結果：{p["key"]} → {p["to_plan"]}' + (f' {p["to_item"]}' if p.get('to_item') else ''),
-                            f'結果鍵 {p["key"]} 搬到 {p["to_plan"]}' + (f' 的敏感性子分析 {p["to_item"]}（次要結果）' if p.get('to_item') else ' 的 outputs（主要結果）'),
+        'validate': _validate_move_result,
+        'argv': lambda p: ['--key', p['key'], '--to-plan', p['to_plan']] + (['--to-item', p['to_item']] if p.get('to_item') else []) + (['--new-item', p['new_item']] if p.get('new_item') else []),
+        'extra': lambda p, iid: f'move_result:{p.get("key") or ""}:{p.get("to_plan") or ""}:{p.get("to_item") or ""}:{iid}' + (f':new_item={p["new_item"]}' if p.get('new_item') else ''),
+        'title': lambda p: (f'搬結果：{p["key"]} → {p["to_plan"]}' + (f' {p["to_item"]}' if p.get('to_item') else (' 新增子分析' if p.get('new_item') else '')),
+                            f'結果鍵 {p["key"]} 搬到 {p["to_plan"]}' + (f' 的敏感性子分析 {p["to_item"]}（次要結果）' if p.get('to_item') else
+                                                                     (f' 新增的敏感性子分析（次要結果；change「{p["new_item"]}」）' if p.get('new_item') else ' 的 outputs（主要結果）')),
                             f'r:{p["key"]}'),
     },
 }

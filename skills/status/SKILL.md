@@ -67,9 +67,10 @@ python3 <skill路徑>/scripts/move_plan.py <root> --plan AQ2-v2 --to-question AQ
 python3 <skill路徑>/scripts/move_sensitivity.py <root> --plan SQ5-v6 --item R2 --to-plan AQ3-v1 --inbox IN-xxx (--dry-run | --apply)
 python3 <skill路徑>/scripts/reorder_questions.py <root> --list appendix_questions --order AQ1,AQ3,AQ2,AQ4 --inbox IN-xxx (--dry-run | --apply)
 python3 <skill路徑>/scripts/move_result.py <root> --key <結果鍵> --to-plan AQ3-v1 [--to-item R2] --inbox IN-xxx (--dry-run | --apply)   # 0.16.2：省略 --to-item＝搬到 outputs（主要結果）；給 R<n>＝搬到該子分析的 expected_keys（次要結果）
+python3 <skill路徑>/scripts/move_result.py <root> --key <結果鍵> --to-plan SQ5-v6 --new-item ["<change 描述>"] --inbox IN-xxx (--dry-run | --apply)   # 0.16.4：在目標 plan 新增一個 R<n+1> 收該鍵（次要結果）；不給描述＝預設「補充結果：<key> 由主要結果降為次要結果」；與 --to-item 互斥
 ```
 
-結果鍵搬家（0.16.2）也走腳本：結果節點拖到別的方法上 → `kind: move_result`（payload `{key, to_plan}`，A 型）；拖到任一敏感性子分析上 → 同 kind 加 `to_item`（B 型）。來源由 results.json 該鍵的 plan_id 判，須為 active plan；目標已含該鍵會被擋。來源與目標各出一版（同一份 plan 只出一版），數字不動；validation 中只以該鍵為 primary_results 的 item 改掛目標、同時含別的鍵的 item 會移除該鍵那一行（該鍵在目標問題下的驗證列為 open item）。
+結果鍵搬家（0.16.2）也走腳本：結果節點拖到別的方法上 → `kind: move_result`（payload `{key, to_plan}`，A 型）；拖到任一敏感性子分析上 → 同 kind 加 `to_item`（B 型）。0.16.4 起結果節點也能拖到區帶：Main 帶的主要結果拖到 Supplementary 帶、放開後表單以下拉選落點——預設「新增一個敏感性子分析（補充結果）」＝同 kind 加 `new_item`（change 描述；由 `move_result.py --new-item` 在來源 plan 新增 `R<n+1>`、expected_keys 只有該鍵、executed true、execution_note 註明只是歸屬容器），另可選來源 plan 既有的各 R（`to_item`）或各附錄問題 active plan 的 outputs；Supplementary 帶的次要結果拖到 Main 帶則預設升回本 plan 的 outputs、另列各主問題 active plan 的 outputs。`to_item` 與 `new_item` 互斥（腳本 exit 2、server 400）。來源由 results.json 該鍵的 plan_id 判，須為 active plan；目標已含該鍵會被擋。來源與目標各出一版（同一份 plan 只出一版），數字不動；validation 中只以該鍵為 primary_results 的 item 改掛目標、同時含別的鍵的 item 會移除該鍵那一行（該鍵在目標問題下的驗證列為 open item）。
 
 要讓頁面上的「待套用動作」面板能預覽與套用，啟動伺服器時加 `--allow-apply`（另可加 `--daily-log <path>` 透傳給腳本）：`python3 <skill路徑>/scripts/progress_server.py <root> --port 8765 --allow-apply`。開了之後 `POST /api/actions/dry-run {id}` 代跑 `--dry-run` 回摘要與 token，`POST /api/actions/apply {id, token}` 在 token 與現行 SSOT 相符時才代跑 `--apply`（不符 409，要重新預覽），每次 apply 追記 `<root>/PROGRESS.actions.log`；不加旗標時兩個端點一律 403，伺服器維持「只寫收件匣」。
 

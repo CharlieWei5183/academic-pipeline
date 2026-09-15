@@ -40,6 +40,7 @@ import run_v0161_regressions as T1  # noqa: E402
 import ssot_actions_common as C  # noqa: E402
 
 V = '0.16.2'
+MR_V = re.search(r"^VERSION = '([^']+)'", (SCRIPTS / 'move_result.py').read_text(encoding='utf-8'), re.M).group(1)   # 0.16.4 起腳本版號可高於本測試版
 run, tree_hashes, _post, text, need = T0.run, T0.tree_hashes, T0._post, T0.text, T0.need
 checkers, decision, _server, _js_of, _js_fn = T1.checkers, T1.decision, T1._server, T1._js_of, T1._js_fn
 MR = 'skills/status/scripts/move_result.py'
@@ -136,7 +137,7 @@ def test_apply_a_then_b(tmp: Path) -> None:
         assert anchor in d['decision'], anchor
     assert '換了 plan 脈絡' in d['known_consequences'] and '屬設計變更' in d['known_consequences'] and 'reviewer-methods 對 SQ2-v2 的設計審' in d['known_consequences'] \
         and 'evaluate 對 SQ2 的 result-fit' in d['known_consequences'] and 'V1 原以 k2 為 primary_results 之一' in d['known_consequences']
-    assert '搬到二' in d['reason'] and d['method'].startswith(f'move_result.py {V} --key k2 --to-plan SQ2-v1 --apply')
+    assert '搬到二' in d['reason'] and d['method'].startswith(f'move_result.py {MR_V} --key k2 --to-plan SQ2-v1 --apply')
     assert {'SQ2', 'SQ1', 'results.k2', 'analysis/plans/SQ2-v2.yaml', 'analysis/plans/SQ1-v2.yaml', 'reviews/move-result-k2-SQ2-v1-2026-09-15.json'} <= set(d['links'])
     log = json.loads((root / 'reviews/move-result-k2-SQ2-v1-2026-09-15.json').read_text(encoding='utf-8'))
     assert log['result'] == 'ok' and log['dry_run'] is False and [s['step'] for s in log['steps']] == list(range(1, 10)) and all(s['status'] == 'ok' for s in log['steps'])
@@ -326,7 +327,7 @@ def test_server_dispatch(tmp: Path) -> None:
         inbox = {it['id']: (it['status'], it.get('resolved_by')) for it in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']}
         assert inbox == {'IN-001': ('pending', ''), 'IN-002': ('done', 'D-003'), 'IN-003': ('done', 'D-004')}, inbox
         dtext = daily.read_text(encoding='utf-8')
-        assert dtext.count(f'## move_result.py {V}') == 2 and '結果鍵 k2 由 SQ1-v1 搬到 SQ2-v2 的 outputs（D-003）' in dtext, dtext
+        assert dtext.count(f'## move_result.py {MR_V}') == 2 and '結果鍵 k2 由 SQ1-v1 搬到 SQ2-v2 的 outputs（D-003）' in dtext, dtext
         d3 = decision(root, 'D-003')
         assert '收件匣 IN-002 原文：「' in d3['reason'] and '理由：經 server' in d3['reason'] and '收件匣 IN-002 結案' in d3['decision'] and '--inbox IN-002' in d3['method']
     finally:
@@ -380,6 +381,9 @@ def test_drag_result_nodes(tmp: Path) -> None:
            {'kind': 'move_result', 'ok': True, 'target': 'p:SQ1-v1#R2', 'label': '成為 SQ1-v1 R2 的次要結果', 'payload': {'key': 'm1', 'to_plan': 'SQ1-v1', 'to_item': 'R2'}},
            None, None, None]
     for c, g, e in zip(cases, got, exp):
+        if c == ('r:k1', 'p:SQ1-v1#S'):   # 0.16.4 起：主要結果拖到 Supplementary 帶（不在節點上）是區帶候選，不再是 None
+            assert g is None or (g['kind'] == 'move_result' and g['ok'] and g.get('band') == 'supp' and g.get('options')), (c, g)
+            continue
         assert g == e, (c, g, e)
     assert drag == [False, True, True, False, False, True], drag   # 驗證節點與敏感性群節點不可拖；結果與圖表可拖
 
@@ -396,7 +400,7 @@ def test_docs_registered() -> None:
                 'tests/README.md', 'tests/run_v0162_regressions.py'):
         body = text(rel)
         assert chr(0x81C2) not in body, f'{rel} 含 arm 的直譯字（U+81C2）'
-    assert f"VERSION = '{V}'" in text('skills/status/scripts/move_result.py')
+    assert tuple(int(x) for x in MR_V.split('.')) >= tuple(int(x) for x in V.split('.'))
 
 
 def main() -> int:
