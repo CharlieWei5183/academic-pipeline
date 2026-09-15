@@ -653,7 +653,7 @@ def test_docs_registered() -> None:
                 'skills/status/scripts/progress_server.py', 'skills/status/scripts/check_inbox.py', 'skills/status/scripts/render_progress.py', 'CHANGELOG.md',
                 'skills/status/SKILL.md', 'tests/run_v0161_regressions.py'):
         body = text(rel)
-        assert '臂' not in body, f'{rel} 含 arm 的直譯字'
+        assert chr(0x81C2) not in body, f'{rel} 含 arm 的直譯字（U+81C2）'   # 用碼位寫，本檔自己也要過這條
     for script in ('promote_question', 'move_plan', 'move_sensitivity', 'reorder_questions', 'reassign_question'):
         assert f"VERSION = '{V}'" in text(f'skills/status/scripts/{script}.py'), script
 

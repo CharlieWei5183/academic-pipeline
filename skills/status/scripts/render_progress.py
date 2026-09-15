@@ -2934,7 +2934,7 @@ GRAPH_JS = """
   // 由 y 座標判定落在哪個區帶：依可見的分隔線（ext／supp）由上而下比對
   function bandAtY(gy){var band='main';['ext','supp'].forEach(function(b){var el=bandDivs[b];if(el&&!el.classList.contains('off')&&gy>=+el.getAttribute('y1'))band=b;});return band;}
   // ---- 拖曳時的即時接線預覽（0.16.1）：依游標位置判定候選落點；只畫在 #drag-preview，不進 IR、不進 SSOT ----
-  var previewG=document.getElementById('drag-preview'),SVGNS='http://www.w3.org/2000/svg';
+  var previewG=document.getElementById('drag-preview'),SVGNS=svg.namespaceURI;  // 不寫死網址（頁面不得含外部連結）
   function nodeCenter(n){return {x:n.x+nodeW(n)/2,y:n.y+H/2};}
   function hitNode(gx,gy,pred){var best=null;Object.keys(nodes).forEach(function(id){var n=nodes[id];if(!nodeVisible(id)||!pred(id,n))return;if(gx>=n.x&&gx<=n.x+nodeW(n)&&gy>=n.y&&gy<=n.y+H)best=id;});return best;}
   function activePlanOf(q){var out=null;(outE[q]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='plans'&&nodes[e.to]&&!nodes[e.to].collapsed)out=e.to;});return out;}
