@@ -13,7 +13,10 @@ status／resolved_by／resolved_at／note 四行——逐行文字替換，不�
 （flock 專案根目錄 fd，寫暫存檔再 os.replace）。
 
 輸出: `=== check_inbox: <root> ===`、每筆 `IN-001  pending  new_question  q:SQ2  <title>`、統計
-`pending a／done b／dismissed c`、WARNING（id 非連號、status 非法、kind 非法、target 不在 IR）、`結果: 完成`。
+`pending a／done b／dismissed c`、WARNING（id 非連號、status 非法、kind 非法、target 不在 IR、結構化 payload 不合法）、
+`結果: 完成`。kind 為 reassign／set_role（0.16.0 結構化動作，payload 見 progress_server.py）的 pending 項目，另印一行可直接
+執行的建議命令（`python3 <scripts>/reassign_question.py <root> --from … --inbox IN-xxx --dry-run` 或 set_figure_role.py），
+status skill 不得人工重做各步，一律跑腳本 --dry-run → 使用者同意 → --apply。
 exit code: 0 完成（收件匣不存在 → INFO）; 2 BLOCKER（根目錄不存在、收件匣無法解析、找不到指定 id、
 寫入驗證失敗）。本程式不讀也不寫任何 SSOT。
 """
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -32,12 +36,12 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from progress_server import (  # noqa: E402  同目錄的收件匣讀寫函式
-    ID_RE, INBOX_NAME, KINDS, STATUSES, RootLock, inbox_items, ir_node_ids, load_inbox, now_iso, write_inbox_text,
-    yaml_scalar,
+    ACTION_KINDS, ID_RE, INBOX_NAME, KINDS, STATUSES, RootLock, action_command, inbox_items, ir_node_ids, load_inbox, now_iso,
+    validate_payload, write_inbox_text, yaml_scalar,
 )
 
 
-def check_items(items: list[dict], node_ids: set[str] | None) -> list[str]:
+def check_items(items: list[dict], node_ids: set[str] | None, root: Path | None = None) -> list[str]:
     warnings: list[str] = []
     expected = 1
     for i, it in enumerate(items):
@@ -60,14 +64,30 @@ def check_items(items: list[dict], node_ids: set[str] | None) -> list[str]:
             warnings.append(f'{iid or i}: target 不在 IR 的節點裡（{target}）')
         if status == 'done' and not str(it.get('resolved_by') or ''):
             warnings.append(f'{iid or i}: status done 但 resolved_by 為空')
+        if kind in ACTION_KINDS and status == 'pending' and root is not None:
+            _norm, perr = validate_payload(root, kind, it.get('payload'))
+            if perr:
+                warnings.append(f'{iid or i}: payload 不合法（{perr}）')
     return warnings
 
 
-def list_items(items: list[dict]) -> None:
+def suggest_command(root: Path, it: dict) -> str:
+    """結構化項目的建議命令（--dry-run）；用相對本目錄的腳本名，root 用實際路徑。"""
+    argv = action_command(root, it, 'dry-run')
+    if not argv:
+        return ''
+    return 'python3 ' + ' '.join(shlex.quote(a) for a in [Path(argv[1]).name, *argv[2:]])
+
+
+def list_items(items: list[dict], root: Path | None = None) -> None:
     for it in items:
         if str(it.get('status') or 'pending') == 'pending':
             print(f'{str(it.get("id") or "?"):8s} {"pending":10s} {str(it.get("kind") or "?"):13s} '
                   f'{str(it.get("target") or "-"):24s} {str(it.get("title") or "")}')
+            if root is not None and str(it.get('kind') or '') in ACTION_KINDS:
+                cmd = suggest_command(root, it)
+                if cmd:
+                    print(f'         可直接：{cmd}')
     counts = {s: sum(1 for it in items if str(it.get('status') or '') == s) for s in STATUSES}
     print(f'pending {counts["pending"]}／done {counts["done"]}／dismissed {counts["dismissed"]}')
 
@@ -193,9 +213,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     items = inbox_items(data)
-    for w in check_items(items, ir_node_ids(root)):
+    for w in check_items(items, ir_node_ids(root), root):
         print(f'WARNING {w}')
-    list_items(items)
+    list_items(items, root)
     print('結果: 完成')
     return 0
 

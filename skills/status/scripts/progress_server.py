@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """進度頁面本機伺服器：讓 PROGRESS.html 的表單能把「新問題／新分析／意見」送進收件匣。
 
-用法: python3 progress_server.py <project-root> [--port N] [--host 127.0.0.1]
+用法: python3 progress_server.py <project-root> [--port N] [--host 127.0.0.1] [--allow-apply] [--daily-log <path>]
 
 設計（收件匣模式）:
     瀏覽器 PROGRESS.html ─POST /api/inbox─► 本程式（127.0.0.1）─append─► <root>/PROGRESS.inbox.yaml
     下次 session：status skill 讀收件匣 → 逐筆呈使用者裁決 → 由既有 skill 進 SSOT（記 D#／建 plan／改 goals）
                                           → check_inbox.py --resolve 標 done
+    結構化動作（0.16.0）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）或 set_role（圖表 role，
+    payload {figure, role} 或 {figures: {id: role}}）的項目，title／body 由本程式生成；整條 SSOT 變更鏈交給確定性腳本
+    reassign_question.py／set_figure_role.py，本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
+    瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
+    瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
 
 安全邊界:
 - 只綁 loopback：--host 只接受 127.0.0.1／localhost／::1，其餘印 BLOCKER 並 exit 2。
-- 只寫一個檔：<root>/PROGRESS.inbox.yaml（append-only；每筆 IN-### 連號）。不碰 goals／plans／results／
+- 預設只寫一個檔：<root>/PROGRESS.inbox.yaml（append-only；每筆 IN-### 連號）。不碰 goals／plans／results／
   validation／claims／decisions 等任何 SSOT；三個進度產物由 render_progress.py 重算（GET / 時觸發）。
+- 兩個 actions 端點預設關閉（403）；只有啟動時加 --allow-apply 才開。開了之後改 SSOT 的也不是本程式，而是被代跑的
+  腳本（它們自己備份、失敗還原、寫 reviews/ 的步驟紀錄）；每次 apply 另追記 <root>/PROGRESS.actions.log
+  （tab 分隔：時間、id、腳本、結果、D#）。--daily-log <path> 透傳給腳本（apply 時在該檔尾端 append 一段）。
+- 同一時間只跑一個 action（程序內 lock）；子程序有 timeout（dry-run 600 秒、apply 1800 秒）。
 - 靜態檔只提供 root 底下、副檔名在白名單內的檔；resolve 後跑出 root 或路徑含 `..` 一律 403。
 - 收件匣寫入用 fcntl.flock 鎖住專案根目錄的 fd，寫暫存檔再 os.replace，避免並行寫入互相覆蓋。
 - POST /api/inbox 若帶 Origin header，必須是 http://127.0.0.1:<port>／http://localhost:<port>／http://[::1]:<port>，
@@ -25,11 +34,18 @@
 - 啟動時（綁好埠、印 URL 前）先跑一次 render_progress.py <root>，失敗只記 stderr、照常啟動
 - GET  /            先重跑 render_progress.py <root>（timeout 20 秒；失敗回上次的 PROGRESS.html 並記 stderr），再回 HTML
 - GET  /<相對路徑>   root 底下的靜態檔（svg／png／jpg／jpeg／pdf／json／yaml／md／html／css／js／tsv／csv／txt）
-- GET  /api/ping     {"ok": true, "root": "...", "inbox_pending": n}
+- GET  /api/ping     {"ok": true, "root": "...", "inbox_pending": n, "actions_enabled": bool, "next_aq": "AQ5"}
 - GET  /api/inbox    收件匣 JSON
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
-                     核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400
+                     核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
+                     kind reassign／set_role 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
+                     （reassign 取 q:<from>、set_role 取 f:<figure>）；payload 由 validate_payload() 驗（from 存在於
+                     goals.sub_questions、to 未使用或省略、figure 存在於 manifest、role 合法）
+- POST /api/actions/dry-run  {id} → {"ok": true, "summary": "...", "token": "..."}；未開 --allow-apply 403、
+                     該筆不是 pending 的結構化項目 400、腳本失敗 200 且 ok false（summary 帶 BLOCKER 原因）
+- POST /api/actions/apply    {id, token} → {"ok": true, "decision": "D-055", "run_log": "reviews/…json", "summary"}；
+                     token 與現行 SSOT 狀態不符 409（期間有別的 session 改了 SSOT，請重跑 dry-run）
 - 其他方法 405。所有回應 Cache-Control: no-store。stderr 一行一請求。Ctrl+C 乾淨退出。
 """
 from __future__ import annotations
@@ -40,9 +56,11 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -56,7 +74,9 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-KINDS = ('new_question', 'new_analysis', 'comment')
+KINDS = ('new_question', 'new_analysis', 'comment', 'reassign', 'set_role')
+ACTION_KINDS = ('reassign', 'set_role')
+ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 ALLOWED_EXT = {'.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -68,7 +88,9 @@ TITLE_MAX, BODY_MAX, AUTHOR_MAX = 200, 5000, 100
 RENDER_TIMEOUT = 20
 INBOX_HEADER = ('# 進度頁面收件匣——由 progress_server.py 寫入、status skill 處理；不是事實來源，進 SSOT 須經人工確認。\n'
                 'schema_version: 1\nitems:\n')
-ITEM_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
+ITEM_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'payload', 'status', 'resolved_by', 'resolved_at', 'note')
+ACTIONS_LOG_NAME = 'PROGRESS.actions.log'
+DRYRUN_TIMEOUT, APPLY_TIMEOUT = 600, 1800
 ID_RE = re.compile(r'IN-(\d{3,})$')
 
 
@@ -82,6 +104,11 @@ def yaml_scalar(value) -> str:
 def format_item(item: dict) -> str:
     lines = [f'  - id: {yaml_scalar(item["id"])}']
     for fld in ITEM_FIELDS[1:]:
+        if fld == 'payload':
+            # JSON object 是合法的 YAML 流式 mapping；沒有 payload 的 kind 寫 {}
+            payload = item.get('payload') or {}
+            lines.append(f'    payload: {json.dumps(payload, ensure_ascii=False, sort_keys=True)}')
+            continue
         lines.append(f'    {fld}: {yaml_scalar(item.get(fld, ""))}')
     return '\n'.join(lines) + '\n'
 
@@ -154,7 +181,7 @@ def write_inbox_text(root: Path, text: str) -> None:
         raise
 
 
-def append_item(root: Path, kind: str, target: str, title: str, body: str, author: str) -> str:
+def append_item(root: Path, kind: str, target: str, title: str, body: str, author: str, payload: dict | None = None) -> str:
     """append 一筆 pending 項目；回傳新 id。既有位元組不動，只在檔尾加一個 block。"""
     with RootLock(root):
         text, data, err = load_inbox(root)
@@ -179,7 +206,7 @@ def append_item(root: Path, kind: str, target: str, title: str, body: str, autho
                 text = re.sub(r'^items:[ \t]*\[[ \t]*\][ \t]*$', 'items:', text, count=1, flags=re.M)
         new_id = next_id(items)
         item = {'id': new_id, 'at': now_iso(), 'kind': kind, 'target': target, 'title': title, 'body': body,
-                'author': author, 'status': 'pending', 'resolved_by': '', 'resolved_at': '', 'note': ''}
+                'author': author, 'payload': payload or {}, 'status': 'pending', 'resolved_by': '', 'resolved_at': '', 'note': ''}
         write_inbox_text(root, text + format_item(item))
     return new_id
 
@@ -216,12 +243,184 @@ def ir_node_ids(root: Path) -> set[str] | None:
         return None
 
 
+def _load_yaml_file(path: Path):
+    try:
+        return yaml.safe_load(path.read_text(encoding='utf-8')) if path.is_file() else None
+    except Exception:
+        return None
+
+
+def goals_ids(root: Path) -> tuple[list[str], list[str]]:
+    """(sub_questions ids, appendix_questions ids)；project.yaml 缺或壞 → 兩個空清單。"""
+    proj = _load_yaml_file(root / 'project.yaml')
+    goals = (proj or {}).get('goals') if isinstance(proj, dict) else None
+    goals = goals if isinstance(goals, dict) else {}
+    sq = [str(x.get('id')) for x in (goals.get('sub_questions') or []) if isinstance(x, dict) and x.get('id')]
+    aq = [str(x.get('id')) for x in (goals.get('appendix_questions') or []) if isinstance(x, dict) and x.get('id')]
+    return sq, aq
+
+
+def used_question_ids(root: Path) -> set[str]:
+    sq, aq = goals_ids(root)
+    used = set(sq) | set(aq)
+    index = _load_yaml_file(root / 'analysis/plans/index.yaml')
+    if isinstance(index, dict):
+        used |= {str((e or {}).get('sq') or '') for e in (index.get('plans') or []) if isinstance(e, dict)}
+    plans_dir = root / 'analysis/plans'
+    if plans_dir.is_dir():
+        for path in plans_dir.glob('*-v*.yaml'):
+            used.add(path.name.split('-v')[0])
+    used.discard('')
+    return used
+
+
+def next_aq_id(root: Path) -> str:
+    n = 0
+    for qid in used_question_ids(root):
+        m = re.fullmatch(r'AQ(\d+)', qid)
+        if m:
+            n = max(n, int(m.group(1)))
+    return f'AQ{n + 1}'
+
+
+def manifest_figure_ids(root: Path) -> list[str] | None:
+    path = root / 'analysis/figures/manifest.json'
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get('figures'), list):
+        return None
+    return [str(f.get('id')) for f in doc['figures'] if isinstance(f, dict) and f.get('id')]
+
+
+def validate_payload(root: Path, kind: str, payload) -> tuple[dict | None, str]:
+    """結構化 kind 的 payload 檢查；回 (正規化後的 payload, 錯誤)。reassign → {from, to, primary_model}（to／primary_model
+    可為空字串）；set_role → {figures: {id: role}}（單筆 {figure, role} 也收成這個形狀）。"""
+    if kind not in ACTION_KINDS:
+        return {}, ''
+    if not isinstance(payload, dict):
+        return None, f'{kind} 需要 payload object'
+    if kind == 'reassign':
+        src = str(payload.get('from') or '').strip()
+        dst = str(payload.get('to') or '').strip()
+        pm = str(payload.get('primary_model') or '').strip()
+        if not re.fullmatch(r'SQ\d+', src):
+            return None, 'payload.from 須為 SQ<數字>'
+        sq, _aq = goals_ids(root)
+        if src not in sq:
+            return None, f'payload.from {src} 不在 goals.sub_questions'
+        if dst:
+            if not re.fullmatch(r'AQ\d+', dst):
+                return None, 'payload.to 須為 AQ<數字> 或省略'
+            if dst in used_question_ids(root):
+                return None, f'payload.to {dst} 已被使用'
+        if len(pm) > 200:
+            return None, 'payload.primary_model 過長'
+        return {'from': src, 'to': dst, 'primary_model': pm}, ''
+    figures = payload.get('figures')
+    if figures is None and payload.get('figure') is not None:
+        figures = {str(payload.get('figure')): payload.get('role')}
+    if not isinstance(figures, dict) or not figures:
+        return None, 'payload 須為 {figure, role} 或 {figures: {id: role}}'
+    ids = manifest_figure_ids(root)
+    if ids is None:
+        return None, 'analysis/figures/manifest.json 不存在或無法解析，無法核對 figure'
+    out: dict[str, str] = {}
+    for fid, role in figures.items():
+        fid = str(fid).strip()
+        role = str(role or '').strip().lower()
+        if fid not in ids:
+            return None, f'manifest 無圖表 {fid}'
+        if role not in ROLES:
+            return None, f'{fid} 的 role 須為 {"／".join(ROLES)} 之一'
+        out[fid] = role
+    return {'figures': out}, ''
+
+
+def action_title_body(kind: str, payload: dict, reason: str) -> tuple[str, str, str]:
+    """結構化 kind 的自動 title／body／預設 target。"""
+    if kind == 'reassign':
+        to = payload.get('to') or '（下一個 AQ 號）'
+        title = f'降階：{payload["from"]} → {to}'
+        body = f'主問題 {payload["from"]} 降為附錄問題 {to}'
+        if payload.get('primary_model'):
+            body += f'；primary_model 改為 {payload["primary_model"]}、原 primary 降為敏感度'
+        target = f'q:{payload["from"]}'
+    else:
+        pairs = '、'.join(f'{fid} → {role}' for fid, role in payload['figures'].items())
+        title = f'圖表 role：{pairs}'
+        body = f'改圖表 role：{pairs}'
+        target = f'f:{next(iter(payload["figures"]))}'
+    if reason:
+        body += '\n理由：' + reason
+    return title[:TITLE_MAX], body[:BODY_MAX], target
+
+
+def action_command(root: Path, item: dict, mode: str, daily_log: str = '', token: str = '') -> list[str] | None:
+    """由收件匣項目組出腳本命令列（mode 為 dry-run／apply）；不是結構化 kind 回 None。"""
+    kind = str(item.get('kind') or '')
+    payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
+    iid = str(item.get('id') or '')
+    if kind == 'reassign':
+        argv = [sys.executable, str(SCRIPT_DIR / 'reassign_question.py'), str(root), '--from', str(payload.get('from') or '')]
+        if payload.get('to'):
+            argv += ['--to', str(payload['to'])]
+        if payload.get('primary_model'):
+            argv += ['--primary-model', str(payload['primary_model'])]
+    elif kind == 'set_role':
+        figures = payload.get('figures') if isinstance(payload.get('figures'), dict) else (
+            {str(payload.get('figure')): payload.get('role')} if payload.get('figure') else {})
+        argv = [sys.executable, str(SCRIPT_DIR / 'set_figure_role.py'), str(root)]
+        for fid, role in figures.items():
+            argv += ['--figure', f'{fid}={role}']
+    else:
+        return None
+    if iid:
+        argv += ['--inbox', iid]
+    if mode == 'apply':
+        if daily_log:
+            argv += ['--daily-log', daily_log]
+        if token:
+            argv += ['--expect-token', token]
+    argv.append('--dry-run' if mode == 'dry-run' else '--apply')
+    return argv
+
+
+def action_token(root: Path, item: dict) -> str:
+    """與腳本同一套 token：SSOT 檔內容 hash ＋ 該筆的參數（from／to／primary_model／figures／inbox id）。"""
+    sys.path.insert(0, str(SCRIPT_DIR))
+    import ssot_actions_common as C  # noqa: E402
+    kind = str(item.get('kind') or '')
+    payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
+    iid = str(item.get('id') or '')
+    if kind == 'reassign':
+        extra = f'reassign:{payload.get("from") or ""}:{payload.get("to") or ""}:{payload.get("primary_model") or ""}:{iid}'
+    else:
+        figures = payload.get('figures') if isinstance(payload.get('figures'), dict) else (
+            {str(payload.get('figure')): str(payload.get('role') or '').lower()} if payload.get('figure') else {})
+        extra = 'set_role:' + json.dumps(figures, sort_keys=True) + f':{iid}'
+    return C.ssot_token(root, extra)
+
+
 def validate_submission(root: Path, payload) -> tuple[dict | None, str]:
     if not isinstance(payload, dict):
         return None, 'body 必須是 JSON object'
     kind = payload.get('kind')
     if kind not in KINDS:
         return None, f'kind 須為 {"／".join(KINDS)} 之一'
+    action_payload: dict = {}
+    if kind in ACTION_KINDS:
+        action_payload, err = validate_payload(root, kind, payload.get('payload'))
+        if err:
+            return None, err
+        reason = payload.get('reason') if isinstance(payload.get('reason'), str) else ''
+        if not reason and isinstance(payload.get('body'), str):
+            reason = payload['body']
+        title, body, default_target = action_title_body(kind, action_payload, reason.strip())
+        payload = dict(payload, title=title, body=body, target=payload.get('target') or default_target)
     title = payload.get('title')
     body = payload.get('body')
     if not isinstance(title, str) or not title.strip():
@@ -247,16 +446,50 @@ def validate_submission(root: Path, payload) -> tuple[dict | None, str]:
     author = payload.get('author') or ''
     if not isinstance(author, str) or len(author) > AUTHOR_MAX:
         return None, f'author 須為 {AUTHOR_MAX} 字以內的字串'
-    return {'kind': kind, 'target': target, 'title': title.strip(), 'body': body.strip(), 'author': author.strip()}, ''
+    return {'kind': kind, 'target': target, 'title': title.strip(), 'body': body.strip(), 'author': author.strip(),
+            'payload': action_payload}, ''
+
+
+def run_action(root: Path, item: dict, mode: str, daily_log: str = '', token: str = '') -> dict:
+    """代跑腳本；回 {ok, rc, summary, token?, decision?, run_log?}。summary 為腳本 stdout（≤ 8000 字）。"""
+    argv = action_command(root, item, mode, daily_log, token)
+    if argv is None:
+        return {'ok': False, 'rc': -1, 'summary': '不是結構化動作項目'}
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
+                              timeout=DRYRUN_TIMEOUT if mode == 'dry-run' else APPLY_TIMEOUT, cwd=str(root))
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'rc': -1, 'summary': f'{Path(argv[1]).name} 逾時'}
+    except OSError as exc:
+        return {'ok': False, 'rc': -1, 'summary': f'無法執行 {Path(argv[1]).name}: {exc}'}
+    out = ((proc.stdout or '') + (proc.stderr or ''))[-8000:]
+    result = {'ok': proc.returncode == 0, 'rc': proc.returncode, 'summary': out, 'script': Path(argv[1]).name,
+              'command': ' '.join(shlex.quote(a) for a in argv[1:])}
+    m = re.search(r'^token: (\S+)$', out, re.M)
+    if m:
+        result['token'] = m.group(1)
+    m = re.search(r'決策 (D-\d{3})', out)
+    if m:
+        result['decision'] = m.group(1)
+    m = re.search(r'run log (\S+)', out)
+    if m:
+        result['run_log'] = m.group(1)
+    return result
+
+
+def append_actions_log(root: Path, item_id: str, script: str, result: str, decision: str) -> None:
+    with (root / ACTIONS_LOG_NAME).open('a', encoding='utf-8') as fh:
+        fh.write('\t'.join([now_iso(), item_id, script, result, decision]) + '\n')
 
 
 # ---------- HTTP ----------
 
-def make_handler(root: Path):
+def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
     root = root.resolve()
+    action_lock = threading.Lock()   # 同一時間只跑一個 action
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = 'progress_server/0.12'
+        server_version = 'progress_server/0.16'
         protocol_version = 'HTTP/1.1'
 
         # --- 共用回應 ---
@@ -286,7 +519,8 @@ def make_handler(root: Path):
             if path == '/api/ping':
                 _text, data, err = load_inbox(root)
                 pending = sum(1 for it in inbox_items(data) if it.get('status', 'pending') == 'pending') if not err else 0
-                return self._json(200, {'ok': True, 'root': str(root), 'inbox_pending': pending})
+                return self._json(200, {'ok': True, 'root': str(root), 'inbox_pending': pending, 'actions_enabled': allow_apply,
+                                        'next_aq': next_aq_id(root)})
             if path == '/api/inbox':
                 _text, data, err = load_inbox(root)
                 if err:
@@ -325,7 +559,7 @@ def make_handler(root: Path):
         # --- POST ---
         def do_POST(self) -> None:
             path = unquote(urlsplit(self.path).path)
-            if path != '/api/inbox':
+            if path not in ('/api/inbox', '/api/actions/dry-run', '/api/actions/apply'):
                 return self._json(404 if path.startswith('/api/') else 405, {'ok': False, 'error': '無此端點' if path.startswith('/api/') else '方法不允許'})
             # 安全邊界：有 Origin 就必須是本伺服器自己的來源（不回任何 CORS header，跨來源 preflight 自然失敗）
             origin = self.headers.get('Origin')
@@ -345,6 +579,8 @@ def make_handler(root: Path):
                 payload = json.loads(raw.decode('utf-8'))
             except Exception:
                 return self._json(400, {'ok': False, 'error': 'body 不是合法 JSON'})
+            if path != '/api/inbox':
+                return self._action(path, payload)
             item, err = validate_submission(root, payload)
             if err:
                 return self._json(400, {'ok': False, 'error': err})
@@ -355,6 +591,46 @@ def make_handler(root: Path):
             except OSError as exc:
                 return self._json(500, {'ok': False, 'error': f'寫入失敗: {exc}'})
             self._json(201, {'ok': True, 'id': new_id})
+
+        def _action(self, path: str, payload) -> None:
+            """/api/actions/dry-run 與 /api/actions/apply：預設 403；只代跑腳本，不自己改任何 SSOT。"""
+            if not allow_apply:
+                return self._json(403, {'ok': False, 'error': '伺服器未開 --allow-apply，動作端點關閉'})
+            if not isinstance(payload, dict) or not isinstance(payload.get('id'), str):
+                return self._json(400, {'ok': False, 'error': 'body 須為 {id, token?}'})
+            _text, data, err = load_inbox(root)
+            if err:
+                return self._json(500, {'ok': False, 'error': f'{INBOX_NAME} 無法解析: {err}'})
+            item = next((it for it in inbox_items(data) if str(it.get('id') or '') == payload['id']), None)
+            if item is None:
+                return self._json(404, {'ok': False, 'error': f'收件匣無 {payload["id"]}'})
+            if str(item.get('status') or 'pending') != 'pending' or str(item.get('kind') or '') not in ACTION_KINDS:
+                return self._json(400, {'ok': False, 'error': f'{payload["id"]} 不是 pending 的結構化項目'})
+            mode = 'dry-run' if path.endswith('/dry-run') else 'apply'
+            if not action_lock.acquire(blocking=False):
+                return self._json(409, {'ok': False, 'error': '另一個動作正在執行，請稍後'})
+            try:
+                if mode == 'apply':
+                    token = payload.get('token')
+                    if not isinstance(token, str) or not token:
+                        return self._json(400, {'ok': False, 'error': '套用前須先預覽（缺 token）'})
+                    if token != action_token(root, item):
+                        return self._json(409, {'ok': False, 'error': 'SSOT 狀態已改變（期間有別的 session 動過檔案），請重跑預覽'})
+                    result = run_action(root, item, 'apply', daily_log, token)
+                    append_actions_log(root, payload['id'], result.get('script', '?'), 'ok' if result['ok'] else f'failed(rc={result["rc"]})',
+                                       result.get('decision', ''))
+                    if result['ok']:
+                        rerender(root, 'apply 之後')
+                else:
+                    result = run_action(root, item, 'dry-run')
+                    if result['ok'] and not result.get('token'):
+                        result['ok'] = False
+                        result['summary'] += '\n（腳本沒有印出 token）'
+            finally:
+                action_lock.release()
+            if not result['ok']:
+                result['error'] = f'{result.get("script", "腳本")} 未完成（rc={result["rc"]}）'
+            self._json(200, {'ok': result['ok'], 'mode': mode, **{k: v for k, v in result.items() if k != 'ok'}})
 
         def _own_origins(self) -> set[str]:
             port = self.server.server_address[1]
@@ -369,14 +645,15 @@ def make_handler(root: Path):
     return Handler
 
 
-def make_server(root: Path, host: str = '127.0.0.1', port: int = 0) -> ThreadingHTTPServer:
-    """建立只綁 loopback 的伺服器（port 0 = 自動選埠）；host 非 loopback 丟 ValueError。"""
+def make_server(root: Path, host: str = '127.0.0.1', port: int = 0, allow_apply: bool = False,
+                daily_log: str = '') -> ThreadingHTTPServer:
+    """建立只綁 loopback 的伺服器（port 0 = 自動選埠）；host 非 loopback 丟 ValueError。allow_apply 才開 actions 端點。"""
     if host not in LOOPBACK:
         raise ValueError(f'只允許綁 loopback（127.0.0.1／localhost／::1），不接受 {host}')
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f'專案根目錄不存在: {root}')
-    server = ThreadingHTTPServer((host, port), make_handler(root))
+    server = ThreadingHTTPServer((host, port), make_handler(root, allow_apply, daily_log))
     server.daemon_threads = True
     return server
 
@@ -386,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
     parser.add_argument('--port', type=int, default=8765, help='埠號（0＝自動選）')
     parser.add_argument('--host', default='127.0.0.1', help='只接受 127.0.0.1／localhost／::1')
+    parser.add_argument('--allow-apply', action='store_true', help='開放 /api/actions/dry-run 與 /api/actions/apply（預設關閉）')
+    parser.add_argument('--daily-log', default='', metavar='PATH', help='apply 時透傳給腳本，在該檔尾端 append 一段')
     args = parser.parse_args(argv)
     if args.host not in LOOPBACK:
         print(f'BLOCKER 只允許綁 loopback（127.0.0.1／localhost／::1），不接受 --host {args.host}', file=sys.stderr)
@@ -395,7 +674,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER 專案根目錄不存在: {args.root}', file=sys.stderr)
         return 2
     try:
-        server = make_server(root, args.host, args.port)
+        server = make_server(root, args.host, args.port, args.allow_apply, args.daily_log)
     except OSError as exc:
         print(f'BLOCKER 無法綁定 {args.host}:{args.port}: {exc}', file=sys.stderr)
         return 2
@@ -403,7 +682,9 @@ def main(argv: list[str] | None = None) -> int:
     host, port = server.server_address[0], server.server_address[1]
     shown = '127.0.0.1' if host in ('127.0.0.1', '::1') else host
     print(f'http://{shown}:{port}/', file=sys.stderr)
-    print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}；Ctrl+C 結束', file=sys.stderr)
+    print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}'
+          + ('；--allow-apply 已開（actions 端點代跑 reassign_question.py／set_figure_role.py，追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
+          + '；Ctrl+C 結束', file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
