@@ -40,6 +40,8 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(PLUGIN / 'skills/study-design/scripts'))
 import plan_common  # noqa: E402
 import progress_server as ps  # noqa: E402
+import reassign_question as _rq  # noqa: E402
+V = _rq.VERSION
 
 PROJECT = '''pipeline:
   version: "0.7.3"
@@ -462,7 +464,7 @@ def test_apply_reassign_full_chain(tmp: Path) -> None:
     d = decs[-1]
     assert d['stage'] == 'evaluate' and d['question'] == 'AQ2' and str(d['date']) == '2026-09-15'
     assert d['checkpoint'] == 'SQ1 降為附錄問題 AQ2（AQ1 不動、空號不重編）；AQ2-v1 supersedes SQ1-v1，只改歸屬'
-    assert d['method'].startswith('reassign_question.py 0.16.0 --from SQ1 --to AQ2 --inbox IN-001 --waiver-decision D-001 --apply；步驟紀錄 reviews/reassign-SQ1-AQ2-2026-09-15.json')
+    assert d['method'].startswith(f'reassign_question.py {V} --from SQ1 --to AQ2 --inbox IN-001 --waiver-decision D-001 --apply；步驟紀錄 reviews/reassign-SQ1-AQ2-2026-09-15.json')
     for piece in ('(1) project.yaml', f'content_hash {new_plan["content_hash"]}', '(3) analysis/results.json：3 鍵 plan_id SQ1-v1 → AQ2-v1（k1／k2／r1）',
                   '(4) analysis/validation.yaml：V1 改掛 AQ2／AQ2-v1', f'{before_val["results_fingerprint"]} → {val["results_fingerprint"]}',
                   '(5) rerun waiver：reviews/rerun-waiver-2026-09-15.json', '(6) check_coverage：TAMPER 只有 AQ2 新增、SQ1 被移除兩筆 → --update-snapshot → 0 tamper',
@@ -489,7 +491,7 @@ def test_apply_reassign_full_chain(tmp: Path) -> None:
     assert ir['graph']['question_aliases'].get('SQ1') == 'AQ2' and 'q:AQ2' in {n['id'] for n in ir['graph']['nodes']}
     assert (root / 'DECISIONS-TIMELINE.md').is_file() and 'D-003' in (root / 'DECISIONS-TIMELINE.md').read_text(encoding='utf-8')
     dl = daily.read_text(encoding='utf-8')
-    assert dl.startswith('# Daily Log 2026-09-15\n\n## 既有段落\n- 不得被覆寫\n') and '## reassign_question.py 0.16.0：SQ1 降為附錄問題 AQ2（D-003）' in dl
+    assert dl.startswith('# Daily Log 2026-09-15\n\n## 既有段落\n- 不得被覆寫\n') and f'## reassign_question.py {V}：SQ1 降為附錄問題 AQ2（D-003）' in dl
     assert '- project.yaml\n' in dl and '- project.yaml.pre_sq1_to_aq2_backup' in dl
     # checker 全過
     run('skills/study-design/scripts/check_plan.py', root, '--require-confirmed', '--results', 'analysis/results.json')
@@ -611,7 +613,7 @@ def test_inbox_payload_and_check_inbox(tmp: Path) -> None:
     assert not err and item['title'] == '降階：SQ2 → AQ3' and item['body'] == '主問題 SQ2 降為附錄問題 AQ3；primary_model 改為 M2、原 primary 降為敏感度\n理由：要改' and item['target'] == 'q:SQ2'
     assert ps.validate_submission(root, {'kind': 'reassign', 'payload': {'from': 'SQ9'}})[1] == 'payload.from SQ9 不在 goals.sub_questions'
     assert ps.validate_submission(root, {'kind': 'comment', 'target': 'q:SQ1', 'title': 't', 'body': 'b'})[0]['payload'] == {}
-    assert ps.validate_submission(root, {'kind': 'bogus', 'title': 't', 'body': 'b'})[1].startswith('kind 須為 new_question／new_analysis／comment／reassign／set_role')
+    assert ps.validate_submission(root, {'kind': 'bogus', 'title': 't', 'body': 'b'})[1].startswith('kind 須為 new_question／new_analysis／comment／reassign／')
     iid = ps.append_item(root, **item)
     text = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     assert f'  - id: "{iid}"' in text and '    payload: {"from": "SQ2", "primary_model": "M2", "to": "AQ3"}' in text and 'schema_version: 1' in text
@@ -708,7 +710,7 @@ def test_server_endpoints(tmp: Path) -> None:
         assert {f['id']: f.get('role') for f in m['figures']}['F_b'] == 'supplementary'
         log = (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().split('\t')
         assert log[1:] == ['IN-002', 'set_figure_role.py', 'ok', 'D-003'], log
-        assert '## set_figure_role.py 0.16.0：圖表 role 改定（D-003）' in daily.read_text(encoding='utf-8')
+        assert f'## set_figure_role.py {V}：圖表 role 改定（D-003）' in daily.read_text(encoding='utf-8')
         assert plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'][1]['status'] == 'done'
         assert _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': token})[0] == 400   # 已結案
         # reassign 也能經 server 走完

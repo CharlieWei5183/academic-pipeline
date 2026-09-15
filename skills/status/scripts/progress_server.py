@@ -7,9 +7,12 @@
     瀏覽器 PROGRESS.html ─POST /api/inbox─► 本程式（127.0.0.1）─append─► <root>/PROGRESS.inbox.yaml
     下次 session：status skill 讀收件匣 → 逐筆呈使用者裁決 → 由既有 skill 進 SSOT（記 D#／建 plan／改 goals）
                                           → check_inbox.py --resolve 標 done
-    結構化動作（0.16.0）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）或 set_role（圖表 role，
-    payload {figure, role} 或 {figures: {id: role}}）的項目，title／body 由本程式生成；整條 SSOT 變更鏈交給確定性腳本
-    reassign_question.py／set_figure_role.py，本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
+    結構化動作（0.16.0；0.16.1 加四種）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）、
+    promote（附錄問題升回主問題，{from, to?}）、set_role（圖表 role，{figure, role} 或 {figures: {id: role}}）、
+    move_plan（分析計畫搬到別的問題，{plan, to_question}）、move_sensitivity（敏感性子分析搬到別的 plan，{plan, item, to_plan}）、
+    reorder（問題清單調順序，{list, order}）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
+    （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py），
+    本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
     瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
 
@@ -34,14 +37,16 @@
 - 啟動時（綁好埠、印 URL 前）先跑一次 render_progress.py <root>，失敗只記 stderr、照常啟動
 - GET  /            先重跑 render_progress.py <root>（timeout 20 秒；失敗回上次的 PROGRESS.html 並記 stderr），再回 HTML
 - GET  /<相對路徑>   root 底下的靜態檔（svg／png／jpg／jpeg／pdf／json／yaml／md／html／css／js／tsv／csv／txt）
-- GET  /api/ping     {"ok": true, "root": "...", "inbox_pending": n, "actions_enabled": bool, "next_aq": "AQ5"}
+- GET  /api/ping     {"ok": true, "root": "...", "inbox_pending": n, "actions_enabled": bool, "next_aq": "AQ5", "next_sq": "SQ6"}
 - GET  /api/inbox    收件匣 JSON
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
                      核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
-                     kind reassign／set_role 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
-                     （reassign 取 q:<from>、set_role 取 f:<figure>）；payload 由 validate_payload() 驗（from 存在於
-                     goals.sub_questions、to 未使用或省略、figure 存在於 manifest、role 合法）
+                     六種結構化 kind 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
+                     （reassign／promote 取 q:<from>、set_role 取 f:<figure>、move_plan 取 p:<plan>、move_sensitivity 取
+                     p:<plan>#<item>、reorder 取 q:<order[0]>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
+                     清單、to 未使用或省略、figure 存在於 manifest、role 合法、plan 為 active、目標問題沒有 active plan、
+                     robustness 項目存在、order 的 id 集合相同）
 - POST /api/actions/dry-run  {id} → {"ok": true, "summary": "...", "token": "..."}；未開 --allow-apply 403、
                      該筆不是 pending 的結構化項目 400、腳本失敗 200 且 ok false（summary 帶 BLOCKER 原因）
 - POST /api/actions/apply    {id, token} → {"ok": true, "decision": "D-055", "run_log": "reviews/…json", "summary"}；
@@ -74,8 +79,8 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-KINDS = ('new_question', 'new_analysis', 'comment', 'reassign', 'set_role')
-ACTION_KINDS = ('reassign', 'set_role')
+ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder')   # 與 ssot_actions_common.ACTIONS 同序
+KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
@@ -243,117 +248,27 @@ def ir_node_ids(root: Path) -> set[str] | None:
         return None
 
 
-def _load_yaml_file(path: Path):
-    try:
-        return yaml.safe_load(path.read_text(encoding='utf-8')) if path.is_file() else None
-    except Exception:
-        return None
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ssot_actions_common as _C  # noqa: E402  dispatch 表、payload 驗證、token 與各腳本共用
 
-
-def goals_ids(root: Path) -> tuple[list[str], list[str]]:
-    """(sub_questions ids, appendix_questions ids)；project.yaml 缺或壞 → 兩個空清單。"""
-    proj = _load_yaml_file(root / 'project.yaml')
-    goals = (proj or {}).get('goals') if isinstance(proj, dict) else None
-    goals = goals if isinstance(goals, dict) else {}
-    sq = [str(x.get('id')) for x in (goals.get('sub_questions') or []) if isinstance(x, dict) and x.get('id')]
-    aq = [str(x.get('id')) for x in (goals.get('appendix_questions') or []) if isinstance(x, dict) and x.get('id')]
-    return sq, aq
-
-
-def used_question_ids(root: Path) -> set[str]:
-    sq, aq = goals_ids(root)
-    used = set(sq) | set(aq)
-    index = _load_yaml_file(root / 'analysis/plans/index.yaml')
-    if isinstance(index, dict):
-        used |= {str((e or {}).get('sq') or '') for e in (index.get('plans') or []) if isinstance(e, dict)}
-    plans_dir = root / 'analysis/plans'
-    if plans_dir.is_dir():
-        for path in plans_dir.glob('*-v*.yaml'):
-            used.add(path.name.split('-v')[0])
-    used.discard('')
-    return used
+ACTIONS = _C.ACTIONS
+goals_ids = _C.goals_ids
+used_question_ids = _C.used_question_ids
+manifest_figure_ids = _C.manifest_figure_ids
+validate_payload = _C.validate_payload
 
 
 def next_aq_id(root: Path) -> str:
-    n = 0
-    for qid in used_question_ids(root):
-        m = re.fullmatch(r'AQ(\d+)', qid)
-        if m:
-            n = max(n, int(m.group(1)))
-    return f'AQ{n + 1}'
+    return _C.next_question_id(root, 'AQ')
 
 
-def manifest_figure_ids(root: Path) -> list[str] | None:
-    path = root / 'analysis/figures/manifest.json'
-    if not path.is_file():
-        return None
-    try:
-        doc = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-    if not isinstance(doc, dict) or not isinstance(doc.get('figures'), list):
-        return None
-    return [str(f.get('id')) for f in doc['figures'] if isinstance(f, dict) and f.get('id')]
-
-
-def validate_payload(root: Path, kind: str, payload) -> tuple[dict | None, str]:
-    """結構化 kind 的 payload 檢查；回 (正規化後的 payload, 錯誤)。reassign → {from, to, primary_model}（to／primary_model
-    可為空字串）；set_role → {figures: {id: role}}（單筆 {figure, role} 也收成這個形狀）。"""
-    if kind not in ACTION_KINDS:
-        return {}, ''
-    if not isinstance(payload, dict):
-        return None, f'{kind} 需要 payload object'
-    if kind == 'reassign':
-        src = str(payload.get('from') or '').strip()
-        dst = str(payload.get('to') or '').strip()
-        pm = str(payload.get('primary_model') or '').strip()
-        if not re.fullmatch(r'SQ\d+', src):
-            return None, 'payload.from 須為 SQ<數字>'
-        sq, _aq = goals_ids(root)
-        if src not in sq:
-            return None, f'payload.from {src} 不在 goals.sub_questions'
-        if dst:
-            if not re.fullmatch(r'AQ\d+', dst):
-                return None, 'payload.to 須為 AQ<數字> 或省略'
-            if dst in used_question_ids(root):
-                return None, f'payload.to {dst} 已被使用'
-        if len(pm) > 200:
-            return None, 'payload.primary_model 過長'
-        return {'from': src, 'to': dst, 'primary_model': pm}, ''
-    figures = payload.get('figures')
-    if figures is None and payload.get('figure') is not None:
-        figures = {str(payload.get('figure')): payload.get('role')}
-    if not isinstance(figures, dict) or not figures:
-        return None, 'payload 須為 {figure, role} 或 {figures: {id: role}}'
-    ids = manifest_figure_ids(root)
-    if ids is None:
-        return None, 'analysis/figures/manifest.json 不存在或無法解析，無法核對 figure'
-    out: dict[str, str] = {}
-    for fid, role in figures.items():
-        fid = str(fid).strip()
-        role = str(role or '').strip().lower()
-        if fid not in ids:
-            return None, f'manifest 無圖表 {fid}'
-        if role not in ROLES:
-            return None, f'{fid} 的 role 須為 {"／".join(ROLES)} 之一'
-        out[fid] = role
-    return {'figures': out}, ''
+def next_sq_id(root: Path) -> str:
+    return _C.next_question_id(root, 'SQ')
 
 
 def action_title_body(kind: str, payload: dict, reason: str) -> tuple[str, str, str]:
-    """結構化 kind 的自動 title／body／預設 target。"""
-    if kind == 'reassign':
-        to = payload.get('to') or '（下一個 AQ 號）'
-        title = f'降階：{payload["from"]} → {to}'
-        body = f'主問題 {payload["from"]} 降為附錄問題 {to}'
-        if payload.get('primary_model'):
-            body += f'；primary_model 改為 {payload["primary_model"]}、原 primary 降為敏感度'
-        target = f'q:{payload["from"]}'
-    else:
-        pairs = '、'.join(f'{fid} → {role}' for fid, role in payload['figures'].items())
-        title = f'圖表 role：{pairs}'
-        body = f'改圖表 role：{pairs}'
-        target = f'f:{next(iter(payload["figures"]))}'
+    """結構化 kind 的自動 title／body／預設 target（由 dispatch 表生成）。"""
+    title, body, target = ACTIONS[kind]['title'](payload)
     if reason:
         body += '\n理由：' + reason
     return title[:TITLE_MAX], body[:BODY_MAX], target
@@ -363,46 +278,14 @@ def action_command(root: Path, item: dict, mode: str, daily_log: str = '', token
     """由收件匣項目組出腳本命令列（mode 為 dry-run／apply）；不是結構化 kind 回 None。"""
     kind = str(item.get('kind') or '')
     payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
-    iid = str(item.get('id') or '')
-    if kind == 'reassign':
-        argv = [sys.executable, str(SCRIPT_DIR / 'reassign_question.py'), str(root), '--from', str(payload.get('from') or '')]
-        if payload.get('to'):
-            argv += ['--to', str(payload['to'])]
-        if payload.get('primary_model'):
-            argv += ['--primary-model', str(payload['primary_model'])]
-    elif kind == 'set_role':
-        figures = payload.get('figures') if isinstance(payload.get('figures'), dict) else (
-            {str(payload.get('figure')): payload.get('role')} if payload.get('figure') else {})
-        argv = [sys.executable, str(SCRIPT_DIR / 'set_figure_role.py'), str(root)]
-        for fid, role in figures.items():
-            argv += ['--figure', f'{fid}={role}']
-    else:
-        return None
-    if iid:
-        argv += ['--inbox', iid]
-    if mode == 'apply':
-        if daily_log:
-            argv += ['--daily-log', daily_log]
-        if token:
-            argv += ['--expect-token', token]
-    argv.append('--dry-run' if mode == 'dry-run' else '--apply')
-    return argv
+    return _C.action_argv(root, kind, payload, str(item.get('id') or ''), mode, daily_log, token)
 
 
 def action_token(root: Path, item: dict) -> str:
-    """與腳本同一套 token：SSOT 檔內容 hash ＋ 該筆的參數（from／to／primary_model／figures／inbox id）。"""
-    sys.path.insert(0, str(SCRIPT_DIR))
-    import ssot_actions_common as C  # noqa: E402
+    """與腳本同一套 token：SSOT 檔內容 hash ＋ 該筆的參數（由 dispatch 表的 extra 生成）。"""
     kind = str(item.get('kind') or '')
     payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
-    iid = str(item.get('id') or '')
-    if kind == 'reassign':
-        extra = f'reassign:{payload.get("from") or ""}:{payload.get("to") or ""}:{payload.get("primary_model") or ""}:{iid}'
-    else:
-        figures = payload.get('figures') if isinstance(payload.get('figures'), dict) else (
-            {str(payload.get('figure')): str(payload.get('role') or '').lower()} if payload.get('figure') else {})
-        extra = 'set_role:' + json.dumps(figures, sort_keys=True) + f':{iid}'
-    return C.ssot_token(root, extra)
+    return _C.ssot_token(root, _C.action_token_extra(kind, payload, str(item.get('id') or '')))
 
 
 def validate_submission(root: Path, payload) -> tuple[dict | None, str]:
@@ -520,7 +403,7 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
                 _text, data, err = load_inbox(root)
                 pending = sum(1 for it in inbox_items(data) if it.get('status', 'pending') == 'pending') if not err else 0
                 return self._json(200, {'ok': True, 'root': str(root), 'inbox_pending': pending, 'actions_enabled': allow_apply,
-                                        'next_aq': next_aq_id(root)})
+                                        'next_aq': next_aq_id(root), 'next_sq': next_sq_id(root)})
             if path == '/api/inbox':
                 _text, data, err = load_inbox(root)
                 if err:
