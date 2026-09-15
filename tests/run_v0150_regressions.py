@@ -140,6 +140,9 @@ items:
   - {id: V2, sq: AQ1, plan_id: AQ1-v1, status: pass, primary_results: [a1]}
 """
 
+# 註：F_ext 與 F_supp 都呈現 k1（同一結果的 ED／SI 版）。若改成 F_ext 呈現 k2、F_supp 呈現 k1，兩條從 main 結果出發、分別落到 ext 與
+# supp 圖表的 depicts 幹線在同一走道必然巢狀（一條的來源與目標都落在另一條的垂直區間內），任何車道或列序都留 1 處交叉——
+# 這是版面本質上做不到 0 的情形，fixture 刻意避開以便斷言 crossings == 0。
 MANIFEST = {"figures": [
     {"id": "F_main", "file": "analysis/figures/f.svg", "results_keys": ["k1"], "role": "main", "status": "registered_not_reviewed", "caption": "主圖"},
     {"id": "F_ext", "file": "analysis/figures/f.svg", "results_keys": ["k1"], "role": "extended", "status": "registered_not_reviewed", "caption": "延伸（同一結果的 ED 版）"},
