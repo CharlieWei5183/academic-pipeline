@@ -206,7 +206,7 @@ PROGRESS.html
 PROGRESS.inbox.yaml
 ```
 
-最後四個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——「里程」分頁是每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，「關聯」分頁是問題→方法（計畫版本，舊版收合；plan 的 robustness 項收成一個敏感性分析群 `p:<pid>#S`，子分析縮排在群下）→驗證→結果（依宣告分主要／次要／未宣告，未驗證另標）→圖表的分層關聯圖，分上下兩個區帶——上半 Main 是主結果鏈（主問題、SQ 及其計畫／驗證／主要結果／圖表、決策），下半 Supplementary 是補充（敏感性分析群與子分析、次要結果、AQ 及其一切），每組敏感性分析只以一條線（`supplements`「敏感性對照」，同來源合成一條幹線）連回該分析的主要結果、其餘跨區帶的邊預設不畫（主問題降為附錄問題後，index 舊版、決策 links、validation item 仍寫的舊 id 以「問題 id 別名」併進現行問題，IR `graph.question_aliases`；IR 的 `graph` 鍵：節點座標與 `band` 由 Python 算好，SVG 內嵌，state 以底色與符號呈現，每個有產出的分析都連到它的結果，點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽；結果節點面板可看表與圖，圖表節點來自 `analysis/figures/manifest.json`，`--embed-figures` 可把圖檔內嵌），單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）；`.progress-hook.log` 是下段 hook 的執行紀錄，不是進度內容；`PROGRESS.inbox.yaml` 是進度頁面的收件匣（見「收件匣與本機伺服器」），同樣不是事實來源。
+最後四個檔都是自動產生、不是事實來源，要改內容請改對應的 SSOT 再重跑 renderer：`PROGRESS.ir.json` 是機器可讀的進度事實（`skills/status/scripts/render_progress.py` 唯讀全部 SSOT 後建出的 typed JSON IR，經自身 schema 驗證才落檔）；`PROGRESS.html` 是同一份 IR 的視覺——「里程」分頁是每個研究問題（SQ／AQ）與專案層各一條泳道、每站一個節點的里程圖，「關聯」分頁是問題→方法（計畫版本，舊版收合；plan 的 robustness 項收成一個敏感性分析群 `p:<pid>#S`，子分析縮排在群下）→驗證→結果（依宣告分主要／次要／未宣告，未驗證另標）→圖表的分層關聯圖，分三個區帶——Main 是主結果鏈（主問題、SQ 及其計畫／驗證／主要結果／主圖、決策），Extended Data 是延伸資料圖表（依 manifest `role`），Supplementary 是補充（敏感性分析群與子分析、次要結果、AQ 及其一切、補充圖表），每組敏感性分析以一條短垂線（`supplements`「敏感性對照」）連回所屬分析、其餘跨區帶的邊除結果→圖表外預設不畫；版面不交叉——已由驗證鏈覆蓋的產出線不畫、跳欄的線在中間欄留列穿過、欄內順序以 barycenter 重排、走道車道依交叉關係排序，並在 `graph.stats.crossings`／`edge_node_overlaps` 記錄預設檢視的線段交叉與穿過節點數（主問題降為附錄問題後，index 舊版、決策 links、validation item 仍寫的舊 id 以「問題 id 別名」併進現行問題，IR `graph.question_aliases`；IR 的 `graph` 鍵：節點座標與 `band` 由 Python 算好，SVG 內嵌，state 以底色與符號呈現，每個有產出的分析都連到它的結果，點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽；結果節點面板可看表與圖，圖表節點來自 `analysis/figures/manifest.json`，`--embed-figures` 可把圖檔內嵌），單一自含檔、離線可開；`DECISIONS-TIMELINE.md` 是 `decisions.yaml` 的表（`skills/status/scripts/render_decisions_timeline.py`：一張記錄表＋一張 mermaid gantt 里程碑圖，按 `question` 分 section；問題欄＝`question`，有執行問題時寫成「question › exec_issue」）；`.progress-hook.log` 是下段 hook 的執行紀錄，不是進度內容；`PROGRESS.inbox.yaml` 是進度頁面的收件匣（見「收件匣與本機伺服器」），同樣不是事實來源。
 
 ### 自動重算（hook）
 
@@ -243,6 +243,7 @@ python3 tests/run_v0120_regressions.py
 python3 tests/run_v0130_regressions.py
 python3 tests/run_v0140_regressions.py
 python3 tests/run_v0141_regressions.py
+python3 tests/run_v0150_regressions.py
 ```
 
 `tests/mini-project` 保留黃金答案；smoke 測試動態建立 v0.7 專案，驗證七種 adapter 的 plan／validation 契約、clean-room 重跑、資料稽核、results schema、evidence fingerprint、claim-audit、integrity 與中英文 consistency 的 source-staleness gate。腳本需要 Python 3.10+ 與 PyYAML；排版另依 typeset 說明使用 pandoc／LaTeX。
