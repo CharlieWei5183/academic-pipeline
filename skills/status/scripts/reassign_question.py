@@ -8,7 +8,7 @@
 九步（順序與 decisions.yaml D-050 的 method 欄一致；每步先備份、寫進 reviews/reassign-<from>-<to>-<date>.json）:
   1 project.yaml    goals.sub_questions 的 <from> 整段搬到 goals.appendix_questions 尾端改 id <to>（逐字搬移，只有 id 與
                     status_reason 前綴改；YAML 註解保留）；state 區塊比照既有註解再加一行
-  2 新 plan         <to>-v1.yaml 以 <from> 的 active plan 為底，只改 plan_id／version／sq／supersedes／role=exploratory／created_at／
+  2 新 plan         <to>-v<k>.yaml（k＝該 AQ 號既有版本 +1；全新號即 v1）以 <from> 的 active plan 為底，只改 plan_id／version／sq／supersedes／role=exploratory／created_at／
                     amendment_reason／changes／registration.registered_into_pipeline_at 尾綴／timing_justification 加一段（同 AQ4-v1 對
                     SQ2-v4 的差異集）；--primary-model 另把指定模型設為 primary、原 primary 降為新增的 robustness 敏感度（同 D-049）；
                     seal_artifact.py 封版、index.yaml 舊 plan 標 superseded／replaced_by、check_plan.py 要過
@@ -60,8 +60,8 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     to = args.dst or C.next_question_id(root, 'AQ')
     if not re.fullmatch(r'AQ\d+', to):
         raise ChainError(f'--to 須為 AQ<數字>（現值 {to}）')
-    if to in C.used_question_ids(root):
-        raise ChainError(f'{to} 已被使用（goals 或 plans index）')
+    if C.question_id_occupied(root, to):
+        raise ChainError(f'{to} 已被使用（goals 或 index.active）')
     old_pid = str((index.get('active') or {}).get(args.src) or '')
     if not old_pid:
         raise ChainError(f'index.active 無 {args.src} 的 active plan')
@@ -78,7 +78,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise ChainError(f'{args.src} 是最後一個主問題；搬走後 goals.sub_questions 為空，check_coverage 會擋。'
                          '確定要這樣做請加 --allow-empty-main（第 6 步改為只寫快照、不跑 check_coverage）')
     return {'project': project, 'to': to, 'old_pid': old_pid, 'old_plan': old_plan, 'inbox': inbox, 'waiver': waiver,
-            'remaining': remaining, 'other_aq': [str(x.get('id')) for x in aq]}
+            'remaining': remaining, 'other_aq': [str(x.get('id')) for x in aq], 'new_pid': C.next_plan_id(root, to)}
 
 
 # ---------- 第 1 步：project.yaml ----------
@@ -131,8 +131,8 @@ def verify_move(old_text: str, new_text: str, src: str, to: str) -> dict[str, An
 # ---------- 第 2 步：新 plan ----------
 
 def build_new_plan(old_plan: dict, ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace) -> tuple[dict, dict]:
-    src, to, old_pid = args.src, ctx['to'], ctx['old_pid']
-    new_pid = f'{to}-v1'
+    src, to, old_pid, new_pid = args.src, ctx['to'], ctx['old_pid'], ctx['new_pid']
+    ver = new_pid.split('-v')[1]
     inbox_txt = f'收件匣 {args.inbox} ' if args.inbox else '使用者裁定'
     prev = prior_reassign_decisions(Path(args.root))
     same = ('，同 ' + '／'.join(prev) + ' 的處理') if prev else ''
@@ -141,7 +141,7 @@ def build_new_plan(old_plan: dict, ctx: dict[str, Any], did: str, date: str, arg
     old_timing = str(old_plan.get('timing') or '')
     old_role = str(old_plan.get('role') or '')
     changes = [
-        f'檔頭：plan_id 由 {old_pid} 改為 {new_pid}；version 改為 1（{to} 的第一版）；sq 由 {src} 改為 {to}；supersedes 改為 {old_pid}；'
+        f'檔頭：plan_id 由 {old_pid} 改為 {new_pid}；version 改為 {ver}（{to} 的第 {ver} 版）；sq 由 {src} 改為 {to}；supersedes 改為 {old_pid}；'
         f'timing {"維持" if old_timing == "post-hoc-amendment" else "由 " + old_timing + " 改為"} post-hoc-amendment；created_at 改為 {date}；'
         'confirmed_at／confirmed_by／content_hash 於封版時填',
         f'role：由 {old_role} 改為 exploratory（附錄問題 defend 主答案、不計入主問題覆蓋；D-007）',
@@ -246,8 +246,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
     root = root.resolve()
     args = argparse.Namespace(**vars(args))
     args.root = str(root)
-    src, to, old_pid = args.src, ctx['to'], ctx['old_pid']
-    new_pid = f'{to}-v1'
+    src, to, old_pid, new_pid = args.src, ctx['to'], ctx['old_pid'], ctx['new_pid']
     log_rel = C.unique_report_path(root, f'reassign-{src}-{to}', date, '.json')
     ch = C.Chain(root, 'reassign_question', f'{src.lower()}_to_{to.lower()}', log_rel,
                  {'from': src, 'to': to, 'primary_model': args.primary_model or '', 'inbox': args.inbox or '', 'reason': args.reason or '',
@@ -349,8 +348,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: str, date: str, inbox_txt: str, sealed: dict, diff: dict,
                    rinfo: dict, vinfo: dict, fps: dict, waiver_rel: str, log_rel: str, extra: dict, mv: dict, keys: list[str]) -> dict[str, Any]:
-    src, to, old_pid = args.src, ctx['to'], ctx['old_pid']
-    new_pid = f'{to}-v1'
+    src, to, old_pid, new_pid = args.src, ctx['to'], ctx['old_pid'], ctx['new_pid']
     old_fp = vinfo.get('old') or {}
     remaining = '／'.join(ctx['remaining']) if ctx['remaining'] else '無（sub_questions 已空）'
     pm_line = ''

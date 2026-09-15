@@ -557,6 +557,17 @@ def used_question_ids(root: Path) -> set[str]:
     return used
 
 
+def question_id_occupied(root: Path, qid: str) -> bool:
+    """這個號現在有沒有人在用：在 goals 兩清單、或 index.active 之一。只有舊版 plan 檔（前一次搬移留下）的空號不算占用——
+    升回／搬回原號時新版接續該號既有版本（next_plan_id），空號不重編仍成立（自動配號一律取最大號 +1，見 next_question_id）。"""
+    sq, aq = goals_ids(root)
+    if qid in sq or qid in aq:
+        return True
+    index = load_yaml(root / 'analysis/plans/index.yaml')
+    active = (index.get('active') or {}) if isinstance(index, dict) else {}
+    return qid in active
+
+
 def next_question_id(root: Path, kind: str) -> str:
     n = 0
     for qid in used_question_ids(root):
@@ -1524,7 +1535,7 @@ def _validate_reassign(root: Path, payload) -> tuple[dict | None, str]:
     if dst:
         if not re.fullmatch(r'AQ\d+', dst):
             return None, 'payload.to 須為 AQ<數字> 或省略'
-        if dst in used_question_ids(root):
+        if question_id_occupied(root, dst):
             return None, f'payload.to {dst} 已被使用'
     if len(pm) > 200:
         return None, 'payload.primary_model 過長'
@@ -1544,9 +1555,8 @@ def _validate_promote(root: Path, payload) -> tuple[dict | None, str]:
     if dst:
         if not re.fullmatch(r'SQ\d+', dst):
             return None, 'payload.to 須為 SQ<數字> 或省略'
-        sq, _ = goals_ids(root)
-        if dst in sq:
-            return None, f'payload.to {dst} 已在 goals.sub_questions'
+        if question_id_occupied(root, dst):
+            return None, f'payload.to {dst} 已被使用'
     return {'from': src, 'to': dst}, ''
 
 
