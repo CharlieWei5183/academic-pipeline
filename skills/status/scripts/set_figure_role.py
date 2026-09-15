@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssot_actions_common as C  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
-VERSION = '0.16.0'
+VERSION = '0.16.1'
 ROLES = ('main', 'extended', 'supplementary')
 ROLE_ZH = {'main': 'Main（主圖）', 'extended': 'Extended Data（延伸）', 'supplementary': 'Supplementary（補充）'}
 MANIFEST_REL = 'analysis/figures/manifest.json'
@@ -342,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER {exc}')
         return 2
     did = C.next_decision_id(root)
-    extra = 'set_role:' + json.dumps(ctx['changes'], sort_keys=True) + f':{args.inbox}'
+    extra = C.action_token_extra('set_role', {'figures': ctx['changes']}, args.inbox)
     token0 = C.ssot_token(root, extra)
     if args.expect_token and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
