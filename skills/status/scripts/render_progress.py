@@ -19,12 +19,13 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 
 收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
 {present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}／promote {from, to}／
-move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}，其他 kind 為 {}）、
-有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0；0.16.1 起六種）：
+move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}／move_result {key, to_plan, to_item}，其他 kind 為 {}）、
+有 target 的 pending 項掛到圖節點 meta.inbox 並加徽章「收件 N」、stats.inbox_pending；關聯圖分頁另有「結構化動作」（0.16.0；0.16.1 起六種；0.16.2 起七種）：
 問題節點拖到另一個帶 → reassign／promote、拖到同帶另一個問題上（排在它之後）→ reorder；方法節點拖到沒有 active plan 的問題上 → move_plan；
-敏感性子分析拖到別的方法上 → move_sensitivity；圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
+敏感性子分析拖到別的方法上 → move_sensitivity；結果節點（主要／次要／未宣告）拖到別的方法上（A 型，成為其主要結果）或任何敏感性
+子分析上（B 型，成為其次要結果；含來源 plan 自己的 R）→ move_result；圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
 SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，非法落點改紅、放開不送出；放開後開表單（父節點欄位唯讀帶入、只填理由）
-→ POST /api/inbox。頁首「待套用動作」面板列 pending 的六種項目，「預覽變更」呼叫 /api/actions/dry-run、
+→ POST /api/inbox。頁首「待套用動作」面板列 pending 的七種項目，「預覽變更」呼叫 /api/actions/dry-run、
 「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）。拖放只產生收件匣項目，
 頁面不直接改任何 SSOT、預覽不進 IR；
 頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
@@ -1047,8 +1048,8 @@ EMBED_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
 INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見', 'reassign': '降階', 'promote': '升回主問題',
-               'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序'}
-INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder')   # 與 ssot_actions_common.ACTIONS 同序
+               'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果'}
+INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result')   # 與 ssot_actions_common.ACTIONS 同序
 INBOX_STATUSES = ('pending', 'done', 'dismissed')
 INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
@@ -2766,9 +2767,11 @@ GRAPH_JS = """
   function questionKind(id){return /^q:SQ\d+$/.test(id)?'SQ':(/^q:AQ\d+$/.test(id)?'AQ':'');}
   function isActivePlan(id){var n=nodes[id];return !!(n&&n.type==='method'&&!n.parent&&!n.collapsed&&/^p:[^#]+$/.test(id));}
   function isSensItem(id){var n=nodes[id];return !!(n&&n.type==='method'&&n.subtype==='sensitivity'&&!n.collapsed&&/^p:[^#]+#R\d+$/.test(id));}
-  // 0.16.1：問題（SQ／AQ）、方法（active plan）、敏感性子分析、圖表都可拖；落點由 dragCandidate 依游標位置即時判定
-  function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'));}
-  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序'};
+  // 0.16.1：問題（SQ／AQ）、方法（active plan）、敏感性子分析、圖表都可拖；0.16.2：結果節點（主要／次要／未宣告，來源 plan 由 results.json plan_id 判、須為 active plan）也可拖；落點由 dragCandidate 依游標位置即時判定
+  function resultOwner(id){var n=nodes[id];if(!n||n.type!=='result')return '';var pid=String((n.meta||{}).plan_id||'');return (pid&&isActivePlan('p:'+pid))?pid:'';}
+  function isDragResult(id){return !!resultOwner(id);}
+  function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)));}
+  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果'};
   // ---- 分頁 ----
   var tabs={milestones:document.getElementById('tab-milestones'),relations:document.getElementById('tab-relations')};
   var cur='milestones';
@@ -2952,6 +2955,13 @@ GRAPH_JS = """
       if(n.band==='main'&&band==='supp')return {kind:'reassign',ok:true,band:band,payload:{from:id.slice(2)}};
       if(n.band==='supp'&&band==='main')return {kind:'promote',ok:true,band:band,payload:{from:id.slice(2)}};
       return {kind:n.band==='main'?'reassign':'promote',ok:false,band:band,reason:'主問題只能降到 Supplementary 帶、附錄問題只能升到 Main 帶'};}
+    if(isDragResult(id)){var key=id.slice(2),owner=resultOwner(id),decl=(n.meta.declared_by||[]);
+      var t=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});if(!t)return null;
+      if(isSensItem(t)){var mm=/^p:(.+)#(R\d+)$/.exec(t);
+        if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 expected_keys 已含 '+key};
+        return {kind:'move_result',ok:true,target:t,label:'成為 '+mm[1]+' '+mm[2]+' 的次要結果',payload:{key:key,to_plan:mm[1],to_item:mm[2]}};}
+      if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 outputs 已含 '+key+(t==='p:'+owner?'，無事可做':'')};
+      return {kind:'move_result',ok:true,target:t,label:'成為 '+t.slice(2)+' 的主要結果'+(t==='p:'+owner?'（同一份 plan 出一版）':''),payload:{key:key,to_plan:t.slice(2),to_item:''}};}
     if(isSensItem(id)){var m=/^p:(.+)#(R\d+)$/.exec(id);
       var p=hitNode(gx,gy,function(k,x){return isActivePlan(k)&&k!=='p:'+m[1];});if(!p)return null;
       return {kind:'move_sensitivity',ok:true,target:p,payload:{plan:m[1],item:m[2],to_plan:p.slice(2)}};}
@@ -2973,7 +2983,7 @@ GRAPH_JS = """
     if(cand.band){var rc=bandRect(cand.band);var rect=document.createElementNS(SVGNS,'rect');rect.setAttribute('x',0);rect.setAttribute('y',rc.y);rect.setAttribute('width',rc.w);rect.setAttribute('height',rc.h);rect.setAttribute('class','band-hl '+cls);previewG.appendChild(rect);
       [bandTitles[cand.band],bandDivs[cand.band]].forEach(function(el){if(el)el.classList.add(cls);});}
     if(cand.target&&nodes[cand.target]){nodeEls[cand.target].classList.add(cls);var tc=nodeCenter(nodes[cand.target]);var line=document.createElementNS(SVGNS,'path');
-      line.setAttribute('d','M'+cx+','+cy+' L'+tc.x+','+tc.y);line.setAttribute('class','preview '+(cand.kind==='move_sensitivity'?'e-sensitivity':'e-plans')+' '+cls);previewG.appendChild(line);}
+      line.setAttribute('d','M'+cx+','+cy+' L'+tc.x+','+tc.y);line.setAttribute('class','preview '+(cand.kind==='move_sensitivity'||(cand.kind==='move_result'&&cand.payload&&cand.payload.to_item)?'e-sensitivity':'e-plans')+' '+cls);previewG.appendChild(line);}
     var lbl=document.createElementNS(SVGNS,'text');lbl.setAttribute('x',cx+12);lbl.setAttribute('y',cy-10);lbl.setAttribute('class','preview-label '+cls);
     lbl.textContent=cand.ok?(ACT_LABEL[cand.kind]+(cand.label?'：'+cand.label:'')+'（放開後填理由）'):cand.reason;previewG.appendChild(lbl);}
   // 放開：無候選 → 滑回原位不開表單；非法 → toast 說原因；合法 → 開表單（父節點欄位已帶入、唯讀），使用者只填理由
@@ -3089,6 +3099,7 @@ GRAPH_JS = """
     if(n.type==='question'&&questionKind(id)==='AQ'&&n.band==='supp'){h+='<dt>動作</dt><dd><span class="act-inline"><button type="button" class="act-promote" data-q="'+esc(id.slice(2))+'"'+(serverOk?'':' disabled title="用 progress_server.py 開啟才能送出"')+'>升回主問題（送收件匣）</button><span class="src">或把節點拖到 Main 帶；拖到同帶另一個問題上＝排在它之後</span></span></dd>';}
     if(isActivePlan(id)){h+='<dt>動作</dt><dd><span class="src">把這個方法節點拖到別的問題節點上＝搬到該問題之下（目標須沒有 active plan）</span></dd>';}
     if(isSensItem(id)){h+='<dt>動作</dt><dd><span class="src">把這個子分析拖到別的方法節點上＝搬到該 plan（兩邊各出一版）</span></dd>';}
+    if(isDragResult(id)){h+='<dt>動作</dt><dd><span class="src">把這個結果拖到別的方法節點上＝成為該 plan 的主要結果（outputs）；拖到任一敏感性子分析上＝成為它的次要結果（expected_keys）；兩邊各出一版、數字不動</span></dd>';}
     if(n.type==='figure'){var curRole=String(n.meta.role||'').toLowerCase();h+='<dt>動作</dt><dd><span class="act-inline"><select class="act-role-sel" data-fig="'+esc(id.slice(2))+'">'+ROLE_OPTS.map(function(o){return '<option value="'+o[0]+'"'+(curRole===o[0]?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')+'</select><button type="button" class="act-setrole" data-fig="'+esc(id.slice(2))+'"'+(serverOk?'':' disabled title="用 progress_server.py 開啟才能送出"')+'>改 role（送收件匣）</button><span class="src">或把節點拖到別的帶</span></span></dd>';}
     h+='<dt>meta</dt><dd>'+metaRows(n.meta,skip)+'</dd>';
     if(n.type==='result'){
@@ -3161,9 +3172,9 @@ GRAPH_JS = """
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok){enableInbox();nextAq=d.next_aq||'';nextSq=d.next_sq||'';if(d.actions_enabled)enableActions();else{var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py，但未開 --allow-apply：這裡只能看，預覽與套用請重啟 server 加 --allow-apply，或由 status skill 跑腳本。';}}}).catch(function(){});}catch(e){}}
   else{var hint0=document.getElementById('actions-hint');if(hint0)hint0.textContent='file:// 開啟的頁面無法呼叫伺服器：預覽與套用請用 progress_server.py --allow-apply 開啟，或由 status skill 跑腳本。';}
-  // ---- 結構化動作表單（六種 kind）：只送收件匣 ----
+  // ---- 結構化動作表單（七種 kind）：只送收件匣 ----
   var actForm=document.getElementById('act-form'),actKind='',actPayload=null,actErr=document.getElementById('act-err');
-  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder'];
+  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result'];
   function showActGroup(name){ACT_GROUPS.forEach(function(g){var el=document.getElementById('act-'+g+'-fields');if(el)el.hidden=(g!==name);});}
   function $v(id,val){document.getElementById(id).value=val;}
   function planLabel(pid){var n=nodes['p:'+pid];return n?n.label:pid;}
@@ -3191,6 +3202,7 @@ GRAPH_JS = """
     if(kind==='move_plan'){document.getElementById('act-form-title').textContent='搬方法：'+payload.plan+' → '+payload.to_question;showActGroup('move-plan');$v('act-mp-plan',planLabel(payload.plan));$v('act-mp-to',qLabel(payload.to_question));}
     else if(kind==='move_sensitivity'){document.getElementById('act-form-title').textContent='搬敏感性子分析：'+payload.plan+' '+payload.item+' → '+payload.to_plan;showActGroup('move-sens');$v('act-ms-plan',planLabel(payload.plan));$v('act-ms-item',(nodes['p:'+payload.plan+'#'+payload.item]||{label:payload.item}).label);$v('act-ms-to',planLabel(payload.to_plan));}
     else if(kind==='reorder'){document.getElementById('act-form-title').textContent='調順序：goals.'+payload.list;showActGroup('reorder');$v('act-ro-list',payload.list);$v('act-ro-order',payload.order.join(' → '));}
+    else if(kind==='move_result'){var rn=nodes['r:'+payload.key]||{label:payload.key,meta:{}};var own=String((rn.meta||{}).plan_id||'');document.getElementById('act-form-title').textContent='搬結果：'+payload.key+' → '+payload.to_plan+(payload.to_item?' '+payload.to_item:'');showActGroup('move-result');$v('act-mr-key',rn.label+(own?'（現屬 '+own+'，'+({primary:'主要',secondary:'次要',undeclared:'未宣告'}[rn.meta.result_kind]||'')+'結果）':''));$v('act-mr-to',planLabel(payload.to_plan));$v('act-mr-item',payload.to_item?((nodes['p:'+payload.to_plan+'#'+payload.to_item]||{label:payload.to_item}).label+'（B 型：成為次要結果）'):'（無；A 型：成為 outputs 主要結果）');}
     else return;
     actForm.hidden=false;document.getElementById('act-reason').focus();}
   function closeActForm(){actForm.hidden=true;}
@@ -3202,7 +3214,7 @@ GRAPH_JS = """
       payload={kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
     else if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return;}
       payload={kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
-    else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
+    else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
     else{actErr.textContent='未知的動作';return;}
     fetch('/api/inbox',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(d){return {status:r.status,d:d};});})
       .then(function(x){if(x.d&&x.d.ok){closeActForm();toast('已送入收件匣 '+x.d.id+'（待預覽與套用）');setTimeout(function(){location.reload();},900);}else{actErr.textContent=(x.d&&x.d.error)||('HTTP '+x.status);}})
@@ -3843,6 +3855,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span><span class="st unval" style="color:var(--expired);font-weight:700">未驗證</span>＝結果沒有任何驗證邊</span>',
         '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
+        '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果）；圖表拖到別的帶——放開後只送收件匣</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
@@ -3895,7 +3908,7 @@ def _inbox_block(ir: dict) -> list[str]:
 
 
 def _actions_panel(ir: dict, labels: dict) -> list[str]:
-    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
+    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
     或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位）。"""
     inbox = ir['inbox']
     acts = [it for it in inbox['items'] if it['status'] == 'pending' and it['kind'] in INBOX_ACTION_KINDS]
@@ -3914,7 +3927,7 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         lines.append('</tbody></table>')
     else:
         lines.append('<p class="src">沒有待套用的結構化項目。在關聯圖拖節點就會產生一筆：問題拖到另一個帶（降階／升回）或同帶另一個問題上（調順序）、'
-                     '方法拖到問題上（搬方法）、敏感性子分析拖到別的方法上（搬敏感性子分析）、圖表拖到別的帶（改 role）。</p>')
+                     '方法拖到問題上（搬方法）、敏感性子分析拖到別的方法上（搬敏感性子分析）、結果拖到別的方法或敏感性子分析上（搬結果）、圖表拖到別的帶（改 role）。</p>')
     lines.append('</details>')
     lines += [
         '<div id="act-form" hidden><form id="act-form-inner" autocomplete="off">',
@@ -3929,6 +3942,9 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<div id="act-move-sens-fields" hidden><label for="act-ms-plan">plan（來源）</label><input id="act-ms-plan" readonly>',
         '<label for="act-ms-item">item（要搬的 robustness 項目）</label><input id="act-ms-item" readonly>',
         '<label for="act-ms-to">to_plan（目標 plan；追加為 R&lt;n+1&gt;）</label><input id="act-ms-to" readonly></div>',
+        '<div id="act-move-result-fields" hidden><label for="act-mr-key">key（要搬的結果鍵）</label><input id="act-mr-key" readonly>',
+        '<label for="act-mr-to">to_plan（目標 plan）</label><input id="act-mr-to" readonly>',
+        '<label for="act-mr-item">to_item（目標敏感性子分析；空＝搬到 outputs）</label><input id="act-mr-item" readonly></div>',
         '<div id="act-reorder-fields" hidden><label for="act-ro-list">list</label><input id="act-ro-list" readonly>',
         '<label for="act-ro-order">order（新順序）</label><input id="act-ro-order" readonly></div>',
         '<div id="act-role-fields" hidden><label for="act-fig">figure</label><input id="act-fig" readonly>',

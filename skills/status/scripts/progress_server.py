@@ -7,12 +7,13 @@
     瀏覽器 PROGRESS.html ─POST /api/inbox─► 本程式（127.0.0.1）─append─► <root>/PROGRESS.inbox.yaml
     下次 session：status skill 讀收件匣 → 逐筆呈使用者裁決 → 由既有 skill 進 SSOT（記 D#／建 plan／改 goals）
                                           → check_inbox.py --resolve 標 done
-    結構化動作（0.16.0；0.16.1 加四種）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）、
+    結構化動作（0.16.0；0.16.1 加四種；0.16.2 加 move_result）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）、
     promote（附錄問題升回主問題，{from, to?}）、set_role（圖表 role，{figure, role} 或 {figures: {id: role}}）、
     move_plan（分析計畫搬到別的問題，{plan, to_question}）、move_sensitivity（敏感性子分析搬到別的 plan，{plan, item, to_plan}）、
-    reorder（問題清單調順序，{list, order}）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
-    （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py），
-    本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
+    reorder（問題清單調順序，{list, order}）、move_result（結果鍵搬到別的 plan 的 outputs 或某個敏感性子分析的 expected_keys，
+    {key, to_plan, to_item?}）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
+    （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py／
+    move_result.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
     瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
 
@@ -42,9 +43,9 @@
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
                      核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
-                     六種結構化 kind 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
+                     七種結構化 kind 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
                      （reassign／promote 取 q:<from>、set_role 取 f:<figure>、move_plan 取 p:<plan>、move_sensitivity 取
-                     p:<plan>#<item>、reorder 取 q:<order[0]>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
+                     p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 取 r:<key>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
                      清單、to 未使用或省略、figure 存在於 manifest、role 合法、plan 為 active、目標問題沒有 active plan、
                      robustness 項目存在、order 的 id 集合相同）
 - POST /api/actions/dry-run  {id} → {"ok": true, "summary": "...", "token": "..."}；未開 --allow-apply 403、
@@ -79,7 +80,7 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder')   # 與 ssot_actions_common.ACTIONS 同序
+ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result')   # 與 ssot_actions_common.ACTIONS 同序
 KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
@@ -566,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     shown = '127.0.0.1' if host in ('127.0.0.1', '::1') else host
     print(f'http://{shown}:{port}/', file=sys.stderr)
     print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}'
-          + ('；--allow-apply 已開（actions 端點代跑六種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
+          + ('；--allow-apply 已開（actions 端點代跑七種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
           + '；Ctrl+C 結束', file=sys.stderr)
     try:
         server.serve_forever()
