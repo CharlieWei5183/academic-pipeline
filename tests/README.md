@@ -411,6 +411,18 @@ v0.17.3 修進度頁面批次模式的流程：理由欄不再作廢已建的批
 - 登記錨點：CHANGELOG `## 0.17.3` 含 `--set-reason`、`BrokenPipeError`、「一鍵撤回」、「預覽後」、`run_v0171_regressions.py`（說明 0.17.1 的作廢規則改掉）、本檔名；README／`status` SKILL.md 含「預覽後」；`plugin.json` ≥ 0.17.3；相關檔不含 arm 的直譯字。
 - 舊測試：v0171 步驟 (5) 是先填理由再預覽，0.17.3 下仍成立，沒有改斷言；v0.7–v0.17.2 各支照跑。
 
+## run_v0181_regressions.py
+
+v0.18.1 關聯圖的問題帶（strip）：每個區帶內依問題分成橫向的帶，同一個問題延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊、帶與帶之間留 `STRIP_GAP`（1 列）；只改畫法與 IR 欄位，不改 SSOT。fixture 沿用 v0.16.1 的 `build_fixture`，另加兩張圖（`F_shared`：results_keys `[m1, k1]` → 取 goals 順序最前的 SQ1；`F_aq`：role extended、呈現 a1 → ext 帶多一條 AQ1 的帶）與兩筆決策（D-003 question SQ2、D-004 links 指 SQ2-v1）。
+
+- IR：每個非決策節點的 `strip`（問題節點是自己；plan／群／子分析跟 plan 的 sq；驗證跟 item 的 sq；結果跟 owner plan；次要／支撐跟父；圖表取呈現的結果所屬問題中 goals 順序最前者；F_c 孤兒 `""`）；決策節點沒有 `strip` 鍵；`graph.strips` 七條依區帶、goals 順序（main：SQ1、SQ2、孤兒；ext：SQ2、AQ1；supp：AQ1、AQ2），`stats.strips == 7`，每個非決策節點的 (band, strip) 都有帶；HTML 與 stdout 摘要句「問題帶 7」、節點 `data-strip`；`validate_ir` 空。
+- 版面：每帶各欄第一個可見節點的 y ＝ 帶的 y0、帶內連續、都在帶的範圍內；帶高＝最高那欄的列數（含 dummy）；同區帶相鄰兩帶 y0 差＝列數 × ROW_GAP ＋ STRIP_GAP、跨區帶差含 BAND_GAP ＋ BAND_TITLE_H；問題節點在帶首列、SQ1 在 GRAPH_PAD + BAND_TITLE_H；`q:main` 對 SQ1／SQ2 居中；同 (band, col) 依 order 排開時帶不交錯；dummy 列在目標帶內；D-003 在 SQ2 帶首列、D-004 接在其後（仍在 SQ2 帶內）、D-001／D-002 排在 main 全部帶之後、決策 order 依帶序；`crossings == 0`、`edge_node_overlaps == 0`；`<g id="graph-strips">` 四條 `line.strip-divider` 各在相鄰兩帶空隙正中；重畫決定性。
+- `validate_ir`：缺 `strip`、問題節點 strip 非自己、strip 無對應帶、y 不在帶內、問題節點不在首列、帶重疊、未依區帶順序、`stats.strips` 不符、缺 `stats.strips`、缺 `graph.strips`、帶的 band／question 非法；`schema_version` 仍 1。
+- JS（node）：錨點（`stripsOf`／`decisionStrip`／`stripKey`／`stripNow`／`restripStaged`、`STRIP_GAP`、`graph-strips`、`strip0`、`stripBoxes`、孤兒決策、分隔線重建）、`node --check`；把 v0.17.2 的函式清單加 `stripNow`／`restripStaged` 抽到 node 裡跑：reassign SQ2 → supp（子樹 strip 仍 q:SQ2、帶 supp；supp 帶序 AQ1、AQ2、SQ2；ext 圖表 F_b 不動）、move_result k1 → AQ1-v1（k1 跟目標 q:AQ1；留在 Main 的 F_a 不動）、move_sensitivity（子分析與其次要結果跟 SQ2）、move_plan AQ1-v1 → SQ2（plan 子樹跟 q:SQ2、ext 的 F_aq 不動、supp 只剩 AQ1／AQ2）、demote_plan（來源 plan 與其結果／子分析跟 q:SQ1）、nest_result（不變）、reorder（帶序跟問題順序）；再叫一次不變。
+- headless Chrome（有才跑）：JS `relayout()` 與 Python 的可見節點 transform、區帶元素、帶分隔線、svg 尺寸逐一相同；勾「顯示決策」後四筆決策的 y 與 IR 相同。
+- 登記錨點：CHANGELOG `## 0.18.1` 含「問題帶」、`STRIP_GAP`、`graph.strips`；README／`status` SKILL.md 含「問題帶」；本檔含 `run_v0181_regressions.py`；`plugin.json` ≥ 0.18.1；相關檔不含 arm 的直譯字（U+81C2）。
+- 舊測試的配合改動（版面 y 的舊斷言依新規則改）：`run_v0110`（SQ2 的 plan 在 240＝SQ1 帶 3 列＋STRIP_GAP、結果與決策 y 在各自的帶內連續、stats 加 `strips`、摘要句「問題帶 3」、空 fixture `strips: 0`）；`run_v0130`（SQ2 的 plan／問題在 SQ1 帶 6 列之後、結果欄 y 分兩帶）；`run_v0140`（同欄 y 改為各帶內連續且首列 ≥ 區帶 y0、摘要句加問題帶、圖例句的錨點、band 錯的連帶 IR-15）；`run_v0150`（dummy 列 y 改為各帶內連續、摘要句加問題帶）；`run_v0161`（拖曳落點的 ext／supp y 改讀 `band_frame`）；`run_v0172`（headless 的 m1 y＝k1 + 5 列）。
+
 ## run_v0180_regressions.py
 
 v0.18.0 兩件事：（1）關聯圖敏感性分析群縮排在所屬 plan 之下、區帶跟 plan 走——使用者 2026-09-16 的裁定，取代 2026-09-15 的「群放 Supplementary」畫法（只改畫法、不改 SSOT；`supplements` 敏感性對照短垂線停用，IR 不再出這種邊）；（2）新動作 `demote_plan`（kind `demote_plan`，payload `{plan, to_plan}`）：一份附錄問題的 active plan 整份降為另一份 active plan 的敏感性子分析。fixture 沿用 v0.16.1。

@@ -292,7 +292,7 @@ def test_bands_roles_and_badges() -> None:
                 assert e["default_visible"] is False, (a, b, t)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        assert f"；區帶 main {st['band_main_nodes']} 節點、ext 2 節點、supp {st['band_supp_nodes']} 節點、敏感性分析群 4 組；預設檢視線段交叉 0、穿過節點 0。" in out, out
+        assert f"；區帶 main {st['band_main_nodes']} 節點、ext 2 節點、supp {st['band_supp_nodes']} 節點、問題帶 {st['strips']}、敏感性分析群 4 組；預設檢視線段交叉 0、穿過節點 0。" in out, out   # v0.18.1：問題帶數
         assert "WARNING 關聯圖預設檢視有" not in out
 
 
@@ -377,7 +377,11 @@ def test_dummy_rows_and_via() -> None:
             allrows = sorted(cell + dms)
             assert [t[0] for t in allrows] == list(range(len(allrows))), (band, allrows)
             ys = [t[1] for t in allrows]
-            assert ys == [ys[0] + rp.ROW_GAP * i for i in range(len(ys))], (band, ys)
+            # v0.18.1：問題帶——同欄的列在各自的帶內連續，帶與帶之間留空隙
+            assert all(b > a and (b - a) % rp.ROW_GAP == 0 for a, b in zip(ys, ys[1:])), (band, ys)
+            for st_ in (st_ for st_ in g["strips"] if st_["band"] == band):
+                sub = [y for y in ys if st_["y0"] <= y <= st_["y1"]]
+                assert sub == [st_["y0"] + rp.ROW_GAP * i for i in range(len(sub))], (band, st_, sub)
             assert len({y for _od, y, _i in dms} & {y for _od, y, _i in cell}) == 0, "dummy 列不與節點同列"
         # 路徑：整條邊一條連續折線（M 一次），穿過 dummy 列的水平段從 dummy 左緣到右緣（x = 欄 3 的 x … + NODE_W）
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}

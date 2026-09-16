@@ -163,14 +163,14 @@ def test_headless_positions(tmp: Path) -> bool:
     try:
         T3._open_page(ws, port, form_on_drop=False)
         s0 = state()
-        assert s0['n'] == '0' and s0['k1']['parent'] == '' and s0['k2']['y'] == s0['k1']['y'] + ROW and s0['m1']['y'] == s0['k1']['y'] + 4 * ROW, s0   # v0.18.0：r1／r2（次要）在 main 帶排在 k2 與 m1 之間
+        assert s0['n'] == '0' and s0['k1']['parent'] == '' and s0['k2']['y'] == s0['k1']['y'] + ROW and s0['m1']['y'] == s0['k1']['y'] + 5 * ROW, s0   # v0.18.0：r1／r2（次要）在 main 帶排在 k2 與 m1 之間；v0.18.1：m1 在 SQ2 的問題帶、與 SQ1 帶（4 列）之間留 STRIP_GAP（1 列）
         y1, x1 = s0['k1']['y'], s0['k1']['x']
         # (1) 拖 r:k2 到 r:k1 → k2 在 k1 下一列、縮排；supports 線起於 k1 底、止於 k2 左緣
         d = json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))
         assert d['formHidden'] is True, d
         s1 = state()
         assert s1['n'] == '1' and s1['k2']['parent'] == 'r:k1' and s1['k2']['y'] == s1['k1']['y'] + ROW and s1['k2']['x'] == s1['k1']['x'] + INDENT and s1['k1']['y'] == y1, s1
-        assert s1['m1']['y'] == s1['k2']['y'] + 3 * ROW and len(s1['sup']) == 1 and s1['sup'][0][:2] == ['r:k1', 'r:k2'], s1
+        assert s1['m1']['y'] == s1['k2']['y'] + 4 * ROW and len(s1['sup']) == 1 and s1['sup'][0][:2] == ['r:k1', 'r:k2'], s1
         m = re.match(r'M([\d.]+),([\d.]+) ', s1['sup'][0][2])
         assert m and float(m.group(1)) == s1['k1']['x'] + 12 and float(m.group(2)) == s1['k1']['y'] + 36 and s1['sup'][0][2].endswith(f" L{s1['k2']['x']},{s1['k2']['y'] + 18}"), s1['sup']
         # (2) 復原 → 回原位
@@ -183,14 +183,14 @@ def test_headless_positions(tmp: Path) -> bool:
         d = json.loads(ws.eval(T3._drop_js('r:k1', 'r:k2')))
         assert d['formHidden'] is True, d
         s3 = state()
-        assert s3['k1']['parent'] == 'r:k2' and s3['k2']['y'] == y1 and s3['k1']['y'] == y1 + ROW and s3['k1']['x'] == x1 + INDENT and s3['k2']['x'] == x1 and s3['m1']['y'] == y1 + 4 * ROW, s3
+        assert s3['k1']['parent'] == 'r:k2' and s3['k2']['y'] == y1 and s3['k1']['y'] == y1 + ROW and s3['k1']['x'] == x1 + INDENT and s3['k2']['x'] == x1 and s3['m1']['y'] == y1 + 5 * ROW, s3
         assert s3['k1']['order'] == s3['k2']['order'] + 1 and s3['sup'][0][:2] == ['r:k2', 'r:k1'], s3
         # (4) 重新載入（localStorage 還原）→ 位置相同
         T71._reload(ws)
         ws.eval("location.reload();'ok'")
         T71._wait_page(ws)
         s4 = state()
-        assert s4['n'] == '1' and s4['k1']['parent'] == 'r:k2' and s4['k2']['y'] == y1 and s4['k1']['y'] == y1 + ROW and s4['k1']['x'] == x1 + INDENT and s4['m1']['y'] == y1 + 4 * ROW, s4
+        assert s4['n'] == '1' and s4['k1']['parent'] == 'r:k2' and s4['k2']['y'] == y1 and s4['k1']['y'] == y1 + ROW and s4['k1']['x'] == x1 + INDENT and s4['m1']['y'] == y1 + 5 * ROW, s4
         # (5) 清空 → 回原位
         T71._reload(ws)
         ws.eval("document.getElementById('staged-clear').click();'ok'")
