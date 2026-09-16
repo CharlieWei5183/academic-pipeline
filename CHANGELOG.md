@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 0.17.3（2026-09-16）
+
+進度頁面批次模式的流程修正：0.17.1 把「理由（整批，可空）」欄的任何改動都當成暫存清單變了——已建的批次項目立刻作廢（dismiss）、「全部套用」又停用；理由欄就在「全部預覽」旁，先預覽再填理由是最自然的順序，所以使用者卡在預覽 → 填理由 → 又要預覽的循環，而且每按一次預覽就多一筆 batch 收件匣項目。理由本來就不是 dry-run 的內容（token 只看 actions），現在改成套用時才帶過去。skills、agents、管線階段、SSOT schema、收件匣 `schema_version` 不變；八種單動作 kind 與 `run_batch.py` 的鏈不動。
+
+1. **理由欄不再作廢批次（`render_progress.py` 前端）**：`#staged-reason` 的 `input` 只存 localStorage（`ap-staged-reason:<project_root>`），不再呼叫 `stagedInvalidate()`；「全部套用」時 `actApply` 對 batch 送 `{id, token, reason}`（`stagedUi().extra`），理由可在預覽後填、改了也不必重新預覽。0.17.1 第 2 條的「改了就讓已建的批次項目作廢」規則自本版起取消；`tests/run_v0171_regressions.py` 沒有對這條的直接斷言（步驟 (5) 是先填理由再預覽，仍成立），不必改。
+2. **`progress_server.py` `/api/actions/apply {id, token, reason?}`**：`reason` 選填、須為字串（否則 400）、去空白截 2000；只對 `batch` 項目有效——以它取代 payload 頂層 `reason` 組命令（`batch_item_with_reason()` → `run_batch.py --reason`，空字串＝拿掉 `--reason`、各步用模板句），token extra 只看 actions 所以不必重新預覽；套用成功後若與建項目時的理由不同，代跑 `check_inbox.py --set-reason` 讓收件匣那筆 `payload.reason`／body 最後一行「理由：…」與各步 D# 實際用的理由一致（回應多 `reason_synced`；同步失敗只在 summary 加 WARNING、不影響已完成的套用）。單筆（非 batch）項目忽略 `reason`。`_validate_batch` 不變。
+3. **`check_inbox.py --set-reason IN-xxx --reason …`（新）**：只改 batch 項目的 `payload` 與 `body` 兩行（status／note 不動；非 batch、缺 `--reason`、與 `--resolve`／`--dismiss`／`--annotate` 同用都 BLOCKER）。原 `resolve_item` 的「找該筆 block → 逐行換 → 重新解析確認只有這一筆的這幾個欄位變」抽成 `_rewrite_item()`，resolve／annotate／set-reason 共用；`payload` 那行照 JSON 物件寫（`_set_raw_field`），不包成字串。`ssot_actions_common.set_inbox_reason()` 包一層給 server 用。
+4. **只有暫存清單本身變了才作廢**：增刪、上下移、「編輯」→「更新暫存」、清空 → `stagedInvalidate()`（dismiss 舊項目、清 `stagedBatchId`、標 `stagedStale`）；理由欄改動、重新載入 → 不作廢。已建批次的紀錄存 localStorage `ap-staged-batch:<project_root>`（`{id, token, actions}`，actions 為建它時的 JSON；作廢後改成 `{id, stale: true}`），重新載入後那筆仍 pending（看 IR 的 inbox）且 actions 與暫存清單相同（JSON 比對）就沿用 id 與 token、直接啟用「全部套用」（token 若因 SSOT 變動失效，套用回 409 → 既有 `onStale` 重跑 dry-run）；紀錄標 stale 或那筆已處理則清單非空時顯示「暫存清單已變，請重新預覽」，仍 pending 就補一次 dismiss（0.17.1 的 dismiss 緊接 `location.reload()`，請求可能被取消——現在 dismiss 加 `keepalive`，重新載入後再補一次）。
+5. **重複預覽不堆積**：「全部預覽」時若 `stagedBatchId` 仍在且紀錄的 actions 與現在相同 → 重用同一筆只重跑 dry-run（`stagedDryRun()`；成功後更新紀錄的 token），不建新項目；不同才 dismiss 舊、建新。
+6. **停用原因看得到**：「全部套用」旁 `#staged-apply-why` 顯示一行小字——「先全部預覽」／「暫存清單已變，請重新預覽」／「server 未開 --allow-apply」（另有「未連上 progress_server.py」、「file:// 開啟無法呼叫伺服器」），`title` 同步；`/api/ping` 回來後 `renderStaged()` 重算一次。
+7. **舊批次項目一鍵撤回**：暫存面板下方 `#staged-old`——頁面載入時偵測 IR 收件匣裡 pending 的 `batch` 項目且不是目前 `stagedBatchId` 的那些，顯示「有 n 筆舊的批次項目（IN-xxx…）不是本頁暫存建立的：撤回它們」，按下逐筆 `POST /api/inbox/dismiss`（note「舊批次項目，由頁面一鍵撤回」）後重新載入；只改收件匣狀態、不動 SSOT，「待套用動作」面板照舊可逐筆預覽／套用。
+8. **server 不噴 traceback**：瀏覽器在長 dry-run／apply 期間關頁或重新載入時，寫回應的 `BrokenPipeError`／`ConnectionResetError` 在 `Handler.handle()` 內接住、stderr 記一行「… 用戶端已斷線（BrokenPipeError），回應未送出」，不再由 `socketserver.handle_error` 印整段 traceback；腳本已跑完、SSOT 狀態不受影響。
+9. **文件**：`status` SKILL.md 與 README 的批次流程句改成「理由可在預覽後填、套用時才帶給 server」；`render_progress.py` 模組說明補 0.17.3；`tests/README.md` 登記；`plugin.json` 0.17.3。
+10. **測試**：新增 `tests/run_v0173_regressions.py`（fixture 沿用 v0.16.1、CDP client 沿用 v0.16.3）：`check_inbox --set-reason`（改對兩行、空＝拿掉、截 2000、其餘位元組不動、錯誤 BLOCKER、`set_inbox_reason()`、annotate 仍走同一改寫器）；server apply 帶 reason（非字串 400、蓋過建立時的理由、D-003／D-004、`reason_synced`、收件匣同步、空 reason → 模板句、單筆項目忽略）；client 送 dry-run 後以 RST 關閉 → stderr 一行、無 Traceback、之後照常服務；前端錨點與 `node --check`；headless Chrome：預覽 → 打理由不作廢（套用仍啟用、IN-002 仍 pending、筆數不變）→ 同清單再預覽不建新項目 → 重新載入沿用（token 還在）→ 上移一項才作廢（IN-002 dismissed、「暫存清單已變，請重新預覽」）→ 重建 IN-003 → 套用（D# reason＝套用前最後打的理由、收件匣同步、localStorage 清空）→ 「先全部預覽」／「server 未開 --allow-apply」→ 直接 POST 的兩筆舊 batch 一鍵撤回。既有 v0.7–v0.17.2 各支照跑。
+
 ## 0.17.2（2026-09-16）
 
 進度頁面暫存（樂觀更新）後的版面修正：把子結果掛到主結果下、搬結果到別的方法／子分析、搬子分析、搬 plan、換帶之後，節點的 `parent`／`band` 雖然改了，位置卻留在原列——`relayout()` 只照 IR 給的 `order` 排。現在暫存後每個 (band, col) 格子重算 `order`，節點位置跟著新的歸屬走。skills、agents、管線階段、SSOT schema、收件匣 `schema_version` 與各 kind 的腳本鏈都不變；只改前端 JS。

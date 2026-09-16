@@ -370,6 +370,15 @@ def annotate_inbox(root: Path, item_id: str, note: str) -> str:
     return out
 
 
+def set_inbox_reason(root: Path, item_id: str, reason: str) -> str:
+    """0.17.3：只改 batch 項目的 payload 頂層 reason 與 body 最後一行「理由：…」（status／note 不動）——進度頁面「全部套用」帶來的理由
+    蓋過建項目時填的，套用成功後由 server 呼叫，讓收件匣那筆與各步 D# 實際用的理由一致。"""
+    rc, out = run_script('check_inbox', root, '--set-reason', item_id, '--reason', reason)
+    if rc != 0:
+        raise ChainError(f'check_inbox.py --set-reason {item_id} 失敗: {out[-400:]}')
+    return out
+
+
 # ---------- 重畫與 daily log ----------
 
 BATCH_NO_RENDER_NOTE = f'批次模式（{BATCH_STEP_ENV}=1）：中間步驟不重畫，由 run_batch.py 最後重畫一次'
