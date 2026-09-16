@@ -328,7 +328,7 @@ def test_band_assignment_groups_and_edges() -> None:
         assert st["sensitivity_items"] == 5 and st["by_type"]["method"] == 14 and st["secondary_result_keys"] == 2, st
         rc, out, err = run(root)
         assert rc == 0, out + err
-        assert f"；區帶 main {len(expect) - n_supp} 節點、ext 0 節點、supp {n_supp} 節點、敏感性分析群 4 組；" in out, out
+        assert f"；區帶 main {len(expect) - n_supp} 節點、ext 0 節點、supp {n_supp} 節點、問題帶 {st['strips']}、敏感性分析群 4 組；" in out, out   # v0.18.1：問題帶數
 
 
 def test_layout_bands() -> None:
@@ -360,7 +360,11 @@ def test_layout_bands() -> None:
                 if col == 0:
                     continue   # 欄 0 只有 q:main，它是垂直居中、不照列排
                 ys = [y for _od, y, n in cell if n is None or (not n["collapsed"] and n["type"] != "decision")]
-                assert ys == [y0 + rp.ROW_GAP * i for i in range(len(ys))], (band, col, ys)
+                # v0.18.1：問題帶——同欄的列在各自的帶內從帶的 y0 起連續，帶與帶之間留空隙（supp 的第一條帶是 F2 的 SQ1 帶，AQ1 在第二條）
+                assert not ys or (ys[0] >= y0 and all(b > a and (b - a) % rp.ROW_GAP == 0 for a, b in zip(ys, ys[1:]))), (band, col, ys)
+                for st_ in (st_ for st_ in g["strips"] if st_["band"] == band):
+                    sub = [y for y in ys if st_["y0"] <= y <= st_["y1"]]
+                    assert sub == [st_["y0"] + rp.ROW_GAP * i for i in range(len(sub))], (band, col, st_, sub)
         # v0.18.0：supp 欄 2 只剩 AQ 的 plan → 群 → R#；main 欄 2 每個 plan 緊接自己的群與子分析（群在子項前）
         supp_m = [n["id"] for n in sorted((n for n in g["nodes"] if n["band"] == "supp" and n["col"] == 2), key=lambda n: n["order"])]
         assert supp_m == ["p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1"], supp_m
@@ -385,7 +389,7 @@ def test_layout_bands() -> None:
         assert '<g id="graph-bands" class="bands off">' in html_text and 'data-node-id="q:SQ1"' in html_text
         assert 'class="band-title off" data-band="ext"' in html_text and 'class="band-title off" data-band="supp"' in html_text and 'class="band-title" data-band="main"' in html_text
         assert re.search(r'data-node-id="q:SQ1"[^>]*transform="translate\(400,20\)"', html_text), "無 supp 時 SQ 欄從 GRAPH_PAD 起"
-        assert "；區帶 main " in out and "、ext 0 節點、supp 0 節點、敏感性分析群 0 組；" in out
+        assert "；區帶 main " in out and f"、ext 0 節點、supp 0 節點、問題帶 {g['stats']['strips']}、敏感性分析群 0 組；" in out   # v0.18.1：問題帶數
 
 
 def _band_attrs(h: str) -> dict:
@@ -429,7 +433,8 @@ def test_html_bands_and_panel() -> None:
         assert bands["supp"][1] == str(main_bottom + rp.BAND_GAP // 2) and bands["supp"][3] == str(main_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
         assert bands["supp"][5] == str(width - 20)
         assert html_text.index('<g id="graph-bands"') < html_text.index('<g id="graph-trunks">'), "區帶在 graph-root 最前面"
-        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走",
+        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶",   # v0.18.1：圖例句多問題帶
+                      "每組敏感性分析群縮排在所屬分析之下、區帶跟它走",
                       "'<dt>所屬分析</dt>", "子分析（'+gids.length+'）", "'<dt>父分析</dt>", "'<dt>區帶</dt>",
                       'data-node-id="p:SQ1-v2#S"', 'data-band="supp"', 'data-band="main"', "text.band-title", "line.band-divider", "#graph-bands.off",
                       "var BAND_TITLE_H=28,BAND_GAP=40,BAND_TITLE_DY=18;", "var BANDS=['main','ext','supp'];",
@@ -528,7 +533,7 @@ def test_validate_ir_band_rules() -> None:
             return rp.validate_ir(bad)
 
         errs = mutate(lambda bad, by, ed: by["r:k1"].update(band="weird"))
-        assert [e for e in errs if e.endswith(".band")] == ["IR-12 graph.nodes[10].band"] and all(e.endswith(".band") or "跨區帶" in e for e in errs), errs
+        assert [e for e in errs if e.endswith(".band")] == ["IR-12 graph.nodes[10].band"] and all(e.endswith(".band") or "跨區帶" in e or "無此帶" in e for e in errs), errs   # v0.18.1：band 錯連帶找不到問題帶
         errs = mutate(lambda bad, by, ed: by["q:SQ1"].update(subtype="sensitivity_group"))
         assert "IR-12 graph.nodes[1].subtype" in errs and "IR-13 graph.nodes[q:SQ1].sensitivity（plan → 群）" in errs and len(errs) == 2, errs   # 冒充的群連帶缺 plan → 群邊
         errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#R1"].update(parent="p:SQ1-v2"))

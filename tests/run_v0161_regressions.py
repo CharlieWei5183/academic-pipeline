@@ -46,6 +46,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(PLUGIN / 'skills/study-design/scripts'))
 import plan_common  # noqa: E402
 import progress_server as ps  # noqa: E402
+import render_progress as rp  # noqa: E402
 import run_v0160_regressions as T0  # noqa: E402
 import ssot_actions_common as C  # noqa: E402
 
@@ -609,11 +610,14 @@ def test_drag_preview_anchors(tmp: Path) -> None:
     # 候選判定：把 dragCandidate 與它用到的小函式抽出來，用 IR 的 graph 在 node 裡跑
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'nodeVisible', 'nodeW', 'hitNode', 'activePlanOf', 'listOrder', 'dragCandidate'))
     pos = {n['id']: n for n in ir['graph']['nodes']}
-    ext_y, supp_y = 300, 340   # fixture 版面：main 在 y < 300、ext 300–340、supp ≥ 340（問題節點 q:AQ* 的 y 在 supp）
-    assert pos['q:AQ1']['y'] >= supp_y > pos['q:SQ2']['y'] and pos['f:F_b']['band'] == 'ext'
-    cases = [('q:SQ1', 'q:SQ2'), ('q:SQ2', 'q:SQ1'), ('q:SQ1', (400, 380)), ('q:SQ1', (400, 310)), ('q:AQ1', (400, 60)), ('q:AQ1', 'q:AQ2'),
+    # fixture 版面（v0.18.1 問題帶後 main 變高）：ext／supp 的分隔線 y 直接讀 IR 的區帶框架——main 在 y < ext_y、ext 在 ext_y–supp_y、supp ≥ supp_y
+    shown = {n['id'] for n in ir['graph']['nodes'] if not n['collapsed'] and n['type'] != 'decision'}
+    frame = rp.band_frame(ir['graph']['nodes'], shown, {b: [y for e in ir['graph']['edges'] for c, y in (e.get('via') or []) if pos[e['to']]['band'] == b] for b in rp.BANDS})
+    ext_y, supp_y = int(frame['y_div']['ext']), int(frame['y_div']['supp'])
+    assert pos['q:AQ1']['y'] >= supp_y > pos['q:SQ2']['y'] and pos['f:F_b']['band'] == 'ext' and ext_y < pos['f:F_b']['y'] < supp_y
+    cases = [('q:SQ1', 'q:SQ2'), ('q:SQ2', 'q:SQ1'), ('q:SQ1', (400, supp_y + 40)), ('q:SQ1', (400, ext_y + 10)), ('q:AQ1', (400, 60)), ('q:AQ1', 'q:AQ2'),
              ('p:AQ1-v1', 'q:AQ2'), ('p:AQ1-v1', 'q:SQ1'), ('p:SQ1-v1', 'q:AQ2'), ('p:SQ1-v1', (10, 10)),
-             ('p:SQ1-v1#R2', 'p:SQ2-v1'), ('p:SQ1-v1#R2', 'p:SQ1-v1'), ('f:F_a', (1920, 320)), ('f:F_a', (1920, 50)), ('q:main', 'q:SQ1')]
+             ('p:SQ1-v1#R2', 'p:SQ2-v1'), ('p:SQ1-v1#R2', 'p:SQ1-v1'), ('f:F_a', (1920, ext_y + 10)), ('f:F_a', (1920, 50)), ('q:main', 'q:SQ1')]
     js_cases = [{'id': i, 'x': (pos[at]['x'] + 5 if isinstance(at, str) else at[0]), 'y': (pos[at]['y'] + 5 if isinstance(at, str) else at[1])} for i, at in cases]
     harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var outE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);});'
                'var W=260,H=36,boxDec={checked:false},boxOld={checked:false},expanded={},currentOf={};var BAND_ROLE={main:"main",ext:"extended",supp:"supplementary"};'

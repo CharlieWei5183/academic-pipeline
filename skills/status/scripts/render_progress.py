@@ -77,6 +77,11 @@ GRAPH_PAD + BAND_TITLE_H 起，main_bottom＝可見 main 節點（不計決策�
 main_bottom + BAND_GAP、supp 節點從 main_bottom + BAND_GAP + BAND_TITLE_H 起；supp 無可見節點時不畫分隔線與標題、節點從
 GRAPH_PAD 起；order 為每 (band, col) 內的整數序；q:main 只對 main 區帶的問題垂直居中；收合舊版的群／子分析／次要結果借現行版
 群的列（現行版沒有群時借 plan 的列）。stats 加 band_main_nodes／band_ext_nodes／band_supp_nodes／sensitivity_groups。
+問題帶（0.18.1；每個非決策節點的 strip 欄位）：每個區帶內依問題再分橫向的帶——問題節點是自己、plan／群／子分析跟 plan 的 sq、驗證跟
+item 的 sq、結果跟 owner plan（只被 goals 引用的取最前的引用問題）、次要／支撐跟父、圖表取呈現的結果中 goals 順序最前的問題、孤兒
+空字串；帶序＝goals 順序（問題節點在別的區帶但有節點落在這一帶的問題也各成一帶）、孤兒帶最後；帶內各欄從帶的第一列起各自往下排、
+帶高＝最高那欄的列數、帶與帶之間留 STRIP_GAP（1 列）、以淡色細線分隔；問題節點在帶首列；決策不帶 strip、依 refers 掛到對應的帶
+（_decision_strip）。barycenter 只在同帶同欄內重排、dummy 列落在目標的帶。IR graph.strips＝[{band, question, y0, y1}]、stats.strips。
 問題 id 別名（Sources.question_aliases）：index 裡 sq 不在 goals 的 plan，沿 replaced_by（或反向 supersedes）鏈走到終點 plan，
 終點的 sq 在 goals 就記 {舊 id → 現行 id}；里程分頁的 plan／validation item／claims 篩選與決策註記、關聯圖的 plan 歸屬
 （舊版進現行版的 superseded_versions、收合借列、band）、決策 refers、validation 節點都套用；現行問題節點 meta.aliases 與
@@ -1071,6 +1076,8 @@ def node_col(nid: str, ntype: str) -> int:
     return 0 if nid == MAIN_ID else GRAPH_COL[ntype]
 NODE_W, NODE_H, COL_PITCH, ROW_GAP, GRAPH_PAD = 260, 36, 380, 48, 20   # COL_PITCH＝欄距（節點寬 260＋走道 120）；JS 端同名常數須同值
 BAND_TITLE_H, BAND_GAP, BAND_TITLE_DY = 28, 40, 18   # 區帶標題列高、兩區帶間距、標題文字基線相對標題列頂的偏移；JS 端同名常數須同值
+STRIP_GAP = ROW_GAP   # 0.18.1 問題帶：同一區帶內兩條問題帶之間的空隙（1 列高）；區帶標題列與第一條帶之間不另加；JS 端同名常數須同值
+ORPHAN_STRIP = ''     # 找不到所屬問題的節點（孤兒）放該區帶最後一條問題帶，strip 為空字串
 DOWNSTREAM_TYPES = ('plans', 'sensitivity', 'validated_by', 'primary', 'robustness', 'produces', 'depicts', 'cites', 'supports')
 TABLE_ROWS_MAX = 200
 EMBED_MAX_BYTES = 5 * 1024 * 1024
@@ -1104,7 +1111,7 @@ class Graph:
         if n is None:
             n = {'id': nid, 'type': ntype, 'label': _text(label), 'title': _text(title), 'state': state,
                  'meta': dict(meta or {}), 'source': source, 'x': 0, 'y': 0, 'col': node_col(nid, ntype),
-                 'order': 0, 'collapsed': False, 'badge': '', 'subtype': '', 'parent': '', 'band': 'main'}
+                 'order': 0, 'collapsed': False, 'badge': '', 'subtype': '', 'parent': '', 'band': 'main', 'strip': ''}
             self.nodes[nid] = n
         return n
 
@@ -1779,6 +1786,48 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         if n['type'] == 'figure' and n['meta'].get('role_source') == 'derived':
             srcs = [g.nodes[e['from']]['band'] for e in g.edges if e['type'] == 'depicts' and e['to'] == nid]
             n['band'] = 'supp' if srcs and all(b == 'supp' for b in srcs) else 'main'
+    # 0.18.1 問題帶（strip）：每個非決策節點追溯到所屬問題——問題＝自己（q:main 也是自己，但不成帶）；plan／群／子分析＝plan 的 sq；
+    # 驗證＝item 的 sq（缺才用 plan_id 的 sq）；結果＝owner plan 的 sq（沒有 plan 只被 goals 引用 → goals 順序最前的引用問題）；
+    # 次要／支撐結果跟父；圖表＝呈現的結果的問題中 goals 順序最前者；找不到問題的節點（孤兒）strip 為空字串（ORPHAN_STRIP）。
+    # 決策節點不帶 strip（版面上依 refers 邊掛到對應問題那條帶，見 layout_graph 的 _decision_strip）
+    strip_qs = set(question_order[1:])
+
+    def strip_of_q(sq: str) -> str:
+        return f'q:{sq}' if sq and f'q:{sq}' in strip_qs else ORPHAN_STRIP
+
+    for nid, n in g.nodes.items():
+        t = n['type']
+        if t == 'question':
+            n['strip'] = nid
+        elif t == 'method':
+            n['strip'] = strip_of_q(plan_sq.get(nid[2:].split('#')[0], ''))
+        elif t == 'validation':
+            n['strip'] = strip_of_q(_text(n['meta'].get('sq')) or plan_sq.get(_text(n['meta'].get('plan_id')), ''))
+        elif t == 'result' and n.get('subtype') not in ('secondary', 'supporting'):
+            owner = _text(n['meta'].get('plan_id'))
+            if not (owner and f'p:{owner}' in g.nodes):
+                decl = sorted(n['meta'].get('declared_by') or [], key=lambda d: 0 if plan_active.get(d[2:].split('#')[0]) else 1)
+                owner = decl[0][2:].split('#')[0] if decl else ''
+            if owner:
+                n['strip'] = strip_of_q(plan_sq.get(owner, ''))
+            elif nid in cite_rank:
+                n['strip'] = strip_of_q(question_order[cite_rank[nid][0]][2:])
+            else:
+                n['strip'] = ORPHAN_STRIP
+    for nid, n in g.nodes.items():   # 次要／支撐結果跟父（父不在圖裡就依 owner plan）
+        if n['type'] == 'result' and n.get('subtype') in ('secondary', 'supporting'):
+            if n.get('parent') and n['parent'] in g.nodes:
+                n['strip'] = g.nodes[n['parent']]['strip']
+            else:
+                owner = _text(n['meta'].get('plan_id')) or ((n['meta'].get('declared_by') or ['p:'])[0][2:].split('#')[0])
+                n['strip'] = strip_of_q(plan_sq.get(owner, '')) if owner else ORPHAN_STRIP
+    for nid, n in g.nodes.items():   # 圖表：呈現的結果所屬問題中 goals 順序最前者；決策不帶 strip 欄位
+        if n['type'] == 'figure':
+            cands = [g.nodes[e['from']]['strip'] for e in g.edges if e['type'] == 'depicts' and e['to'] == nid]
+            cands = [c for c in cands if c in strip_qs]
+            n['strip'] = min(cands, key=lambda c: question_order.index(c)) if cands else ORPHAN_STRIP
+        elif n['type'] == 'decision':
+            n.pop('strip', None)
     # 跨區帶的邊除了 decomposes（主問題 → AQ）、depicts（結果 → 圖表）與 supplements（群 → 所屬 plan）一律預設不畫；
     # IR 仍保留（點選、顯示全部邊時才顯）
     for e in g.edges:
@@ -1870,7 +1919,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     for nid, n in g.nodes.items():
         if n['type'] == 'decision':
             rank[nid] = (nid,)
-    layout_graph(g, rank)
+    strips_out = layout_graph(g, rank, question_order)
 
     by_type = {t: 0 for t, _ in NODE_TYPES}
     for n in g.nodes.values():
@@ -1890,6 +1939,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         'edges': g.edges,
         'shared': shared,
         'question_aliases': dict(aliases),
+        'strips': strips_out,
     }
     # (C5) 預設檢視的交叉與穿過節點計數：路由一次（與 _svg_graph 同一套、決定性）
     route, shown, _drawn = _default_route(graph)
@@ -1905,7 +1955,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                       'secondary_result_keys': secondary, 'undeclared_result_keys': undeclared,
                       'sensitivity_items': sensitivity_items, 'sensitivity_groups': sensitivity_groups, 'supporting_result_keys': supporting,
                       'band_main_nodes': band_count['main'], 'band_ext_nodes': band_count['ext'], 'band_supp_nodes': band_count['supp'],
-                      'crossings': crossings, 'edge_node_overlaps': overlaps}
+                      'crossings': crossings, 'edge_node_overlaps': overlaps, 'strips': len(strips_out)}
     return graph
 
 
@@ -1955,29 +2005,74 @@ def _top_of(nodes: dict[str, dict], nid: str) -> str:
     return cur
 
 
+def _decision_strip(nodes: dict[str, dict], edges: list[dict], did: str) -> str:
+    """決策註記所掛的問題帶：沿它的 refers 邊（邊序＝decisions.yaml 的 question 欄先、links 後），第一個指到問題（q:main 除外）或
+    plan 的目標決定——問題就是那條帶、plan 取 plan 的 strip；只掛 q:main、指到結果／決策、或沒有 refers 的放該區帶最後（ORPHAN_STRIP）。
+    決策節點本身不帶 strip 欄位；JS 端 decisionStrip() 同義。"""
+    for e in edges:
+        if e['from'] != did or e['type'] != 'refers':
+            continue
+        t = nodes.get(e['to'])
+        if t is None:
+            continue
+        if t['type'] == 'question' and e['to'] != MAIN_ID:
+            return e['to']
+        if t['type'] == 'method':
+            return t.get('strip') or ORPHAN_STRIP
+    return ORPHAN_STRIP
+
+
+def band_strips(nodes: dict[str, dict], question_order: list[str]) -> dict[str, list[str]]:
+    """每個區帶的問題帶順序＝goals 順序（q:main 不成帶）：問題節點在該區帶的問題，以及問題節點在別的區帶、但有節點落在這一帶的問題
+    （例如 Extended Data 帶的圖表、manifest 指定 role 的補充圖表——SQ 的帶因此排在 Supplementary 的 AQ 之前、AQ 的帶排在 Main 的
+    SQ 之後，靠近它們的來源區帶），最後有孤兒節點才有一條空字串帶。JS 端 stripsOf()／restripStaged() 同義。"""
+    out: dict[str, list[str]] = {}
+    for b in BANDS:
+        present = {n.get('strip', '') for n in nodes.values() if n['band'] == b and n['type'] != 'decision' and n['id'] != MAIN_ID}
+        qs = [q for q in question_order[1:] if (q in nodes and nodes[q]['band'] == b) or q in present]
+        out[b] = qs + ([ORPHAN_STRIP] if ORPHAN_STRIP in present else [])
+    return out
+
+
 LAYOUT_SWEEP_ROUNDS = 4        # barycenter：初始由左向右一次，之後（由右向左、由左向右）最多幾輪
 LAYOUT_SEARCH_EVALS = 600      # 局部搜尋：最多評估幾個候選版面（每次評估＝重排、路由、數交叉，約 3 ms）
 
 
-def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
-    """分層版面：欄＝type，三個區帶（main → ext → supp）由上而下累積，列序先依 rank、再以 barycenter 重排（C3）。
-    `order` 為同 (band, col) 內含 dummy 列與 collapsed 節點的整數序；x／y 為收合檢視——collapsed 節點不佔列，y 借用同問題現行版的列
-    （JS 展開時依 order 重排）。
-    跳欄邊（來源與目標 |col 差| ≥ 2 且預設可見）在每個中間欄（目標的區帶）預留一個不畫節點的 dummy 列，邊的 `via` 記
+def layout_graph(g: Graph, rank: dict[str, tuple], question_order: list[str]) -> list[dict]:
+    """分層版面：欄＝type，三個區帶（main → ext → supp）由上而下累積；0.18.1 起每個區帶內再依問題分成橫向的問題帶（strip）——
+    帶序見 band_strips()，帶內各欄（問題／方法／驗證／結果／圖表）從帶的第一列起各自往下排、帶高＝帶內最高那欄的列數，帶與帶之間留
+    STRIP_GAP（1 列）；問題節點在帶的第一列；q:main 對 main 區帶問題欄的問題垂直居中。列序先依 rank、再以 barycenter 重排（C3，只在同帶
+    同欄內重排）。回傳 graph.strips：[{band, question, y0, y1}]（y0＝帶的第一列頂、y1＝最後一列的下緣）。
+    `order` 為同 (band, col) 內含 dummy 列與 collapsed 節點的整數序（沿帶序連續）；x／y 為收合檢視——collapsed 節點不佔列，y 借用同問題
+    現行版的列（JS 展開時依 order 重排）。
+    跳欄邊（來源與目標 |col 差| ≥ 2 且預設可見）在每個中間欄（目標的區帶與問題帶）預留一個不畫節點的 dummy 列，邊的 `via` 記
     [[col, y], …]、`via_order` 記各 dummy 在該 (band, col) 內的 order，供 JS relayout／路由與測試對帳（C2）。
-    barycenter：每個 (band, col) 內以區塊為單位排序——區塊＝同一 plan（含舊版、群、子分析、次要結果）在該格內的節點，區塊內
-    維持 rank 序、整體以區塊內第一個有鄰居的節點的 barycenter（鄰欄鄰居含 dummy，只算預設可見的邊）排，無鄰居的區塊維持現位；
-    平手以現行 rank 序為準。問題欄維持 goals 順序（讀者的閱讀順序，q:main 對它居中）、決策欄不參與，只重排方法／驗證／結果／
-    圖表四欄：先由左向右只看左欄鄰居掃一次，之後（由右向左、由左向右）各只看該側鄰居，最多 LAYOUT_SWEEP_ROUNDS 輪、穩定即停，
-    每次掃完以 C5 的實際交叉數評估、保留最少的版面；最後做區塊搬移的局部搜尋（每格每個區塊試搬到其他位置，只在交叉數
-    減少時採用；交叉 0 或評估次數達 LAYOUT_SEARCH_EVALS 即停）。全程決定性。
+    barycenter：每個 (band, strip, col) 內以區塊為單位排序——區塊＝同一 plan（含舊版、群、子分析、次要結果）在該格內的節點，區塊內
+    維持 rank 序、整體以區塊內第一個有鄰居的節點的 barycenter（鄰欄鄰居含 dummy，只算預設可見的邊；位置＝全圖列序）排，無鄰居的
+    區塊維持現位；平手以現行 rank 序為準。問題欄維持 goals 順序、決策欄不參與（決策依 _decision_strip 掛到對應問題帶、從帶的第一列
+    起往下疊，前一帶的決策疊過頭就接在其後），只重排方法／驗證／結果／圖表四欄：先由左向右只看左欄鄰居掃一次，之後（由右向左、
+    由左向右）各只看該側鄰居，最多 LAYOUT_SWEEP_ROUNDS 輪、穩定即停，每次掃完以 C5 的實際交叉數評估、保留最少的版面；最後做區塊
+    搬移的局部搜尋（每格每個區塊試搬到其他位置，只在交叉數減少時採用；交叉 0 或評估次數達 LAYOUT_SEARCH_EVALS 即停）。全程決定性。
     區帶框架：main 標題列只在其他區帶有可見節點時才畫（節點從 GRAPH_PAD + BAND_TITLE_H 起，否則從 GRAPH_PAD 起）；
     ext／supp 各自只在有可見節點時畫分隔線（上一區帶 bottom + BAND_GAP/2）與標題列（+ BAND_GAP），節點從 + BAND_TITLE_H 起；
     沒有可見節點的區帶不佔高度。JS relayout() 為同一套。"""
     nodes = g.nodes
-    cells: dict[tuple[str, int], list[str]] = {(b, c): [] for b in BANDS for c in range(N_COLS)}
+    strips = band_strips(nodes, question_order)
+    strip_of: dict[str, str] = {}
     for nid, n in nodes.items():
-        cells[(n['band'], n['col'])].append(nid)
+        if n['type'] == 'decision':
+            s = _decision_strip(nodes, g.edges, nid)
+            strip_of[nid] = s if s in strips[n['band']] else ORPHAN_STRIP
+        elif nid == MAIN_ID:
+            strip_of[nid] = MAIN_ID
+        else:
+            strip_of[nid] = n.get('strip', '') if n.get('strip', '') in strips[n['band']] else ORPHAN_STRIP
+    cells: dict[tuple[str, str, int], list[str]] = {(b, s, c): [] for b in BANDS for s in strips[b] for c in range(N_COLS)}
+    cells[('main', MAIN_ID, 0)] = []
+    for b in BANDS:   # 決策欄的孤兒帶（只掛 q:main／無 refers 的決策）即使該區帶沒有孤兒節點也要有格子：放在全部問題帶之後
+        cells.setdefault((b, ORPHAN_STRIP, N_COLS - 1), [])
+    for nid, n in nodes.items():
+        cells[(n['band'], strip_of[nid], n['col'])].append(nid)
     for ids in cells.values():
         ids.sort(key=lambda nid: (rank.get(nid, (BIG,)), nid))
     for nid, n in nodes.items():
@@ -1988,7 +2083,7 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         if n['type'] == 'method' and not n['collapsed']:
             for old in n['meta'].get('superseded_versions', []):
                 current_of[f'p:{old}'] = nid
-    # 跳欄邊 → dummy 列（每條邊每個中間欄一列，落在目標的區帶）；同時建 barycenter 用的鄰接（邊拆成逐欄段）
+    # 跳欄邊 → dummy 列（每條邊每個中間欄一列，落在目標的區帶與問題帶）；同時建 barycenter 用的鄰接（邊拆成逐欄段）
     dummy: dict[str, dict] = {}
     adj: dict[str, list[str]] = {}
     drawn: list[int] = []
@@ -2005,8 +2100,8 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         chain = [e['from']]
         for c in range(a['col'] + step, b['col'], step):
             did = f'~{i}@{c}'
-            dummy[did] = {'edge': i, 'band': b['band'], 'col': c}
-            cells[(b['band'], c)].append(did)
+            dummy[did] = {'edge': i, 'band': b['band'], 'strip': strip_of[e['to']], 'col': c}
+            cells[(b['band'], strip_of[e['to']], c)].append(did)
             chain.append(did)
         chain.append(e['to'])
         for u, v in zip(chain, chain[1:]):
@@ -2020,17 +2115,27 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         return current_of.get(top, top)
 
     # 區塊：每格依初始（rank）序把同 key 的節點收成區塊（區塊內維持初始序）；區塊初始序＝第一個成員的初始序
-    blocks: dict[tuple[str, int], list[list[str]]] = {}
+    blocks: dict[tuple[str, str, int], list[list[str]]] = {}
     for cell, ids in cells.items():
         by_key: dict[str, list[str]] = {}
         for item in ids:
             by_key.setdefault(block_key(item), []).append(item)
         blocks[cell] = list(by_key.values())
-    init_index: dict[tuple[str, int], dict[int, int]] = {cell: {id(bl): bi for bi, bl in enumerate(bls)} for cell, bls in blocks.items()}
+    init_index: dict[tuple[str, str, int], dict[int, int]] = {cell: {id(bl): bi for bi, bl in enumerate(bls)} for cell, bls in blocks.items()}
+    # 帶高（列數）與版面上的順序不相干：帶內最高那欄佔列的項目數（可見節點＋dummy；決策與 q:main 不算）；帶的全圖列序起點供 barycenter 比較
+    strip_rows: dict[tuple[str, str], int] = {}
+    strip_row0: dict[tuple[str, str], int] = {}
+    running = 0
+    for b in BANDS:
+        for s in strips[b]:
+            rows = max([sum(1 for x in cells[(b, s, c)] if x in dummy or x in shown) for c in range(N_COLS - 1)] + [0])
+            strip_rows[(b, s)] = rows
+            strip_row0[(b, s)] = running
+            running += rows + 1
     pos: dict[str, int] = {}
 
-    def refresh_pos(cell: tuple[str, int]) -> None:
-        k = 0
+    def refresh_pos(cell: tuple[str, str, int]) -> None:
+        k = strip_row0.get((cell[0], cell[1]), 0)
         for bl in blocks[cell]:
             for item in bl:
                 pos[item] = k
@@ -2043,7 +2148,7 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         return dummy[item]['col'] if item in dummy else nodes[item]['col']
 
     def bary(bl: list[str], side: int) -> float | None:
-        """區塊的 barycenter＝區塊內第一個有（該側）鄰居的節點的鄰居平均位置；side：-1 只算左欄、+1 只算右欄。"""
+        """區塊的 barycenter＝區塊內第一個有（該側）鄰居的節點的鄰居平均位置（全圖列序）；side：-1 只算左欄、+1 只算右欄。"""
         for item in bl:
             c = cell_col(item)
             nbs = [pos[x] for x in adj.get(item, []) if x in pos and (cell_col(x) - c) * side > 0]
@@ -2051,9 +2156,8 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
                 return sum(nbs) / len(nbs)
         return None
 
-    def sort_cell(cell: tuple[str, int], side: int) -> bool:
-        """該側沒有鄰居的區塊固定在原槽位（例如沒有結果鍵的圖表、只靠對照線連回 plan 的群），其餘區塊在剩下的槽位間依
-        (barycenter, 初始序) 排。"""
+    def sort_cell(cell: tuple[str, str, int], side: int) -> bool:
+        """該側沒有鄰居的區塊固定在原槽位（例如沒有結果鍵的圖表），其餘區塊在剩下的槽位間依 (barycenter, 初始序) 排。"""
         bls = blocks[cell]
         if len(bls) < 2:
             return False
@@ -2074,41 +2178,67 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
             return True
         return False
 
-    frame_has = {b: any(x in dummy or x in shown for c in range(N_COLS) for x in cells[(b, c)]) for b in BANDS}
+    frame_has = {b: any(x in dummy or x in shown for s in strips[b] for c in range(N_COLS) for x in cells[(b, s, c)]) for b in BANDS}
+    frame_has['main'] = frame_has['main'] or MAIN_ID in shown
     has_other = any(frame_has[b] for b in BANDS if b != 'main')
+    strip_out: list[dict] = []
 
     def place_all() -> None:
-        """依目前的區塊序把 order／y 寫回節點與 dummy（含區帶累積、collapsed 借列、q:main 居中）。"""
+        """依目前的區塊序把 order／y 寫回節點與 dummy（含區帶累積、問題帶累積、collapsed 借列、q:main 居中、決策掛帶）。"""
         for cell, bls in blocks.items():
             cells[cell] = [item for bl in bls for item in bl]
-            for k, item in enumerate(cells[cell]):
-                if item in dummy:
-                    dummy[item]['order'] = k
-                else:
-                    nodes[item]['order'] = k
+        for b in BANDS:   # order：同 (band, col) 內沿帶序連續（決策欄的孤兒帶接在全部問題帶之後）
+            for c in range(N_COLS):
+                k = 0
+                tail = [ORPHAN_STRIP] if c == N_COLS - 1 and ORPHAN_STRIP not in strips[b] else []
+                for s in ([MAIN_ID] if (b, c) == ('main', 0) else []) + strips[b] + tail:
+                    for item in cells.get((b, s, c), []):
+                        if item in dummy:
+                            dummy[item]['order'] = k
+                        else:
+                            nodes[item]['order'] = k
+                        k += 1
 
         def place(band: str, y0: float) -> float:
             bottom = y0
-            for c in range(N_COLS):
-                row = 0
-                last_y = y0
-                for item in cells[(band, c)]:
-                    if item in dummy:
-                        dummy[item]['y'] = y0 + row * ROW_GAP
-                        row += 1
-                        bottom = max(bottom, dummy[item]['y'] + NODE_H)
-                        continue
-                    n = nodes[item]
-                    if n['collapsed']:
-                        n['y'] = last_y
-                    else:
-                        n['y'] = y0 + row * ROW_GAP
-                        last_y = n['y']
-                        row += 1
-                        if n['type'] != 'decision':
-                            bottom = max(bottom, n['y'] + NODE_H)
+            y = y0
+            dec_y = y0
+            for si, s in enumerate(strips[band]):
+                if si:
+                    y += STRIP_GAP
+                rows_max = 0
+                for c in range(N_COLS - 1):
+                    row = 0
+                    last_y = y
+                    for item in cells[(band, s, c)]:
+                        if item in dummy:
+                            dummy[item]['y'] = y + row * ROW_GAP
+                            row += 1
+                            continue
+                        n = nodes[item]
+                        if n['collapsed']:
+                            n['y'] = last_y
+                        else:
+                            n['y'] = y + row * ROW_GAP
+                            last_y = n['y']
+                            row += 1
+                    rows_max = max(rows_max, row)
+                dec_y = max(dec_y, y)
+                for item in cells[(band, s, N_COLS - 1)]:   # 決策：從帶的第一列起往下疊，前一帶疊過頭就接在其後（不算入帶高）
+                    nodes[item]['y'] = dec_y
+                    dec_y += ROW_GAP
+                y1 = y + (rows_max - 1) * ROW_GAP + NODE_H if rows_max else y
+                strip_out.append({'band': band, 'question': s, 'y0': y, 'y1': y1})
+                if rows_max:
+                    bottom = max(bottom, y1)
+                y += rows_max * ROW_GAP
+            if ORPHAN_STRIP not in strips[band]:   # 只掛 q:main／無 refers 的決策：接在全部問題帶的決策之後
+                for item in cells[(band, ORPHAN_STRIP, N_COLS - 1)]:
+                    nodes[item]['y'] = dec_y
+                    dec_y += ROW_GAP
             return bottom
 
+        strip_out.clear()
         prev = GRAPH_PAD
         for b in BANDS:
             if b == 'main':
@@ -2124,11 +2254,13 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
                 if top in current_of:
                     cur = current_of[top]
                     n['y'] = nodes[cur + GROUP_SUFFIX]['y'] if cur + GROUP_SUFFIX in nodes else nodes[cur]['y']
-        if MAIN_ID in nodes:   # 主問題居中：main 區帶 SQ 那欄第一筆與最後一筆的中間（AQ 在 supp 區帶、dummy 不算）
-            ys = [nodes[i]['y'] for i in cells[('main', 1)] if i in nodes and not nodes[i]['collapsed']]
+        if MAIN_ID in nodes:   # 主問題居中：main 區帶問題欄第一筆與最後一筆的中間（AQ 在 supp 區帶、dummy 不算）
+            ys = [nodes[i]['y'] for s in strips['main'] for i in cells[('main', s, 1)] if i in nodes and not nodes[i]['collapsed']]
             if ys:
                 mid = (min(ys) + max(ys)) / 2
                 nodes[MAIN_ID]['y'] = int(mid) if float(mid).is_integer() else mid
+            else:
+                nodes[MAIN_ID]['y'] = GRAPH_PAD + BAND_TITLE_H if has_other else GRAPH_PAD
         for did, d in dummy.items():   # 跳欄邊的 via（來源 → 目標方向）
             e = g.edges[d['edge']]
             e['via'] = []
@@ -2149,16 +2281,16 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
         route = route_edges(nodes, [(i, g.edges[i]) for i in drawn])
         return crossing_stats(nodes, shown, default_view_lines(nodes, g.edges, route), count_overlaps=False)[0]
 
-    def snapshot() -> dict[tuple[str, int], list[list[str]]]:
+    def snapshot() -> dict[tuple[str, str, int], list[list[str]]]:
         return {cell: list(bls) for cell, bls in blocks.items()}
 
-    def restore(state: dict[tuple[str, int], list[list[str]]]) -> None:
+    def restore(state: dict[tuple[str, str, int], list[list[str]]]) -> None:
         for cell, bls in state.items():
             blocks[cell] = list(bls)
             refresh_pos(cell)
 
-    # 問題欄（欄 1）維持 goals 順序、決策欄不參與；只重排方法／驗證／結果／圖表四欄
-    sortable = [(b, c) for b in BANDS for c in range(2, N_COLS - 1)]
+    # 問題欄（欄 1）維持 goals 順序、決策欄不參與；只在同帶同欄內重排方法／驗證／結果／圖表四欄，不跨帶
+    sortable = [(b, s, c) for b in BANDS for s in strips[b] for c in range(2, N_COLS - 1)]
     for cell in sortable:            # 初始：由左向右、只看左欄鄰居（把問題順序沿鏈傳下去、dummy 落在來源附近）
         sort_cell(cell, -1)
     best_n = evaluate()
@@ -2208,11 +2340,11 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
                     trial.insert(j, bl)
                     blocks[cell] = trial
                     refresh_pos(cell)
-                    for repair in (None, (cell[0], cell[1] + 1), (cell[0], cell[1] - 1)):
+                    for repair in (None, (cell[0], cell[1], cell[2] + 1), (cell[0], cell[1], cell[2] - 1)):
                         if evals >= LAYOUT_SEARCH_EVALS:
                             break
                         if repair is not None:
-                            if repair not in sortable or not sort_cell(repair, -1 if repair[1] > cell[1] else 1):
+                            if repair not in sortable or not sort_cell(repair, -1 if repair[2] > cell[2] else 1):
                                 continue
                         key = state_key()
                         if key in seen_states:
@@ -2235,13 +2367,14 @@ def layout_graph(g: Graph, rank: dict[str, tuple]) -> None:
                 break
     restore(best)
     place_all()
+    return list(strip_out)
 
 
 def validate_graph(graph) -> list[str]:
     errors: list[str] = []
     if not isinstance(graph, dict):
         return ['IR-11 graph']
-    for key in ('node_types', 'edge_types', 'nodes', 'edges', 'shared', 'question_aliases', 'stats'):
+    for key in ('node_types', 'edge_types', 'nodes', 'edges', 'shared', 'question_aliases', 'stats', 'strips'):
         if key not in graph:
             errors.append(f'IR-11 graph.{key}')
     if errors:
@@ -2302,7 +2435,53 @@ def validate_graph(graph) -> list[str]:
             errors.append(f'IR-12 {sub}.parent')
         if n.get('band') not in BANDS:
             errors.append(f'IR-12 {sub}.band')
+        if n.get('type') != 'decision':   # 0.18.1 問題帶：非決策節點都有 strip（問題節點是自己；孤兒空字串）；決策不帶
+            if not isinstance(n.get('strip'), str):
+                errors.append(f'IR-12 {sub}.strip')
+            elif n.get('type') == 'question' and n.get('strip') != nid:
+                errors.append(f'IR-12 {sub}.strip（問題節點的 strip 須是自己）')
     by_id_v = {n.get('id'): n for n in graph['nodes'] if isinstance(n, dict)} if isinstance(graph['nodes'], list) else {}
+    # 0.18.1 graph.strips：[{band, question, y0, y1}]，依 BANDS 順序分組、同帶內 y 範圍遞增不重疊；每個非決策節點（q:main 除外）的
+    # (band, strip) 都要有對應的帶、未收合者的 y 落在帶的範圍內、問題節點在帶的第一列
+    strip_keys: dict[tuple[str, str], dict] = {}
+    strips_v = graph['strips'] if isinstance(graph['strips'], list) else None
+    if strips_v is None:
+        errors.append('IR-15 graph.strips')
+    else:
+        last_band_i = -1
+        last: dict | None = None
+        for i, st in enumerate(strips_v):
+            sub = f'graph.strips[{i}]'
+            if not isinstance(st, dict) or st.get('band') not in BANDS or not isinstance(st.get('question'), str) \
+                    or any(isinstance(st.get(k), bool) or not isinstance(st.get(k), (int, float)) for k in ('y0', 'y1')):
+                errors.append(f'IR-15 {sub}')
+                continue
+            q = st['question']
+            if q and (q == MAIN_ID or by_id_v.get(q, {}).get('type') != 'question'):
+                errors.append(f'IR-15 {sub}.question')
+            if st['y0'] > st['y1']:
+                errors.append(f'IR-15 {sub}.y0／y1')
+            key = (st['band'], q)
+            if key in strip_keys:
+                errors.append(f'IR-15 {sub} 重複')
+            strip_keys[key] = st
+            bi = BANDS.index(st['band'])
+            if bi < last_band_i:
+                errors.append(f'IR-15 {sub}.band（未依區帶順序）')
+            elif bi == last_band_i and last is not None and st['y0'] <= last['y1']:
+                errors.append(f'IR-15 {sub}.y0（與前一條帶重疊或交錯）')
+            last_band_i, last = bi, st
+        for i, n in enumerate(graph['nodes'] if isinstance(graph['nodes'], list) else []):
+            if not isinstance(n, dict) or n.get('type') == 'decision' or n.get('id') == MAIN_ID or not isinstance(n.get('strip'), str):
+                continue
+            st = strip_keys.get((n.get('band'), n.get('strip')))
+            if st is None:
+                errors.append(f'IR-15 graph.nodes[{i}].strip（graph.strips 無此帶）')
+            elif n.get('collapsed') is False and isinstance(n.get('y'), (int, float)):
+                if not (st['y0'] <= n['y'] <= st['y1'] - NODE_H):
+                    errors.append(f'IR-15 graph.nodes[{i}].y（不在所屬問題帶的範圍內）')
+                elif n.get('type') == 'question' and n['y'] != st['y0']:
+                    errors.append(f'IR-15 graph.nodes[{i}].y（問題節點須在帶的第一列）')
     for i, n in enumerate(graph['nodes'] if isinstance(graph['nodes'], list) else []):
         if not isinstance(n, dict) or not n.get('parent'):
             continue
@@ -2405,11 +2584,13 @@ def validate_graph(graph) -> list[str]:
             or not isinstance(stats.get('figures_unreviewed'), int) \
             or any(not isinstance(stats.get(k), int) for k in ('secondary_result_keys', 'undeclared_result_keys', 'sensitivity_items',
                                                                 'sensitivity_groups', 'supporting_result_keys', 'band_main_nodes', 'band_ext_nodes',
-                                                                'band_supp_nodes', 'crossings', 'edge_node_overlaps')) \
+                                                                'band_supp_nodes', 'crossings', 'edge_node_overlaps', 'strips')) \
             or stats.get('crossings') < 0 or stats.get('edge_node_overlaps') < 0:
         errors.append('IR-14 graph.stats')
     elif stats.get('band_main_nodes') + stats.get('band_ext_nodes') + stats.get('band_supp_nodes') != len(ids):
         errors.append('IR-14 graph.stats.band_main_nodes／band_ext_nodes／band_supp_nodes')
+    elif strips_v is not None and stats.get('strips') != len(strips_v):
+        errors.append('IR-14 graph.stats.strips')
     return errors
 
 
@@ -2811,6 +2992,7 @@ path.edge.e-supplements,path.trunk.e-supplements{stroke:var(--t-method);stroke-w
 #graph-bands text.band-title{font-size:12px;font-weight:600;fill:var(--muted)}
 #graph-bands line.band-divider{stroke:var(--edge-faint);stroke-width:1;stroke-dasharray:6 4}
 #graph-bands.off,#graph-bands .off{display:none}
+#graph-strips line.strip-divider{stroke:var(--edge-faint);stroke-width:1;stroke-dasharray:2 5;opacity:.7}
 .gnode.dim{opacity:.15}path.edge.dim{opacity:.08}
 .gnode.filtered{opacity:.15}path.edge.filtered{opacity:.15}
 #gdetail{position:fixed;right:16px;bottom:16px;width:min(460px,calc(100vw - 32px));max-height:72vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:10}
@@ -2897,6 +3079,7 @@ GRAPH_JS = """
   var NODE_W=260,NODE_H=36,COL_PITCH=380,ROW_GAP=48,GRAPH_PAD=20;  // 與 Python 端同名常數同值（測試比對）
   var BAND_TITLE_H=28,BAND_GAP=40,BAND_TITLE_DY=18;  // 區帶標題列高、區帶間距、標題基線偏移；與 Python 端同名常數同值
   var BANDS=['main','ext','supp'];  // 區帶由上而下；與 Python 端 BANDS 同序
+  var STRIP_GAP=ROW_GAP;  // 0.18.1 同一區帶內兩條問題帶之間的空隙（1 列）；與 Python 端同名常數同值
   var W=NODE_W,H=NODE_H,PAD=GRAPH_PAD,ROW=ROW_GAP,GAP=COL_PITCH-NODE_W;
   var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});
   var typeLabel={},edgeLabel={};G.node_types.forEach(function(t){typeLabel[t.id]=t.label;});G.edge_types.forEach(function(t){edgeLabel[t.id]=t.label;});
@@ -2949,30 +3132,54 @@ GRAPH_JS = """
   var dummyY={};  // 跳欄邊 idx → {col: dummy 列 y}（relayout 時依 via_order 與節點一起排列）
   var stagedLayout=false;  // 0.17.2 暫存後由 reorderStaged() 設 true：via_order 是 IR 值，與重算的 order 混排會亂，跳欄邊改直接畫折線（預覽不求 0 交叉）
   function dummyActive(i){if(stagedLayout)return false;var e=G.edges[i];return !!(e.default_visible&&e.via_order&&e.via_order.length&&nodeVisible(e.from)&&nodeVisible(e.to));}
+  // 0.18.1 問題帶：qOrder＝問題節點的 IR 序（goals 順序）；stripOrder＝暫存後由 reorderStaged() 重算的各帶帶序（null＝照 IR graph.strips）；
+  // stripBoxes＝最近一次 relayout 算出的各帶 {band, question, y0, y1}（與 Python graph.strips 同義，供測試比對）
+  var qOrder=G.nodes.filter(function(n){return n.type==='question';}).map(function(n){return n.id;}),qIndex={};qOrder.forEach(function(q,i){qIndex[q]=i;});
+  var stripOrder=null,stripBoxes=[],stripsEl=document.getElementById('graph-strips');
+  function stripsOf(band){if(stripOrder)return stripOrder[band]||[];return (G.strips||[]).filter(function(s){return s.band===band;}).map(function(s){return s.question;});}
+  // 決策註記所掛的帶：沿 refers 邊第一個指到問題（q:main 除外）或 plan 的目標；其餘空字串（放該區帶最後）；與 Python _decision_strip 同義
+  function decisionStrip(n){var s='';(outE[n.id]||[]).some(function(ei){var e=G.edges[ei];if(e.type!=='refers')return false;var t=nodes[e.to];if(!t)return false;if(t.type==='question'&&e.to!=='q:main'){s=e.to;return true;}if(t.type==='method'){s=t.strip||'';return true;}return false;});return s;}
+  function stripKey(n){var ss=stripsOf(n.band),s=(n.type==='decision')?decisionStrip(n):(n.id==='q:main'?'q:main':(n.strip||''));if(n.id!=='q:main'&&ss.indexOf(s)<0)s='';return s;}
   // 與 Python layout_graph 同一套：三個區帶依 BANDS 順序累積——main 只在其他區帶有可見節點時讓出標題列；ext／supp 只在有可見節點
   // （含 dummy 列）時畫分隔線（上一區帶 bottom+BAND_GAP/2）、標題（+BAND_GAP）、節點從 +BAND_TITLE_H 起，沒有就不佔高度；
-  // 每個 (band, col) 內依 order 排列，跳欄邊的 dummy 列（via_order）與節點一起佔列
+  // 區帶內再依問題帶（stripsOf）累積：帶內各欄從帶的第一列起各自往下排、帶高＝最高那欄的列數、帶與帶之間留 STRIP_GAP；
+  // 每個 (band, strip, col) 內依 order 排列，跳欄邊的 dummy 列（via_order）落在目標的帶；決策從所屬帶的第一列往下疊（疊過頭接在其後）、
+  // 沒有對應帶的決策接在全部帶之後；q:main 對 main 帶問題欄的問題居中；帶之間的淡色細線（#graph-strips）整組重建
   function relayout(){
-    var cells={};G.nodes.forEach(function(n){var k=n.band+'|'+n.col;(cells[k]=cells[k]||[]).push({n:n,order:n.order});});
+    var cells={};function push(k,it){(cells[k]=cells[k]||[]).push(it);}
+    G.nodes.forEach(function(n){push(n.band+'|'+stripKey(n)+'|'+n.col,{n:n,order:n.order});});
     dummyY={};
-    G.edges.forEach(function(e,i){if(!dummyActive(i))return;var band=nodes[e.to].band;e.via.forEach(function(v,j){var k=band+'|'+v[0];(cells[k]=cells[k]||[]).push({d:i,col:v[0],order:e.via_order[j]});});});
+    G.edges.forEach(function(e,i){if(!dummyActive(i))return;var t=nodes[e.to],ts=stripKey(t);e.via.forEach(function(v,j){push(t.band+'|'+ts+'|'+v[0],{d:i,col:v[0],order:e.via_order[j]});});});
     var maxY=0,has={};
     BANDS.forEach(function(b){has[b]=false;});
     G.nodes.forEach(function(n){if(n.type!=='decision'&&nodeVisible(n.id))has[n.band]=true;});
     var hasOther=BANDS.some(function(b){return b!=='main'&&has[b];});
-    function place(band,y0){var bottom=y0;Object.keys(cells).forEach(function(k){if(k.split('|')[0]!==band)return;var list=cells[k].slice().sort(function(a,b){return a.order-b.order;});var row=0;
-      list.forEach(function(it){if(it.n){var n=it.n,el=nodeEls[n.id],v=nodeVisible(n.id);el.classList.toggle('gone',!v);if(v){n.y=y0+row*ROW;row++;el.setAttribute('transform','translate('+n.x+','+n.y+')');if(n.y>maxY)maxY=n.y;if(n.type!=='decision'&&n.y+H>bottom)bottom=n.y+H;}}
-        else{var y=y0+row*ROW;row++;(dummyY[it.d]=dummyY[it.d]||{})[it.col]=y;if(y>maxY)maxY=y;if(y+H>bottom)bottom=y+H;}});});return bottom;}
+    var byOrder=function(a,b){return a.order-b.order;};
+    function setY(n,y){var el=nodeEls[n.id];n.y=y;el.setAttribute('transform','translate('+n.x+','+n.y+')');if(y>maxY)maxY=y;}
+    function placeCell(k,y0){var list=(cells[k]||[]).slice().sort(byOrder),row=0;
+      list.forEach(function(it){if(it.n){var n=it.n,v=nodeVisible(n.id);nodeEls[n.id].classList.toggle('gone',!v);if(v){setY(n,y0+row*ROW);row++;}}
+        else{var y=y0+row*ROW;row++;(dummyY[it.d]=dummyY[it.d]||{})[it.col]=y;if(y>maxY)maxY=y;}});return row;}
+    function placeDecisions(k,decY){(cells[k]||[]).slice().sort(byOrder).forEach(function(it){var n=it.n,v=nodeVisible(n.id);nodeEls[n.id].classList.toggle('gone',!v);if(v){setY(n,decY);decY+=ROW;}});return decY;}
+    stripBoxes=[];
+    function place(band,y0){var bottom=y0,y=y0,decY=y0,strips=stripsOf(band).slice();
+      if(strips.indexOf('')<0){for(var c0=0;c0<6;c0++){if(cells[band+'||'+c0]){strips.push('');break;}}}   // 帶序沒列到的節點一律進孤兒帶，不漏排
+      strips.forEach(function(s,si){if(si)y+=STRIP_GAP;var rows=0;for(var c=0;c<6;c++){var r=placeCell(band+'|'+s+'|'+c,y);if(r>rows)rows=r;}
+        decY=placeDecisions(band+'|'+s+'|6',Math.max(decY,y));
+        var y1=rows?y+(rows-1)*ROW+H:y;stripBoxes.push({band:band,question:s,y0:y,y1:y1});if(rows&&y1>bottom)bottom=y1;y+=rows*ROW;});
+      if(strips.indexOf('')<0)decY=placeDecisions(band+'||6',decY);
+      return bottom;}
     var prev=PAD,frame={};
     BANDS.forEach(function(b){
       if(b==='main'){frame[b]={div:PAD,title:PAD,y0:hasOther?PAD+BAND_TITLE_H:PAD};prev=place(b,frame[b].y0);}
       else{frame[b]={div:prev+BAND_GAP/2,title:prev+BAND_GAP,y0:prev+BAND_GAP+BAND_TITLE_H};if(has[b])prev=place(b,frame[b].y0);}
     });
-    var main=nodes['q:main'];if(main){var ys=(cells['main|1']||[]).filter(function(it){return it.n&&nodeVisible(it.n.id);}).map(function(it){return it.n.y;});if(ys.length){main.y=(Math.min.apply(null,ys)+Math.max.apply(null,ys))/2;nodeEls[main.id].setAttribute('transform','translate('+main.x+','+main.y+')');}}
+    var main=nodes['q:main'];if(main){var ys=[];stripsOf('main').forEach(function(s){(cells['main|'+s+'|1']||[]).forEach(function(it){if(it.n&&nodeVisible(it.n.id))ys.push(it.n.y);});});
+      if(ys.length){main.y=(Math.min.apply(null,ys)+Math.max.apply(null,ys))/2;}else{main.y=frame.main.y0;}nodeEls[main.id].setAttribute('transform','translate('+main.x+','+main.y+')');}
     bandsEl.classList.toggle('off',!hasOther);
     var wdt=+svg.getAttribute('width');
     BANDS.forEach(function(b){var dv=bandDivs[b],tt=bandTitles[b];if(dv){dv.setAttribute('y1',frame[b].div);dv.setAttribute('y2',frame[b].div);dv.setAttribute('x2',wdt-PAD);dv.classList.toggle('off',b==='main'||!has[b]);}
       if(tt){tt.setAttribute('y',frame[b].title+BAND_TITLE_DY);tt.classList.toggle('off',b!=='main'&&!has[b]);}});
+    if(stripsEl){while(stripsEl.firstChild)stripsEl.removeChild(stripsEl.firstChild);var pv=null;stripBoxes.forEach(function(s){if(pv&&pv.band===s.band){var ln=document.createElementNS(svg.namespaceURI,'line'),yy=(pv.y1+s.y0)/2;ln.setAttribute('class','strip-divider');ln.setAttribute('data-band',s.band);ln.setAttribute('data-strip',s.question);ln.setAttribute('x1',PAD);ln.setAttribute('y1',yy);ln.setAttribute('x2',wdt-PAD);ln.setAttribute('y2',yy);stripsEl.appendChild(ln);}pv=s;});}
     var h=maxY+H+PAD;svg.setAttribute('height',h);svg.setAttribute('viewBox','0 0 '+svg.getAttribute('width')+' '+h);
     redrawEdges();
   }
@@ -3546,7 +3753,7 @@ GRAPH_JS = """
   // 圖表用 depicts 的來源結果；問題與決策沒有 anchor。
   function anchorOf(n){if(n.parent)return n.parent;var t={method:'plans',result:'produces',validation:'validated_by',figure:'depicts'}[n.type]||'';if(!t)return '';var a='';(inE[n.id]||[]).forEach(function(ei){var e=G.edges[ei];if(!a&&e.type===t&&nodes[e.from])a=e.from;});return a;}
   // 第一次呼叫時保存 IR 的 order／parent／band／anchor（order0 等）當基準；之後只在 reorder 那一種動作更新 order0
-  function snapOrder0(){G.nodes.forEach(function(n){if(n.order0===undefined){n.order0=n.order;n.parent0=n.parent||'';n.band0=n.band;n.anchor0=anchorOf(n);}});}
+  function snapOrder0(){G.nodes.forEach(function(n){if(n.order0===undefined){n.order0=n.order;n.parent0=n.parent||'';n.band0=n.band;n.anchor0=anchorOf(n);n.strip0=n.strip||'';}});}
   // 節點是否被暫存動作動過：換帶、換 parent、換 anchor、reorder 標記，或其 anchor（同一區帶內、遞迴）被動過——動過的節點才離開 order0 的位置；
   // anchor 在別的區帶就不跟（例：主結果搬去補充帶，留在 Main 帶的圖表不動）
   function nodeMoved(n,depth){depth=depth||0;if(!n||n.order0===undefined||depth>16)return false;if(n.moved0||n.band!==n.band0||(n.parent||'')!==n.parent0)return true;var a=anchorOf(n);if(a!==n.anchor0)return true;return !!(a&&nodes[a]&&nodes[a].band===n.band&&nodeMoved(nodes[a],depth+1));}
@@ -3571,6 +3778,23 @@ GRAPH_JS = """
         seq.splice(pos<0?seq.length:pos+1,0,n);});
       var out=[],byKid=function(a,b){var ma=(a.parent||'')!==a.parent0?1:0,mb=(b.parent||'')!==b.parent0?1:0;return (ma-mb)||byOrder0(a,b);},walk=function(n){out.push(n);(kids[n.id]||[]).sort(byKid).forEach(walk);};
       seq.forEach(walk);out.forEach(function(n,i){n.order=i;});});
+    if(typeof restripStaged==='function')restripStaged();   // 0.18.1（測試可單獨抽 reorderStaged 跑）
+  }
+  // 0.18.1 暫存後重算每個節點的問題帶：沒被動過的節點維持 IR 的 strip（strip0）；被動過的（nodeMoved）沿 parent／anchor 取新歸屬的帶——
+  // reassign／promote 整棵子樹跟問題（帶隨問題換區帶）、move_plan 的 plan 子樹跟新問題、move_result／move_sensitivity／demote_plan 跟目標、
+  // nest_result 不變（父是同 plan 的主結果）；圖表取呈現的結果中 goals 順序最前者。之後各帶的帶序（stripOrder）＝該帶問題節點依重算後的 order、
+  // 再接問題節點在別帶但有節點落在這一帶的問題（goals 順序）、最後有孤兒才有空字串帶；與 Python band_strips 同義
+  function stripNow(n,depth){depth=depth||0;if(n.type==='question')return n.id;if(n.type==='decision')return '';if(depth>16||!nodeMoved(n))return n.strip0||'';
+    if(n.type==='figure'){var best='',bi=Infinity;(inE[n.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type!=='depicts'||!nodes[e.from])return;var s=stripNow(nodes[e.from],depth+1);if(s&&qIndex[s]!==undefined&&qIndex[s]<bi){bi=qIndex[s];best=s;}});return best;}
+    var a=n.parent||anchorOf(n);if(a&&nodes[a])return stripNow(nodes[a],depth+1);return n.strip0||'';}
+  function restripStaged(){
+    G.nodes.forEach(function(n){if(n.type!=='decision'&&n.id!=='q:main'){n.strip=stripNow(n);var el=nodeEls[n.id];if(el)el.setAttribute('data-strip',n.strip);}});
+    stripOrder={};BANDS.forEach(function(b){var present={},native=[],key={};G.nodes.forEach(function(n){if(n.staged_gone||n.band!==b||n.type==='decision'||n.id==='q:main')return;present[n.strip||'']=true;});
+      // goals 順序；該帶自己的問題節點之間改依（reorder 後的）order 排：把它們的 goals 序位由小到大重新分配給 order 由小到大者
+      G.nodes.filter(function(n){return n.type==='question'&&n.id!=='q:main'&&n.band===b&&!n.staged_gone;}).sort(function(a,c){return (a.order-c.order)||(a.id<c.id?-1:1);}).forEach(function(n){native.push(n.id);});
+      var slots=native.map(function(q){return qIndex[q];}).sort(function(a,c){return a-c;});native.forEach(function(q,i){key[q]=slots[i];});
+      var qs=qOrder.filter(function(q){return q!=='q:main'&&(present[q]||native.indexOf(q)>=0);}).sort(function(a,c){return (key[a]!==undefined?key[a]:qIndex[a])-(key[c]!==undefined?key[c]:qIndex[c]);});
+      stripOrder[b]=qs.concat(present['']?['']:[]);});
   }
   function nextAqStaged(){var base=parseInt(String(nextAq||nextAqFromIr()).replace('AQ',''),10)||1;stagedAqUsed++;return 'AQ'+(base+stagedAqUsed-1);}
   function applyOptimistic(kind,p){var marks=[];p=p||{};snapOrder0();   // 0.17.2 先保存 IR 基準（order0 等），reorderStaged() 據此判定誰被動過
@@ -4182,6 +4406,21 @@ def _default_route(graph: dict) -> tuple[dict, set[str], list[int]]:
     return route_edges(by_id, [(i, graph['edges'][i]) for i in drawn]), shown, drawn
 
 
+def _strip_lines_svg(strips: list[dict], width: int) -> str:
+    """0.18.1 問題帶分隔：同一區帶內相鄰兩條帶之間各一條淡色細線（在空隙正中），第一條帶之前、區帶標題列之後不畫、也不加標題；
+    `<g id="graph-strips">` 由 JS relayout() 整組重建（帶數在暫存後可能改變）。"""
+    parts = ['<g id="graph-strips">']
+    prev: dict | None = None
+    for s in strips:
+        if prev is not None and prev['band'] == s['band']:
+            y = (prev['y1'] + s['y0']) / 2
+            parts.append(f'<line class="strip-divider" data-band="{s["band"]}" data-strip="{_h(s["question"])}" x1="{GRAPH_PAD}" y1="{y:g}" '
+                         f'x2="{width - GRAPH_PAD}" y2="{y:g}"></line>')
+        prev = s
+    parts.append('</g>')
+    return ''.join(parts)
+
+
 def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     nodes = graph['nodes']
     by_id = {n['id']: n for n in nodes}
@@ -4216,7 +4455,7 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
                      f'x2="{width - GRAPH_PAD}" y2="{frame["y_div"][b]:g}"></line>'
                      f'<text class="band-title{title_off}" data-band="{b}" x="{GRAPH_PAD}" y="{frame["y_title"][b] + BAND_TITLE_DY:g}">'
                      f'{_h(BAND_TITLE[b])}</text>')
-    parts.append('</g><g id="graph-trunks">')
+    parts.append('</g>' + _strip_lines_svg(graph.get('strips') or [], width) + '<g id="graph-trunks">')
     out.append('</defs><g id="graph-root">' + ''.join(parts))
     for t in route['trunks']:
         out.append(f'<path class="trunk e-{t["type"]} st-{t["style"]}" data-trunk="{_h(t["key"])}" data-gap="{t["gap"]}" data-lane="{t["lane"]}" d="{t["d"]}"></path>')
@@ -4264,6 +4503,7 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
         cls = f'gnode t-{n["type"]} s-{n["state"] or "none"}{" sub" if sub else ""}{dec}{gone}'
         out.append(f'<g class="{cls}" data-node-id="{_h(n["id"])}" data-type="{n["type"]}" data-state="{n["state"]}" '
                    f'data-col="{n["col"]}" data-order="{n["order"]}" data-band="{n["band"]}"' + (f' data-parent="{_h(n["parent"])}"' if n.get('parent') else '') +
+                   (f' data-strip="{_h(n.get("strip", ""))}"' if n['type'] != 'decision' else '') +
                    f' transform="translate({n["x"]:g},{n["y"]:g})" tabindex="0">'
                    f'<rect class="box" width="{w}" height="{NODE_H}" rx="6"></rect>'
                    f'<rect class="tbar" x="3" y="3" width="5" height="{NODE_H - 6}" rx="2"></rect>'
@@ -4307,7 +4547,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span>● 完成</span><span>◐ 過期</span><span>✖ 受阻</span><span>○ 未到</span><span>◌ 不明</span>',
         '<span>｜</span>',
         '<span><span class="esw"></span>主幹（規劃／產出／驗證）；同來源的線合併成幹線＋分支，滑過任一分支整束高亮</span>',
-        '<span>三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走，其餘跨區的邊除主問題→附錄問題、結果→圖表外預設不畫，點選節點或「顯示全部邊」才顯示</span>',
+        '<span>三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶——同一個問題延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊、帶與帶之間留一列空隙（淡色細線分隔）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走，其餘跨區的邊除主問題→附錄問題、結果→圖表外預設不畫，點選節點或「顯示全部邊」才顯示</span>',
         '<span>已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過，不與該欄節點交錯</span>',
         '<span>縮排子節點＝敏感性子分析與其次要結果、敏感性分析群（群縮一層、子分析再縮一層；方法欄 plan→群→子分析 L 形線；結果欄靠產出邊連結）；plan 徽章「敏感性 n」，點選 plan 可暫時收合群與子分析</span>',
         '<span>結果主從（outputs 的 supports）：支撐結果縮排在主結果之下、同一區帶，以一條結果色的 L 形線（支撐）連自主結果；主結果徽章「支撐 n」，點選主結果可暫時收合；plan→支撐結果的產出線預設不畫</span>',
@@ -4321,7 +4561,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、問題帶 {st.get("strips", 0)}、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要／次要／未宣告）→ 圖表 → 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
@@ -4540,7 +4780,7 @@ def stats_line(ir: dict) -> str:
             f'次要 {gs["secondary_result_keys"]}、未宣告 {gs["undeclared_result_keys"]}、敏感性子分析 {gs["sensitivity_items"]} 項、'
             f'圖表 {gs["by_type"].get("figure", 0)} 張（未審 {gs["figures_unreviewed"]}）；'
             f'區帶 main {gs["band_main_nodes"]} 節點、ext {gs["band_ext_nodes"]} 節點、supp {gs["band_supp_nodes"]} 節點、'
-            f'敏感性分析群 {gs["sensitivity_groups"]} 組' + (f'、支撐結果 {gs["supporting_result_keys"]} 鍵' if gs.get('supporting_result_keys') else '')
+            f'問題帶 {gs.get("strips", 0)}、敏感性分析群 {gs["sensitivity_groups"]} 組' + (f'、支撐結果 {gs["supporting_result_keys"]} 鍵' if gs.get('supporting_result_keys') else '')
             + f'；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
             f'收件匣待處理 {ir["inbox"]["pending"]}。')
 

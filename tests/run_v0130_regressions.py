@@ -239,12 +239,13 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         assert [order[i] for i in ("p:SQ1-v1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ2-v1")] == list(range(9))
         y = {n["id"]: n["y"] for n in g["nodes"]}
         y0 = y["p:SQ1-v2"]
-        assert y0 == 20 and [y[i] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ2-v1")] == [y0 + 48 * i for i in range(1, 6)], y   # 沒有 supp 節點 → main 從 GRAPH_PAD 起
+        assert y0 == 20 and [y[i] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3")] == [y0 + 48 * i for i in range(1, 5)], y   # 沒有 supp 節點 → main 從 GRAPH_PAD 起
+        assert y["p:SQ2-v1"] == y0 + 6 * 48 + 48 == y["q:SQ2"], y   # v0.18.1（STRIP_GAP = 48）：SQ2 的問題帶接在 SQ1 的帶（結果欄 6 列最高）之後、留 STRIP_GAP
         assert nodes["p:SQ1-v2#S"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 48 and nodes["p:SQ1-v2"]["x"] == nodes["p:SQ2-v1"]["x"]
         assert all(nodes[i]["band"] == "main" for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "r:k4", "r:k6", "r:k7")), "v0.18.0：群、子分析、次要結果跟 plan 的區帶"
         assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}   # 次要結果與宣告它的子分析同列（barycenter）
         ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main")
-        assert ry == [20 + 48 * i for i in range(len(ry))]
+        assert ry == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]], ry   # v0.18.1：SQ1 帶六個結果連續、k3 在 SQ2 帶首列
         assert not [n for n in g["nodes"] if n["type"] == "result" and n["band"] == "supp"]
         # stats
         st = g["stats"]
@@ -496,7 +497,7 @@ def test_secondary_results_are_children() -> None:
         # 列序（v0.18.0：次要結果跟 plan 回 main 區帶）：主要 k1 k2 → R2 的 k4 → R3 的 k6 k7 → 未宣告 k5；y 連續
         y = {n["id"]: n["y"] for n in g["nodes"]}
         assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}
-        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main") == [20 + 48 * i for i in range(7)]
+        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main") == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]]   # v0.18.1：k3 在 SQ2 的帶
         # 產出邊仍由子分析連到次要結果；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
         edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
         assert ("p:SQ1-v2#R2", "r:k4", "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
