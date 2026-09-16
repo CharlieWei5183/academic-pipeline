@@ -213,7 +213,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
             e = edges[key]
             assert e["default_visible"] is visible and e["style"] == style and e["label"] == label, (key, e)
         # v0.14.0：sensitivity 邊改為 plan → 群（預設不畫）與 群 → 子分析；plan → 子分析不再建
-        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), False, "solid", "敏感性")
+        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), True, "solid", "敏感性")   # v0.18.0：plan → 群 L 形父子線可見
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R3", "sensitivity"), True, "solid", "敏感性")
         ev(("p:SQ1-v1#S", "p:SQ1-v1#R1", "sensitivity"), False, "solid", "敏感性")
@@ -231,21 +231,21 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         assert ("p:SQ1-v2", "r:k4", "produces") not in edges, "次要鍵只由子分析連出，主節點不直接連"
         ev(("p:SQ1-v2", "v:V1", "validated_by"), True, "solid", "驗證")
         ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
-        ev(("v:V1", "r:k4", "robustness"), False, "thin", "驗證（穩健性）")   # v0.14.0：main 驗證 → supp 次要結果跨區帶，預設不畫
+        ev(("v:V1", "r:k4", "robustness"), True, "thin", "驗證（穩健性）")   # v0.18.0：次要結果跟 plan 回 main，與驗證同區帶 → 預設畫出
         # 列序（v0.14.0：order 為每 (band, col) 內的整數序；方法欄 main 區帶＝plan、supp 區帶＝群緊接其子節點；
         # 結果欄 main 區帶 k1 < k2 < k5 < k3、supp 區帶 k4 < k6 < k7，各自 y 連續；main 從 48 起、supp 從 main_bottom + 40 + 28 起）
         order = {n["id"]: n["order"] for n in g["nodes"]}
-        assert [order[i] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1")] == [0, 1, 2]
-        assert [order[i] for i in ("p:SQ1-v1#S", "p:SQ1-v1#R1", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3")] == list(range(6))
+        # v0.18.0：群與子分析縮排在 plan 之下、同區帶——method 欄 main 帶序：SQ1-v1（收合）、SQ1-v1#S、#R1（收合借列）、SQ1-v2、#S、#R1、#R2、#R3、SQ2-v1
+        assert [order[i] for i in ("p:SQ1-v1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ2-v1")] == list(range(9))
         y = {n["id"]: n["y"] for n in g["nodes"]}
-        y0_supp = max(n["y"] for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision") + 36 + 40 + 28
-        assert y["p:SQ1-v2"] == 48 and y["p:SQ2-v1"] == 96 and y["p:SQ1-v2#S"] == y0_supp and y["p:SQ1-v2#R1"] == y0_supp + 48 and y["p:SQ1-v2#R3"] == y0_supp + 144, y
-        assert nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2"]["x"] == nodes["p:SQ2-v1"]["x"] == nodes["p:SQ1-v2#S"]["x"]
-        assert y["r:k1"] < y["r:k2"] < y["r:k5"] < y["r:k3"] < y["r:k4"] < y["r:k6"] < y["r:k7"], {k: v for k, v in y.items() if k.startswith("r:")}
+        y0 = y["p:SQ1-v2"]
+        assert y0 == 20 and [y[i] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3", "p:SQ2-v1")] == [y0 + 48 * i for i in range(1, 6)], y   # 沒有 supp 節點 → main 從 GRAPH_PAD 起
+        assert nodes["p:SQ1-v2#S"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 48 and nodes["p:SQ1-v2"]["x"] == nodes["p:SQ2-v1"]["x"]
+        assert all(nodes[i]["band"] == "main" for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "r:k4", "r:k6", "r:k7")), "v0.18.0：群、子分析、次要結果跟 plan 的區帶"
+        assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}   # 次要結果與宣告它的子分析同列（barycenter）
         ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main")
-        assert ry == [48 + 48 * i for i in range(len(ry))]
-        ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "supp")
-        assert ry == [y0_supp + 48 * i for i in range(len(ry))]
+        assert ry == [20 + 48 * i for i in range(len(ry))]
+        assert not [n for n in g["nodes"] if n["type"] == "result" and n["band"] == "supp"]
         # stats
         st = g["stats"]
         assert st["by_type"]["method"] == 9 and st["sensitivity_items"] == 4 and st["secondary_result_keys"] == 2 and st["undeclared_result_keys"] == 1, st
@@ -279,7 +279,7 @@ def test_html_subnodes() -> None:
         assert "未驗證旁路" not in html_text
         # 子節點寬度減 24、父→子 L 形線（M x,y L x,y Q … L …，起點在父節點左緣下方）
         m = re.search(r'data-node-id="p:SQ1-v2#R1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
-        assert m and int(m.group(3)) == 260 - 24, m.group(0) if m else None
+        assert m and int(m.group(3)) == 260 - 48, m.group(0) if m else None   # v0.18.0：子分析縮排 48、寬減 48
         sx, sy = int(m.group(1)), int(m.group(2))
         # v0.14.0：L 形線的父是敏感性分析群 p:SQ1-v2#S
         m2 = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ1-v2#S" data-to="p:SQ1-v2#R1" data-type="sensitivity" d="([^"]*)"', html_text)
@@ -493,11 +493,10 @@ def test_secondary_results_are_children() -> None:
         assert k1["subtype"] == "primary" and k2["subtype"] == "primary" and k5["subtype"] == "undeclared"
         assert k1["parent"] == "" and k2["parent"] == "" and k5["parent"] == "" and k1["x"] == k5["x"]
         assert nodes["r:k3"]["subtype"] == "primary" and nodes["r:k3"]["parent"] == ""
-        # 列序（v0.14.0）：main 區帶 主要 k1 k2 → 未宣告 k5；supp 區帶 R2 的 k4 → R3 的 k6 k7；各區帶 y 連續
+        # 列序（v0.18.0：次要結果跟 plan 回 main 區帶）：主要 k1 k2 → R2 的 k4 → R3 的 k6 k7 → 未宣告 k5；y 連續
         y = {n["id"]: n["y"] for n in g["nodes"]}
-        assert y["r:k1"] < y["r:k2"] < y["r:k5"] < y["r:k4"] < y["r:k6"] < y["r:k7"]
-        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main") == [48 + 48 * i for i in range(4)]
-        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "supp") == [y["r:k4"] + 48 * i for i in range(3)]
+        assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}
+        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main") == [20 + 48 * i for i in range(7)]
         # 產出邊仍由子分析連到次要結果；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
         edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
         assert ("p:SQ1-v2#R2", "r:k4", "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
@@ -505,7 +504,7 @@ def test_secondary_results_are_children() -> None:
         mk4 = re.search(r'data-node-id="r:k4"[^>]*data-parent="p:SQ1-v2#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         mk1 = re.search(r'data-node-id="r:k1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         assert mk4 and mk1 and int(mk4.group(1)) == int(mk1.group(1)) + 24 and int(mk4.group(3)) == int(mk1.group(3)) - 24, (mk4, mk1)
-        assert 'class="gnode t-result s-done sub"' in html_text and "縮排子節點＝敏感性子分析與其次要結果" in html_text
+        assert 'class="gnode t-result s-done sub"' in html_text and "縮排子節點＝敏感性子分析與其次要結果、敏感性分析群" in html_text
         assert "'<dt>父子分析</dt>" in html_text and "次要結果（'+secs.length+'）" in html_text
         # 父 plan 換成 superseded → 子分析與其次要結果一併收合、y 借用現行版
         index = INDEX.replace("active: {SQ1: SQ1-v2, SQ2: SQ2-v1}", "active: {SQ1: SQ1-v3, SQ2: SQ2-v1}") \

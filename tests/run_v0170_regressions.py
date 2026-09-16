@@ -322,7 +322,7 @@ def test_frontend(tmp: Path) -> None:
                    "kind:'batch',payload:{actions:actions,reason:stagedReason()}", '虛線外框＝已暫存', '批次'):
         assert anchor in html, anchor
     assert html.count('function actPreview(') == 1 and html.count('function actApply(') == 1 and html.count("actPost('/api/actions/dry-run'") == 1 and html.count("actPost('/api/actions/apply'") == 1
-    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下／批次；由腳本確定性執行）' in html
+    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下／降為敏感性子分析／批次；由腳本確定性執行）' in html   # 0.18.0 多 demote_plan
     assert 'http://' not in html
     js = _js_of(html)
     node = shutil.which('node')
@@ -372,8 +372,8 @@ console.log(JSON.stringify(out));
     assert o['k2']['cls'] == {'staged': 1} and o['k2']['staged'] is True and o['k1_sup'] == ['r:k2']
     assert o['edge']['from'] == 'r:k1' and o['edge']['to'] == 'r:k2' and o['edge']['type'] == 'supports' and o['nEdges'] == o['nEls'] == len(g['edges']) + 1 and o['produces_hidden'] == [False]
     assert o['m2'] == ['r:r2'] and o['r2'] == {'parent': '', 'band': 'supp', 'subtype': 'primary', 'x': 20 + 4 * 380, 'plan': 'AQ1-v1', 'prod': ['p:AQ1-v1']}, o['r2']
-    assert o['k1']['parent'] == 'p:SQ1-v1#R2' and o['k1']['subtype'] == 'secondary' and o['k1']['band'] == 'supp' and o['k1']['x'] == 20 + 4 * 380 + 24, o['k1']
-    assert o['k2_follow'] == {'parent': 'r:k1', 'band': 'supp'}, o['k2_follow']   # 支撐結果跟主結果換帶
+    assert o['k1']['parent'] == 'p:SQ1-v1#R2' and o['k1']['subtype'] == 'secondary' and o['k1']['band'] == 'main' and o['k1']['x'] == 20 + 4 * 380 + 24, o['k1']   # v0.18.0：次要結果跟 plan 的帶（SQ1 → main）
+    assert o['k2_follow'] == {'parent': 'r:k1', 'band': 'main'}, o['k2_follow']   # 支撐結果跟主結果（同帶）
     assert o['m4'] == ['q:SQ2'] and o['sq2']['band'] == 'supp' and o['sq2']['to'] == 'AQ3' and o['sq2']['plan'] == 'supp' and o['sq2']['m1'] == 'supp' and all(b == 'supp' for b in o['sq2']['v']), o['sq2']
     assert o['m5'] == ['f:F_a'] and o['fa'] == {'band': 'ext', 'role': 'extended'}
     assert o['m6'] == ['p:SQ1-v1#R1'] and o['r1s']['parent'] == 'p:SQ2-v1#S' and o['r1s']['sens'] == ['p:SQ2-v1#S'], o['r1s']

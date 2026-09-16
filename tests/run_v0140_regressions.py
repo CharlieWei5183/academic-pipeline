@@ -253,9 +253,10 @@ def test_band_assignment_groups_and_edges() -> None:
         expect = {
             "q:main": "main", "q:SQ1": "main", "q:SQ2": "main", "q:SQ3": "main", "q:AQ1": "supp",
             "p:SQ1-v1": "main", "p:SQ1-v2": "main", "p:SQ2-v1": "main", "p:SQ3-v1": "main", "p:AQ1-v1": "supp",
-            "p:SQ1-v1#S": "supp", "p:SQ1-v2#S": "supp", "p:SQ3-v1#S": "supp", "p:AQ1-v1#S": "supp",
-            "p:SQ1-v1#R1": "supp", "p:SQ1-v2#R1": "supp", "p:SQ1-v2#R2": "supp", "p:SQ3-v1#R1": "supp", "p:AQ1-v1#R1": "supp",
-            "r:k1": "main", "r:k2": "main", "r:k3": "main", "r:k5": "main", "r:k4": "supp", "r:z1": "supp", "r:a1": "supp", "r:a2": "supp",
+            # v0.18.0（使用者 2026-09-16 裁定，取代 2026-09-15 D-051 的「群放 Supplementary」畫法）：群、子分析、次要結果跟所屬 plan 的區帶
+            "p:SQ1-v1#S": "main", "p:SQ1-v2#S": "main", "p:SQ3-v1#S": "main", "p:AQ1-v1#S": "supp",
+            "p:SQ1-v1#R1": "main", "p:SQ1-v2#R1": "main", "p:SQ1-v2#R2": "main", "p:SQ3-v1#R1": "main", "p:AQ1-v1#R1": "supp",
+            "r:k1": "main", "r:k2": "main", "r:k3": "main", "r:k5": "main", "r:k4": "main", "r:z1": "main", "r:a1": "supp", "r:a2": "supp",
             "v:V1": "main", "v:V2": "supp", "f:F1": "main", "f:F2": "supp", "d:D-001": "main",
         }
         for nid, band in expect.items():
@@ -267,27 +268,29 @@ def test_band_assignment_groups_and_edges() -> None:
         grp = nodes["p:SQ1-v2#S"]
         assert grp["type"] == "method" and grp["subtype"] == "sensitivity_group" and grp["parent"] == "p:SQ1-v2" and grp["col"] == 2
         assert grp["label"] == "SQ1-v2 敏感性分析" and grp["badge"] == "2 項" and grp["collapsed"] is False and grp["state"] == "done"
-        assert grp["title"] == "SQ1-v2 的 robustness 子分析共 2 項；以一條線（敏感性對照）連回所屬 plan"   # v0.15.0
-        assert grp["meta"] == {"plan_id": "SQ1-v2", "sensitivity_ids": ["p:SQ1-v2#R1", "p:SQ1-v2#R2"], "supplements": ["SQ1-v2"]}, grp["meta"]   # v0.15.0：連回 plan
-        assert grp["source"] == "analysis/plans/SQ1-v2.yaml#robustness" and grp["x"] == nodes["p:SQ1-v2"]["x"], "群不縮排"
+        assert grp["title"] == "SQ1-v2 的 robustness 子分析共 2 項；縮排在所屬 plan 之下、區帶跟 plan 走"   # v0.18.0
+        assert grp["meta"] == {"plan_id": "SQ1-v2", "sensitivity_ids": ["p:SQ1-v2#R1", "p:SQ1-v2#R2"]}, grp["meta"]   # v0.18.0：不再有 supplements
+        assert grp["source"] == "analysis/plans/SQ1-v2.yaml#robustness" and grp["x"] == nodes["p:SQ1-v2"]["x"] + 24, "v0.18.0：群縮排一層"
         old = nodes["p:SQ1-v1#S"]
-        assert old["state"] == "expired" and old["collapsed"] is True and old["badge"] == "1 項" and old["meta"]["supplements"] == ["SQ1-v1"]
-        assert nodes["p:SQ3-v1#S"]["state"] == "pending" and nodes["p:SQ3-v1#S"]["meta"]["supplements"] == ["SQ3-v1"] and nodes["p:SQ3-v1#S"]["badge"] == "1 項"
-        assert nodes["p:AQ1-v1#S"]["state"] == "done" and nodes["p:AQ1-v1#S"]["meta"]["supplements"] == ["AQ1-v1"]
-        assert nodes["p:SQ1-v2"]["meta"]["sensitivity_ids"] == ["p:SQ1-v2#R1", "p:SQ1-v2#R2"], "plan 的 sensitivity_ids 照舊"
-        # 子分析 parent＝群；子分析仍縮排；次要結果 parent＝子分析
+        assert old["state"] == "expired" and old["collapsed"] is True and old["badge"] == "1 項" and "supplements" not in old["meta"]
+        assert nodes["p:SQ3-v1#S"]["state"] == "pending" and nodes["p:SQ3-v1#S"]["badge"] == "1 項"
+        assert nodes["p:AQ1-v1#S"]["state"] == "done"
+        assert nodes["p:SQ1-v2"]["meta"]["sensitivity_ids"] == ["p:SQ1-v2#R1", "p:SQ1-v2#R2"] and nodes["p:SQ1-v2"]["meta"]["group_id"] == "p:SQ1-v2#S", "plan 的 sensitivity_ids 照舊、group_id 指群"
+        assert nodes["p:SQ1-v2"]["badge"] == "v2（1 舊版）｜敏感性 2" and nodes["p:SQ3-v1"]["badge"] == "敏感性 1" and nodes["p:SQ2-v1"]["badge"] == "", "v0.18.0：plan 徽章「敏感性 n」"
+        # 子分析 parent＝群；子分析再縮一層（48）；次要結果 parent＝子分析
         for sid in ("p:SQ1-v1#R1", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ3-v1#R1", "p:AQ1-v1#R1"):
             assert nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["parent"] == sid.split("#")[0] + "#S", (sid, nodes[sid]["parent"])
-            assert nodes[sid]["x"] == nodes[sid.split("#")[0] + "#S"]["x"] + 24
+            assert nodes[sid]["x"] == nodes[sid.split("#")[0] + "#S"]["x"] + 24 == nodes[sid.split("#")[0]]["x"] + 48
         assert nodes["r:k4"]["parent"] == "p:SQ1-v2#R2" and nodes["r:a2"]["parent"] == "p:AQ1-v1#R1" and nodes["r:z1"]["parent"] == "p:SQ3-v1#R1"
 
         def ev(key, visible, style, label):
             assert key in edges, f"缺邊 {key}"
             e = edges[key]
             assert e["default_visible"] is visible and e["style"] == style and e["label"] == label, (key, e)
-        # plan → 群 隱藏；群 → 子分析 可見；plan → 子分析 不再建
-        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), False, "solid", "敏感性")
-        ev(("p:AQ1-v1", "p:AQ1-v1#S", "sensitivity"), False, "solid", "敏感性")
+        # v0.18.0：plan → 群 L 形父子線可見（舊版隱藏）；群 → 子分析 可見；plan → 子分析 不再建
+        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), True, "solid", "敏感性")
+        ev(("p:AQ1-v1", "p:AQ1-v1#S", "sensitivity"), True, "solid", "敏感性")
+        ev(("p:SQ1-v1", "p:SQ1-v1#S", "sensitivity"), False, "solid", "敏感性")
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R2", "sensitivity"), True, "solid", "敏感性")
         ev(("p:SQ1-v1#S", "p:SQ1-v1#R1", "sensitivity"), False, "solid", "敏感性")
@@ -297,29 +300,27 @@ def test_band_assignment_groups_and_edges() -> None:
         ev(("p:SQ1-v2#R2", "r:k4", "produces"), True, "solid", "")
         ev(("p:AQ1-v1#R1", "r:a2", "produces"), True, "solid", "")
         ev(("p:SQ3-v1#R1", "r:z1", "produces"), True, "solid", "")
-        # v0.15.0：群 → 所屬 plan 一條 supplements（可見實線；舊版隱藏），不再連到任何結果
+        # v0.18.0：不再有 supplements 敏感性對照邊；每個 active 群恰一條可見的 plan → 群 sensitivity 邊
+        assert not [e for e in g["edges"] if e["type"] == "supplements"]
         for gid, pid, vis in (("p:SQ1-v2#S", "p:SQ1-v2", True), ("p:SQ1-v1#S", "p:SQ1-v1", False), ("p:SQ3-v1#S", "p:SQ3-v1", True), ("p:AQ1-v1#S", "p:AQ1-v1", True)):
-            ev((gid, pid, "supplements"), vis, "solid", "敏感性對照")
-            assert [e for e in g["edges"] if e["type"] == "supplements" and e["from"] == gid] == [edges[(gid, pid, "supplements")]], gid
-        assert not any(t == "supplements" and b.startswith("r:") for _a, b, t in edges)
-        assert all(nodes[a]["subtype"] == "sensitivity_group" and nodes[a]["parent"] == b for a, b, t in edges if t == "supplements")
-        # 跨區帶隱藏規則：除 decomposes／supplements 外一律不可見；同區帶的照舊
+            assert [e["default_visible"] for e in g["edges"] if e["type"] == "sensitivity" and e["to"] == gid] == [vis] and nodes[gid]["parent"] == pid, gid
+        # 跨區帶隱藏規則：除 decomposes／depicts 外一律不可見；同區帶的照舊
         for (a, b, t), e in edges.items():
-            if nodes[a]["band"] != nodes[b]["band"] and t not in ("decomposes", "supplements"):
+            if nodes[a]["band"] != nodes[b]["band"] and t not in ("decomposes", "depicts"):
                 assert e["default_visible"] is False, (a, b, t)
         ev(("q:main", "q:AQ1", "decomposes"), True, "solid", "")
-        ev(("v:V1", "r:k4", "robustness"), False, "thin", "驗證（穩健性）")
+        ev(("v:V1", "r:k4", "robustness"), True, "thin", "驗證（穩健性）")   # v0.18.0：k4 跟 plan 回 main，與 V1 同區帶 → 可見
         ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
         ev(("v:V2", "r:a1", "primary"), True, "solid", "驗證（主要）")
         ev(("q:AQ1", "p:AQ1-v1", "plans"), True, "solid", "")
         ev(("r:k1", "f:F1", "depicts"), True, "solid", "呈現於")
         ev(("r:k4", "f:F2", "depicts"), True, "solid", "呈現於")
-        # v0.15.0：supplements 不進 route_edges（對照短垂線 _spine_path：群上緣 → plan 下緣）
+        # v0.18.0：plan → 群、群 → 子分析都是 L 形線，不進 route_edges
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
         drawn = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown and e["to"] in shown]
         r = rp.route_edges(nodes, drawn)
-        assert not any(i in r["paths"] for i, e in drawn if e["type"] == "supplements")
-        assert rp._spine_path(nodes["p:AQ1-v1#S"], nodes["p:AQ1-v1"]) == f"M{nodes['p:AQ1-v1#S']['x'] + 12},{nodes['p:AQ1-v1#S']['y']} V{nodes['p:AQ1-v1']['y'] + 36}"
+        assert not any(i in r["paths"] for i, e in drawn if e["type"] == "sensitivity")
+        assert rp._l_path(nodes["p:AQ1-v1"], nodes["p:AQ1-v1#S"]).startswith(f"M{nodes['p:AQ1-v1']['x'] + 12},{nodes['p:AQ1-v1']['y'] + 36} L")
         # stats
         st = g["stats"]
         n_supp = sum(1 for b in expect.values() if b == "supp")
@@ -360,10 +361,11 @@ def test_layout_bands() -> None:
                     continue   # 欄 0 只有 q:main，它是垂直居中、不照列排
                 ys = [y for _od, y, n in cell if n is None or (not n["collapsed"] and n["type"] != "decision")]
                 assert ys == [y0 + rp.ROW_GAP * i for i in range(len(ys))], (band, col, ys)
-        # supp 欄 2 的順序：SQ 各群（依問題序）→ AQ 的 plan → AQ 的群 → AQ 的 R#；群在子項前
+        # v0.18.0：supp 欄 2 只剩 AQ 的 plan → 群 → R#；main 欄 2 每個 plan 緊接自己的群與子分析（群在子項前）
         supp_m = [n["id"] for n in sorted((n for n in g["nodes"] if n["band"] == "supp" and n["col"] == 2), key=lambda n: n["order"])]
-        assert supp_m == ["p:SQ1-v1#S", "p:SQ1-v1#R1", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ3-v1#S", "p:SQ3-v1#R1",
-                          "p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1"], supp_m
+        assert supp_m == ["p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1"], supp_m
+        main_m = [n["id"] for n in sorted((n for n in g["nodes"] if n["band"] == "main" and n["col"] == 2), key=lambda n: n["order"])]
+        assert main_m == ["p:SQ1-v1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ2-v1", "p:SQ3-v1", "p:SQ3-v1#S", "p:SQ3-v1#R1"], main_m
         # q:main 只對 main 區帶的問題居中（AQ1 在 supp）
         ys = [nodes[q]["y"] for q in ("q:SQ1", "q:SQ2", "q:SQ3")]
         assert nodes["q:main"]["y"] == (min(ys) + max(ys)) / 2 and nodes["q:AQ1"]["y"] >= y0_supp
@@ -423,30 +425,31 @@ def test_html_bands_and_panel() -> None:
         assert bands["main"][0] == "band-divider off" and bands["main"][2] == "band-title" and bands["main"][4] == "Main ｜ 主結果"
         assert bands["main"][3] == str(rp.GRAPH_PAD + rp.BAND_TITLE_DY)
         assert bands["ext"][0] == "band-divider off" and bands["ext"][2] == "band-title off" and bands["ext"][4] == "Extended Data ｜ 延伸資料圖表"
-        assert bands["supp"][0] == "band-divider" and bands["supp"][2] == "band-title" and bands["supp"][4] == "Supplementary ｜ 補充：敏感性分析與附錄問題"
+        assert bands["supp"][0] == "band-divider" and bands["supp"][2] == "band-title" and bands["supp"][4] == "Supplementary ｜ 補充：附錄問題與補充圖表"
         assert bands["supp"][1] == str(main_bottom + rp.BAND_GAP // 2) and bands["supp"][3] == str(main_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
         assert bands["supp"][5] == str(width - 20)
         assert html_text.index('<g id="graph-bands"') < html_text.index('<g id="graph-trunks">'), "區帶在 graph-root 最前面"
-        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（敏感性分析與附錄問題）；每組敏感性分析以一條短垂線（敏感性對照）連回所屬分析",
-                      "'<dt>所屬分析</dt>", "'<dt>敏感性對照</dt>", "子分析（'+gids.length+'）", "'<dt>父分析</dt>", "'<dt>區帶</dt>",
+        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走",
+                      "'<dt>所屬分析</dt>", "子分析（'+gids.length+'）", "'<dt>父分析</dt>", "'<dt>區帶</dt>",
                       'data-node-id="p:SQ1-v2#S"', 'data-band="supp"', 'data-band="main"', "text.band-title", "line.band-divider", "#graph-bands.off",
                       "var BAND_TITLE_H=28,BAND_GAP=40,BAND_TITLE_DY=18;", "var BANDS=['main','ext','supp'];",
-                      'class="edge e-supplements st-solid" data-idx=', "arrow-method", "區帶 main ", "敏感性分析群 4 組"):
+                      "區帶 main ", "敏感性分析群 4 組"):
             assert token in html_text, f"HTML 缺 {token}"
-        assert 'data-trunk="p:SQ1-v2#S|4|supplements|solid|fwd"' not in html_text and 'class="trunk e-supplements' not in html_text
-        # 群節點寬 NODE_W、不縮排；子分析縮排
+        assert 'e-supplements' not in html_text.split('<style>')[-1].split('</style>')[0] or 'class="edge e-supplements' not in html_text   # v0.18.0：不再畫敏感性對照短垂線
+        assert 'class="edge e-supplements' not in html_text and 'class="trunk e-supplements' not in html_text and "'<dt>敏感性對照</dt>" not in html_text
+        # v0.18.0：群縮排一層（寬減 24）；子分析再縮一層（寬減 48）
         m = re.search(r'data-node-id="p:SQ1-v2#S"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
-        assert m and int(m.group(3)) == rp.NODE_W and int(m.group(1)) == nodes["p:SQ1-v2"]["x"], m.group(0) if m else None
+        assert m and int(m.group(3)) == rp.NODE_W - 24 and int(m.group(1)) == nodes["p:SQ1-v2"]["x"] + 24, m.group(0) if m else None
         m2 = re.search(r'data-node-id="p:SQ1-v2#R1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
-        assert m2 and int(m2.group(3)) == rp.NODE_W - 24 and int(m2.group(1)) == nodes["p:SQ1-v2"]["x"] + 24
-        # 群 → 子分析 L 形線從群左緣下方垂下；plan → 群的 sensitivity 邊帶 off；群 → plan 的敏感性對照短垂線（跨區帶、V 只有一段）
+        assert m2 and int(m2.group(3)) == rp.NODE_W - 48 and int(m2.group(1)) == nodes["p:SQ1-v2"]["x"] + 48
+        # 群 → 子分析 L 形線從群左緣下方垂下；plan → 群也是 L 形線（可見、從 plan 左緣下方垂下、右轉進群左緣）
         m3 = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ1-v2#S" data-to="p:SQ1-v2#R1" data-type="sensitivity" d="([^"]*)"', html_text)
         assert m3 and m3.group(1).startswith(f"M{int(m.group(1)) + 12},{int(m.group(2)) + 36} L"), m3.group(1) if m3 else None
-        m4 = re.search(r'class="edge e-supplements st-solid" data-idx="\d+" data-from="p:SQ1-v2#S" data-to="p:SQ1-v2" data-type="supplements" d="([^"]*)"', html_text)
-        assert m4 and m4.group(1) == f"M{int(m.group(1)) + 12},{int(m.group(2))} V{nodes['p:SQ1-v2']['y'] + 36}", m4.group(1) if m4 else None
-        assert re.search(r'class="edge e-sensitivity st-solid off" data-idx="\d+" data-from="p:SQ1-v2" data-to="p:SQ1-v2#S"', html_text)
+        m4 = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ1-v2" data-to="p:SQ1-v2#S" data-type="sensitivity" d="([^"]*)"', html_text)
+        px, py = nodes["p:SQ1-v2"]["x"], nodes["p:SQ1-v2"]["y"]
+        assert m4 and m4.group(1).startswith(f"M{px + 12},{py + 36} L{px + 12},") and m4.group(1).endswith(f" L{px + 24},{int(m.group(2)) + 18}"), m4.group(1) if m4 else None
         assert re.search(r'class="edge e-produces st-solid off" data-idx="\d+" data-from="p:SQ1-v2#R1" data-to="r:k2"', html_text)
-        assert re.search(r'class="edge e-robustness st-thin off" data-idx="\d+" data-from="v:V1" data-to="r:k4"', html_text)
+        assert re.search(r'class="edge e-robustness st-thin" data-idx="\d+" data-from="v:V1" data-to="r:k4"', html_text)   # v0.18.0：同區帶 → 畫出
         # 自含、tag 平衡
         for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text
@@ -483,7 +486,7 @@ def test_html_bands_and_panel() -> None:
         trunk_re = r'<path class="trunk[^"]*" data-trunk="([^"]*)" data-gap="(\d+)" data-lane="(\d+)" d="([^"]*)"'
         assert sorted(re.findall(trunk_re, html_text)) == sorted(re.findall(trunk_re, dom)) != []
         assert re.search(r'<svg id="graph-svg" width="(\d+)" height="(\d+)"', html_text).groups() == re.search(r'<svg id="graph-svg" width="(\d+)" height="(\d+)"', dom).groups()
-        # 勾「顯示舊版計畫」（把 checkbox 預設勾起再載入）→ 舊版群與 R# 落在 supp 區帶、舊版 plan 在 main 區帶
+        # 勾「顯示舊版計畫」（把 checkbox 預設勾起再載入）→ 舊版 plan、舊版群與 R# 都在 main 區帶（v0.18.0：群跟 plan），群緊接舊版 plan、R# 緊接群
         old_html = html_text.replace('<input type="checkbox" id="toggle-old">', '<input type="checkbox" id="toggle-old" checked>')
         assert old_html != html_text
         (root / "PROGRESS_old.html").write_text(old_html, encoding="utf-8")
@@ -497,9 +500,10 @@ def test_html_bands_and_panel() -> None:
         y0_supp2 = float(b2["supp"][3]) - rp.BAND_TITLE_DY + rp.BAND_TITLE_H
         for nid in ("p:SQ1-v1#S", "p:SQ1-v1#R1"):
             c, band, t = n2[nid]
-            assert " gone" not in c and band == "supp" and float(t.split(",")[1]) >= y0_supp2, (nid, n2[nid], y0_supp2)
+            assert " gone" not in c and band == "main" and float(t.split(",")[1]) + rp.NODE_H <= float(y_div), (nid, n2[nid], y_div)
         c, band, t = n2["p:SQ1-v1"]
         assert " gone" not in c and band == "main" and float(t.split(",")[1]) + rp.NODE_H <= float(y_div), (n2["p:SQ1-v1"], y_div)
+        assert float(n2["p:SQ1-v1#S"][2].split(",")[1]) == float(n2["p:SQ1-v1"][2].split(",")[1]) + rp.ROW_GAP
         assert float(n2["p:SQ1-v1#R1"][2].split(",")[1]) == float(n2["p:SQ1-v1#S"][2].split(",")[1]) + rp.ROW_GAP
         for nid, (c, band, t) in n2.items():
             if " gone" in c or " dec" in c:
@@ -526,22 +530,24 @@ def test_validate_ir_band_rules() -> None:
         errs = mutate(lambda bad, by, ed: by["r:k1"].update(band="weird"))
         assert [e for e in errs if e.endswith(".band")] == ["IR-12 graph.nodes[10].band"] and all(e.endswith(".band") or "跨區帶" in e for e in errs), errs
         errs = mutate(lambda bad, by, ed: by["q:SQ1"].update(subtype="sensitivity_group"))
-        assert "IR-12 graph.nodes[1].subtype" in errs and "IR-13 graph.nodes[q:SQ1].supplements" in errs and len(errs) == 2, errs   # 冒充的群連帶缺 supplements
+        assert "IR-12 graph.nodes[1].subtype" in errs and "IR-13 graph.nodes[q:SQ1].sensitivity（plan → 群）" in errs and len(errs) == 2, errs   # 冒充的群連帶缺 plan → 群邊
         errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#R1"].update(parent="p:SQ1-v2"))
         assert [e for e in errs if e.endswith(".parent")] and len(errs) == 1, errs   # 子分析的 parent 必須是同 plan 的群
         errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#S"].update(parent="p:SQ2-v1"))
-        # 群的 parent 必須是自己的頂層 plan；v0.15.0 起連帶 supplements 目標（p:SQ1-v2）不再是 parent → 兩條 IR-13
-        assert [e for e in errs if e.endswith(".parent")] and any("非群的所屬 plan" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].supplements" in errs and len(errs) == 3, errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update({"from": "p:SQ1-v2"}))
-        assert any("非敏感性分析群" in e for e in errs), errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update(default_visible=False))
-        assert errs == ["IR-13 graph.nodes[p:SQ1-v2#S].supplements"], errs   # active 群恰一條可見 supplements
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update({"to": "r:k1"}))
-        assert any("非群的所屬 plan" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].supplements" in errs and len(errs) == 2, errs   # v0.15.0：目標必須是所屬 plan
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")].update(default_visible=True))
-        assert errs and all("跨區帶" in e for e in errs), errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#R1", "r:k2", "produces")].update(default_visible=True))
-        assert errs and all("跨區帶" in e for e in errs), errs
+        # 群的 parent 必須是自己的頂層 plan；v0.18.0：連帶 plan → 群的 sensitivity 邊 to 不再是 parent 的群、群缺可見的 plan → 群邊 → 三條
+        assert [e for e in errs if e.endswith(".parent")] and any("非該 plan 的敏感性分析群" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].sensitivity（plan → 群）" in errs and len(errs) == 3, errs
+        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")].update(default_visible=False))
+        assert errs == ["IR-13 graph.nodes[p:SQ1-v2#S].sensitivity（plan → 群）"], errs   # active 群恰一條可見的 plan → 群邊
+        errs = mutate(lambda bad, by, ed: bad["graph"]["edges"].append(dict(ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")], **{"from": "p:SQ1-v2#S", "to": "p:SQ1-v2", "type": "supplements"})))
+        assert errs and any("supplements 已停用" in e for e in errs), errs   # v0.18.0：supplements 邊不得出現（多一條邊也讓 stats.edges 對不上）
+        errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#S"].update(band="supp"))
+        assert any("敏感性分析群須與所屬 plan" in e for e in errs), errs   # v0.18.0：群的區帶須跟 plan
+        errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#R1"].update(band="supp"))
+        assert any("子分析須與群" in e for e in errs), errs
+        errs = mutate(lambda bad, by, ed: by["r:k4"].update(band="supp"))
+        assert any("次要結果須與子分析" in e for e in errs), errs
+        errs = mutate(lambda bad, by, ed: ed[("q:AQ1", "p:AQ1-v1", "plans")].update({"to": "p:SQ1-v2"}))
+        assert errs and any("跨區帶" in e for e in errs), errs
         errs = mutate(lambda bad, by, ed: bad["graph"]["stats"].pop("sensitivity_groups"))
         assert errs == ["IR-14 graph.stats"], errs
         errs = mutate(lambda bad, by, ed: bad["graph"]["stats"].update(band_main_nodes=bad["graph"]["stats"]["band_main_nodes"] + 1))

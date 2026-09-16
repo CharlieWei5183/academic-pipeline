@@ -149,7 +149,7 @@ MANIFEST = {"figures": [
     {"id": "F_ext2", "file": "analysis/figures/f.svg", "results_keys": [], "role": "Extended Data", "status": "registered_not_reviewed", "caption": "延伸二（大小寫與空白）"},
     {"id": "F_supp", "file": "analysis/figures/f.svg", "results_keys": ["k1"], "role": "SI", "status": "registered_not_reviewed", "caption": "補充（role 蓋過推導）"},
     {"id": "F_norole", "file": "analysis/figures/f.svg", "results_keys": ["k3"], "status": "registered_not_reviewed", "caption": "無 role → 推導 main"},
-    {"id": "F_norole_supp", "file": "analysis/figures/f.svg", "results_keys": ["s1"], "status": "registered_not_reviewed", "caption": "無 role → 推導 supp"},
+    {"id": "F_norole_supp", "file": "analysis/figures/f.svg", "results_keys": ["a2"], "status": "registered_not_reviewed", "caption": "無 role → 推導 supp（v0.18.0：只呈現附錄問題的結果才 supp）"},
     {"id": "T_main", "file": "analysis/figures/f.svg", "results_keys": [], "role": "main", "type": "table", "status": "registered_not_reviewed", "caption": "主表"},
     {"id": "F_badrole", "file": "analysis/figures/f.svg", "results_keys": ["nope"], "role": "weird", "status": "registered_not_reviewed", "caption": "不認得的 role"},
 ]}
@@ -275,19 +275,20 @@ def test_bands_roles_and_badges() -> None:
         assert nodes["f:T_main"]["meta"]["type"] == "table" and nodes["f:F_main"]["meta"]["type"] == ""
         assert "WARNING analysis/figures/manifest.json#figures[F_badrole].results_keys 指到不在圖裡的鍵: nope" in err, err
         # 非圖表節點 band 規則不變；ext 帶只有圖表
-        assert all(nodes[i]["band"] == "main" for i in ("q:main", "q:SQ1", "q:SQ2", "p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1", "v:V1", "r:k1", "r:k2", "r:k3", "r:m1", "d:D-001"))
-        assert all(nodes[i]["band"] == "supp" for i in ("q:AQ1", "p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2",
-                                                        "p:SQ2-v1#S", "p:SQ2-v1#R1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "r:s1", "r:a1", "r:a2", "v:V2"))
+        # v0.18.0：群、子分析、次要結果跟所屬 plan 的區帶（SQ 的在 main、AQ 的在 supp）
+        assert all(nodes[i]["band"] == "main" for i in ("q:main", "q:SQ1", "q:SQ2", "p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1", "v:V1", "r:k1", "r:k2", "r:k3", "r:m1", "d:D-001",
+                                                        "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ2-v1#S", "p:SQ2-v1#R1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "r:s1"))
+        assert all(nodes[i]["band"] == "supp" for i in ("q:AQ1", "p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1", "r:a1", "r:a2", "v:V2"))
         assert all(n["type"] == "figure" for n in g["nodes"] if n["band"] == "ext") and sum(1 for n in g["nodes"] if n["band"] == "ext") == 2
         st = g["stats"]
         assert st["band_main_nodes"] + st["band_ext_nodes"] + st["band_supp_nodes"] == st["nodes"] and st["band_ext_nodes"] == 2, st
         assert st["crossings"] == 0 and st["edge_node_overlaps"] == 0, st
-        # 跨帶可見邊：decomposes、depicts（k1 main → F_supp supp）、supplements（群 supp → plan main）；其餘跨帶隱藏
+        # 跨帶可見邊：decomposes、depicts（k1 main → F_supp supp）；v0.18.0 起沒有 supplements 邊；其餘跨帶隱藏
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert edges[("r:k1", "f:F_supp", "depicts")]["default_visible"] is True and edges[("q:main", "q:AQ1", "decomposes")]["default_visible"] is True
-        assert edges[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")]["default_visible"] is True
+        assert not [e for e in g["edges"] if e["type"] == "supplements"] and edges[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")]["default_visible"] is True
         for (a, b, t), e in edges.items():
-            if nodes[a]["band"] != nodes[b]["band"] and t not in ("decomposes", "depicts", "supplements"):
+            if nodes[a]["band"] != nodes[b]["band"] and t not in ("decomposes", "depicts"):
                 assert e["default_visible"] is False, (a, b, t)
         rc, out, err = run(root)
         assert rc == 0, out + err
@@ -310,28 +311,22 @@ def test_supplements_spine_and_hiding_rules() -> None:
             assert e["default_visible"] is visible, (key, e["default_visible"])
             if label is not None:
                 assert e["label"] == label
-        # 群 → 所屬 plan 一條 supplements；舊版隱藏；不連任何結果；meta.supplements == [pid]
+        # v0.18.0（使用者 2026-09-16 裁定，取代 2026-09-15 的短垂線畫法）：沒有 supplements 邊；plan → 群一條可見的 sensitivity L 形線（舊版隱藏）；
+        # 群縮排在 plan 正下方一列（縮 24）、區帶跟 plan；不再有 meta.supplements
+        assert not [e for e in g["edges"] if e["type"] == "supplements"]
         for gid, pid, vis in (("p:SQ1-v2#S", "p:SQ1-v2", True), ("p:SQ2-v1#S", "p:SQ2-v1", True), ("p:AQ1-v1#S", "p:AQ1-v1", True), ("p:SQ1-v1#S", "p:SQ1-v1", False)):
-            ev((gid, pid, "supplements"), vis, "敏感性對照")
-            assert nodes[gid]["meta"]["supplements"] == [pid[2:]] and nodes[gid]["parent"] == pid
-            assert [e for e in g["edges"] if e["type"] == "supplements" and e["from"] == gid] == [edges[(gid, pid, "supplements")]]
-        assert not any(t == "supplements" and not b.startswith("p:") for _a, b, t in edges)
-        assert nodes["p:SQ1-v2#S"]["title"].endswith("以一條線（敏感性對照）連回所屬 plan")
-        # 對照線＝同欄短垂線：群上緣 (x+12, y) → plan 下緣 (x+12, y+NODE_H)；群在 supp、plan 在 main（跨帶垂線）；AQ 群同帶
+            ev((pid, gid, "sensitivity"), vis, "敏感性")
+            assert "supplements" not in nodes[gid]["meta"] and nodes[gid]["parent"] == pid and nodes[gid]["band"] == nodes[pid]["band"]
+        assert nodes["p:SQ1-v2#S"]["title"].endswith("縮排在所屬 plan 之下、區帶跟 plan 走")
         for gid, pid in (("p:SQ1-v2#S", "p:SQ1-v2"), ("p:SQ2-v1#S", "p:SQ2-v1"), ("p:AQ1-v1#S", "p:AQ1-v1")):
             grp, plan = nodes[gid], nodes[pid]
-            assert grp["x"] == plan["x"] and grp["y"] > plan["y"] + rp.NODE_H
-            assert rp._spine_path(grp, plan) == f"M{grp['x'] + 12},{grp['y']} V{plan['y'] + rp.NODE_H}"
-        assert nodes["p:SQ1-v2#S"]["band"] == "supp" and nodes["p:SQ1-v2"]["band"] == "main" and nodes["p:AQ1-v1"]["band"] == "supp"
-        # 對照線分道：SQ2-v1#S 的線要穿過 SQ1-v2#S 的區塊（其 L 形線占第 0 道）→ 往左錯開一道（x+8）；AQ 群直接在 plan 下方 → 第 0 道
+            assert grp["x"] == plan["x"] + 24 and grp["y"] == plan["y"] + rp.ROW_GAP, (gid, grp["x"], grp["y"], plan["x"], plan["y"])
+            assert rp._l_path(plan, grp) == f"M{plan['x'] + 12},{plan['y'] + rp.NODE_H} L{plan['x'] + 12},{grp['y'] + 12} Q{plan['x'] + 12},{grp['y'] + 18} {plan['x'] + 18},{grp['y'] + 18} L{grp['x']},{grp['y'] + 18}"
+        assert nodes["p:SQ1-v2#S"]["band"] == "main" and nodes["p:SQ1-v2"]["band"] == "main" and nodes["p:AQ1-v1#S"]["band"] == "supp"
+        # 短垂線分道函式保留但不再有 supplements 邊可分：spine_lanes 對現行邊集合回空
         shown0 = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
         drawn0 = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown0 and e["to"] in shown0]
-        lanes = rp.spine_lanes(nodes, drawn0)
-        idx = {(e["from"], e["to"], e["type"]): i for i, e in enumerate(g["edges"])}
-        assert lanes[idx[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")]] == 0 and lanes[idx[("p:AQ1-v1#S", "p:AQ1-v1", "supplements")]] == 0
-        assert lanes[idx[("p:SQ2-v1#S", "p:SQ2-v1", "supplements")]] == 1
-        g2, p2 = nodes["p:SQ2-v1#S"], nodes["p:SQ2-v1"]
-        assert rp._spine_path(g2, p2, 1) == f"M{g2['x'] + 8},{g2['y']} V{p2['y'] + rp.NODE_H}"
+        assert rp.spine_lanes(nodes, drawn0) == {}
         # p#R → 主要結果隱藏（不分 band：AQ 也一樣）、→ 次要結果可見
         ev(("p:SQ1-v2#R1", "r:k2", "produces"), False)
         ev(("p:SQ2-v1#R1", "r:m1", "produces"), False)    # 同在 main→main 也隱藏（v0.14.0 只隱藏跨帶）
@@ -348,11 +343,11 @@ def test_supplements_spine_and_hiding_rules() -> None:
         assert "via_validation" not in edges[("p:SQ1-v2", "r:k3", "produces")]["meta"]
         ev(("p:SQ2-v1", "r:m1", "produces"), True)
         ev(("p:AQ1-v1", "r:a1", "produces"), False)
-        # supplements 不進 route_edges；L 形線照舊
+        # L 形線（plan → 群、群 → 子分析）不進 route_edges
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
         drawn = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown and e["to"] in shown]
         r = rp.route_edges(nodes, drawn)
-        assert set(r["paths"]) == {i for i, e in drawn if e["type"] not in ("sensitivity", "supplements")}
+        assert set(r["paths"]) == {i for i, e in drawn if e["type"] != "sensitivity"}
 
 
 def test_dummy_rows_and_via() -> None:
@@ -365,7 +360,7 @@ def test_dummy_rows_and_via() -> None:
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         # 跳欄的可見邊都有 via（中間欄 3、目標的 band）與等長的 via_order；非跳欄／隱藏邊 via 為 []
         jump = {("p:SQ1-v2", "r:k3", "produces"): "main", ("p:SQ2-v1", "r:m1", "produces"): "main",
-                ("p:SQ1-v2#R2", "r:s1", "produces"): "supp", ("p:AQ1-v1#R1", "r:a2", "produces"): "supp"}
+                ("p:SQ1-v2#R2", "r:s1", "produces"): "main", ("p:AQ1-v1#R1", "r:a2", "produces"): "supp"}   # v0.18.0：s1 跟 SQ1-v2 回 main
         for key, band in jump.items():
             e = edges[key]
             assert len(e["via"]) == 1 and e["via"][0][0] == 3 and len(e["via_order"]) == 1, (key, e["via"], e["via_order"])
@@ -430,10 +425,11 @@ def test_layout_three_bands() -> None:
         assert nodes["q:main"]["y"] == (nodes["q:SQ1"]["y"] + nodes["q:SQ2"]["y"]) / 2
         assert nodes["p:SQ1-v1"]["y"] == nodes["p:SQ1-v2"]["y"] and nodes["p:SQ1-v1#S"]["y"] == nodes["p:SQ1-v2#S"]["y"] and nodes["p:SQ1-v1#R1"]["y"] == nodes["p:SQ1-v2#S"]["y"]
         # 區塊：群與其 R 連續、plan 與群（同帶時）連續
-        supp_m = [n["id"] for n in sorted((n for n in g["nodes"] if n["band"] == "supp" and n["col"] == 2 and not n["collapsed"]), key=lambda n: n["order"])]
-        for blk in (["p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2"], ["p:SQ2-v1#S", "p:SQ2-v1#R1"], ["p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1"]):
-            i = supp_m.index(blk[0])
-            assert supp_m[i:i + len(blk)] == blk, (blk, supp_m)
+        # v0.18.0：每個 plan 緊接自己的群與子分析、同區帶（SQ 的在 main、AQ 的在 supp）
+        for band, blk in (("main", ["p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2"]), ("main", ["p:SQ2-v1", "p:SQ2-v1#S", "p:SQ2-v1#R1"]), ("supp", ["p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1"])):
+            col_m = [n["id"] for n in sorted((n for n in g["nodes"] if n["band"] == band and n["col"] == 2 and not n["collapsed"]), key=lambda n: n["order"])]
+            i = col_m.index(blk[0])
+            assert col_m[i:i + len(blk)] == blk, (blk, col_m)
         # 車道 x 由左到右隨車道索引單調遞增；同走道任兩條重疊幹線 x 不同
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
         drawn = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown and e["to"] in shown]
@@ -551,7 +547,7 @@ def test_html_and_chrome_parity() -> None:
         assert bands["_class"] == "bands" and [b for b in bands if b != "_class"] == ["main", "ext", "supp"]
         assert bands["main"][0] == "band-divider off" and bands["main"][2] == "band-title" and bands["ext"][0] == "band-divider" and bands["ext"][2] == "band-title"
         assert bands["supp"][0] == "band-divider" and bands["supp"][2] == "band-title"
-        assert [bands[b][4] for b in ("main", "ext", "supp")] == ["Main ｜ 主結果", "Extended Data ｜ 延伸資料圖表", "Supplementary ｜ 補充：敏感性分析與附錄問題"]
+        assert [bands[b][4] for b in ("main", "ext", "supp")] == ["Main ｜ 主結果", "Extended Data ｜ 延伸資料圖表", "Supplementary ｜ 補充：附錄問題與補充圖表"]
         vis_main = [n for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision"]
         via_main = [y for e in g["edges"] for (_c, y), _o in zip(e["via"], e["via_order"]) if nodes[e["to"]]["band"] == "main"]
         main_bottom = max([n["y"] for n in vis_main] + via_main) + rp.NODE_H
@@ -559,15 +555,16 @@ def test_html_and_chrome_parity() -> None:
         ext_bottom = max(n["y"] for n in g["nodes"] if n["band"] == "ext") + rp.NODE_H
         assert bands["supp"][1] == str(ext_bottom + rp.BAND_GAP // 2) and bands["supp"][3] == str(ext_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
         for token in ("var BANDS=['main','ext','supp'];", "三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）",
-                      "已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過", "'<dt>敏感性對照</dt>", "Extended Data（延伸資料圖表）",
-                      'id="arrow-method"', ".arrow-method{fill:var(--t-method)}", "marker-end:url(#arrow-method)", "function spinePath(", "function assignLanes(",
-                      "function laneX(", "dummyActive(", "function spineLanes(", "var SPINE_X=12,SPINE_LANE_GAP=4;", "預設檢視線段交叉 0、穿過節點 0", "區帶 main ", "延伸", "主表"):
+                      "已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過", "'<dt>所屬分析</dt>", "Extended Data（延伸資料圖表）",
+                      'id="arrow-method"', ".arrow-method{fill:var(--t-method)}", "function assignLanes(",
+                      "function laneX(", "dummyActive(", "預設檢視線段交叉 0、穿過節點 0", "區帶 main ", "延伸", "主表"):
             assert token in html_text, f"HTML 缺 {token}"
-        assert "laneOffset" not in html_text and 'class="trunk e-supplements' not in html_text
-        m = re.search(r'class="edge e-supplements st-solid" data-idx="\d+" data-from="p:SQ1-v2#S" data-to="p:SQ1-v2" data-type="supplements" d="([^"]*)"', html_text)
-        assert m and m.group(1) == f"M{nodes['p:SQ1-v2#S']['x'] + 12},{nodes['p:SQ1-v2#S']['y']} V{nodes['p:SQ1-v2']['y'] + rp.NODE_H}"
-        m = re.search(r'class="edge e-supplements st-solid" data-idx="\d+" data-from="p:SQ2-v1#S" data-to="p:SQ2-v1" data-type="supplements" d="([^"]*)"', html_text)
-        assert m and m.group(1) == f"M{nodes['p:SQ2-v1#S']['x'] + 8},{nodes['p:SQ2-v1#S']['y']} V{nodes['p:SQ2-v1']['y'] + rp.NODE_H}", "第二條對照線往左錯開一道"
+        assert "laneOffset" not in html_text and 'class="trunk e-supplements' not in html_text and 'class="edge e-supplements' not in html_text   # v0.18.0：沒有短垂線
+        # v0.18.0：plan → 群 L 形線（從 plan 左緣下方垂下、右轉進群左緣）
+        m = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ1-v2" data-to="p:SQ1-v2#S" data-type="sensitivity" d="([^"]*)"', html_text)
+        assert m and m.group(1) == rp._l_path(nodes["p:SQ1-v2"], nodes["p:SQ1-v2#S"]), m.group(1) if m else None
+        m = re.search(r'class="edge e-sensitivity st-solid" data-idx="\d+" data-from="p:SQ2-v1" data-to="p:SQ2-v1#S" data-type="sensitivity" d="([^"]*)"', html_text)
+        assert m and m.group(1) == rp._l_path(nodes["p:SQ2-v1"], nodes["p:SQ2-v1#S"])
         assert re.search(r'class="edge e-produces st-solid off" data-idx="\d+" data-from="p:SQ1-v2" data-to="r:k1"', html_text), "遞移隱藏的邊帶 off"
         assert re.search(r'class="edge e-produces st-solid" data-idx="\d+" data-from="p:SQ1-v2" data-to="r:k3"[^>]*data-trunk="[^"]*"', html_text)
         for token in ("http://", "https://", "<link ", 'src="http'):
@@ -633,13 +630,13 @@ def test_html_and_chrome_parity() -> None:
                 assert y0_ext <= y and y + rp.NODE_H <= y_supp, (nid, y)
             else:
                 assert y >= y0_supp, (nid, y, y0_supp)
-            rects.append((x, y, rp.NODE_W - (24 if " sub" in c else 0), rp.NODE_H))
+            wm = re.search(r'data-node-id="' + re.escape(nid) + r'"[^>]*>\s*<rect class="box" width="(\d+)"', dom2)
+            rects.append((x, y, int(wm.group(1)) if wm else rp.NODE_W, rp.NODE_H))   # v0.18.0：寬依 DOM（群減 24、子分析減 48）
         de2 = edge_ds(dom2)
         off2 = set(re.findall(r'<path class="edge[^"]*\boff\b[^"]*" data-idx="(\d+)"', dom2))
-        spine_idx = set(re.findall(r'<path class="edge e-supplements[^"]*" data-idx="(\d+)"', dom2))
         overlaps = 0
         for i, d in de2.items():
-            if i in off2 or i in spine_idx:
+            if i in off2:
                 continue
             pts = [(float(a), float(b)) for a, b in re.findall(r"[ML](-?[\d.]+),(-?[\d.]+)", d)]
             cur = pts[0]
@@ -668,12 +665,13 @@ def test_validate_ir_rules() -> None:
             return rp.validate_ir(bad)
         assert [e for e in mutate(lambda bad, by, ed: by["f:F_ext"].update(band="weird")) if e.endswith(".band")]
         assert mutate(lambda bad, by, ed: by["f:F_ext"].update(band="ext")) == []
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update({"to": "r:k1"}))
-        assert any("非群的所屬 plan" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].supplements" in errs, errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update({"from": "p:SQ1-v2"}))
-        assert any("非敏感性分析群" in e for e in errs), errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#S", "p:SQ1-v2", "supplements")].update(default_visible=False))
-        assert errs == ["IR-13 graph.nodes[p:SQ1-v2#S].supplements"], errs
+        # v0.18.0：plan → 群的 sensitivity 邊取代 supplements：to 不是該 plan 的群、隱藏、改成 supplements 型都要擋
+        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")].update({"to": "p:SQ2-v1#S"}))
+        assert any("非該 plan 的敏感性分析群" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].sensitivity（plan → 群）" in errs, errs
+        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")].update(default_visible=False))
+        assert errs == ["IR-13 graph.nodes[p:SQ1-v2#S].sensitivity（plan → 群）"], errs
+        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity")].update(type="supplements"))
+        assert any("supplements 已停用" in e for e in errs) and "IR-13 graph.nodes[p:SQ1-v2#S].sensitivity（plan → 群）" in errs, errs
         errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "r:k3", "produces")].update(via=[[3]]))
         assert errs and all("via／via_order" in e for e in errs), errs
         errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2", "r:k3", "produces")].update(via=[["3", 100]]))
@@ -690,15 +688,15 @@ def test_validate_ir_rules() -> None:
         assert errs == ["IR-14 graph.stats"], errs
         errs = mutate(lambda bad, by, ed: bad["graph"]["stats"].update(band_ext_nodes=bad["graph"]["stats"]["band_ext_nodes"] + 1))
         assert errs == ["IR-14 graph.stats.band_main_nodes／band_ext_nodes／band_supp_nodes"], errs
-        errs = mutate(lambda bad, by, ed: ed[("p:SQ1-v2#R1", "r:k2", "produces")].update(default_visible=True))
+        errs = mutate(lambda bad, by, ed: ed[("p:AQ1-v1#R1", "r:a2", "produces")].update({"to": "r:k2"}))   # v0.18.0：R1 → k2 已同區帶，改用 AQ 的邊跨帶
         assert errs and all("跨區帶" in e for e in errs), errs
 
 
 def test_docs_registered() -> None:
     need("CHANGELOG.md", "## 0.15.0", "Extended Data", "role_source", "_spine_path", "via_order", "barycenter", "crossings", "edge_node_overlaps",
          "band_ext_nodes", "run_v0150_regressions.py")
-    need("README.md", "run_v0150_regressions.py", "Extended Data", "敏感性對照")
-    need("skills/status/SKILL.md", "Extended Data", "敏感性對照", "crossings")
+    need("README.md", "run_v0150_regressions.py", "Extended Data")
+    need("skills/status/SKILL.md", "Extended Data", "crossings")
     need("tests/README.md", "run_v0150_regressions.py", "Extended Data")
     assert text("skills/status/SKILL.md").startswith("---\nname: status\n")
     version = json.loads(text(".claude-plugin/plugin.json"))["version"]

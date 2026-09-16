@@ -1281,7 +1281,7 @@ def test_graph_full_fixture() -> None:
         cur, old, sq2 = nodes["p:SQ1-v2"], nodes["p:SQ1-v1"], nodes["p:SQ2-v1"]
         assert cur["type"] == "method" and cur["state"] == "done" and cur["collapsed"] is False
         assert cur["label"] == "SQ1-v2 ｜ M-shared" and cur["meta"]["models"] == ["M-shared"], cur
-        assert cur["badge"] == "v2（1 舊版）" and cur["meta"]["superseded_versions"] == ["SQ1-v1"], cur
+        assert cur["badge"] == "v2（1 舊版）｜敏感性 1" and cur["meta"]["superseded_versions"] == ["SQ1-v1"], cur   # v0.18.0：plan 徽章並列「敏感性 n」
         assert cur["meta"]["version"] == 2 and cur["meta"]["content_hash"] == "bbbb2222" and cur["meta"]["amendment_reason"] == "改用 shrinkage smooth"
         assert cur["meta"]["primary_model"].startswith("M-shared：共用模型")
         assert old["state"] == "expired" and old["collapsed"] is True and old["badge"] == "" and old["meta"]["models"] == [] and old["label"] == "SQ1-v1"
@@ -1314,21 +1314,22 @@ def test_graph_full_fixture() -> None:
         # 欄序 question < method < validation < result < decision；同 type 同 x
         xs = {}
         for n in g["nodes"]:
-            if n.get("subtype") != "sensitivity" and n["id"] != "q:main":
+            if n.get("subtype") not in ("sensitivity", "sensitivity_group") and n["id"] != "q:main":
                 xs.setdefault(n["type"], set()).add(n["x"])
         assert all(len(v) == 1 for v in xs.values()), xs
         assert nodes["q:main"]["x"] < nodes["q:SQ1"]["x"], "主問題獨占更左一欄"
-        assert nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 24, "子節點向右縮排 24"
+        assert nodes["p:SQ1-v2#S"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 48, "v0.18.0：群縮排 24、子分析縮排 48"
         order = [next(iter(xs[t])) for t in ("question", "method", "validation", "result", "decision")]
         assert order == sorted(order) and len(set(order)) == 5, order
         assert [nodes[i]["col"] for i in ("q:main", "q:SQ1", "p:SQ1-v2", "v:V1", "r:k1", "d:D-001")] == [0, 1, 2, 3, 4, 6], "主問題欄 0、圖表欄 5"
         # 收合檢視：collapsed 節點不佔列（y 借用現行版）、同欄可見 y 連續；order 含 collapsed 節點
         y = {n["id"]: n["y"] for n in g["nodes"]}
         # v0.14.0：order 為每 (band, col) 內的整數序；main 區帶有 supp 可見節點時從 GRAPH_PAD + BAND_TITLE_H = 48 起，supp 區帶另起
-        assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1")] == [0, 1, 2] and [nodes[i]["order"] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1")] == [0, 1]
-        assert y["p:SQ1-v2"] == 48 and y["p:SQ2-v1"] == 48 + 48 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
+        # v0.18.0：群與子分析縮排在 plan 之下、同區帶（main）——method 欄序 SQ1-v1（收合）、SQ1-v2、群、R1、SQ2-v1
+        assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ2-v1")] == [0, 1, 2, 3, 4]
+        assert y["p:SQ1-v2"] == 48 and y["p:SQ1-v2#S"] == 48 + 48 and y["p:SQ1-v2#R1"] == 48 + 96 and y["p:SQ2-v1"] == 48 + 144 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
         y0_supp = max(n["y"] for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision") + 36 + 40 + 28
-        assert y["p:SQ1-v2#S"] == y0_supp and y["p:SQ1-v2#R1"] == y0_supp + 48 and y["q:AQ1"] == y0_supp, {k: v for k, v in y.items() if k.startswith("p:")}
+        assert y["q:AQ1"] == y0_supp and nodes["p:SQ1-v2#S"]["band"] == "main" and nodes["p:SQ1-v2#R1"]["band"] == "main", {k: v for k, v in y.items() if k.startswith("q:")}
         assert y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"] and y["q:main"] == (y["q:SQ1"] + y["q:SQ2"]) / 2, y   # v0.14.0：只對 main 區帶的問題居中
         ry = [n["y"] for n in g["nodes"] if n["type"] == "result"]
         assert sorted(ry) == [48 + 48 * i for i in range(len(ry))], "result 欄 y 須連續"
@@ -1358,12 +1359,11 @@ def test_graph_full_fixture() -> None:
         ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")          # v0.15.0：已由 p → V1 → k1 的驗證鏈覆蓋，遞移隱藏（IR 保留）
         ev(("p:SQ1-v2", "r:k2", "produces"), False, "solid", "")          # v0.15.0：V1 的 robustness 覆蓋 k2，同樣遞移隱藏
         assert edges[("p:SQ1-v2", "r:k1", "produces")]["meta"].get("via_validation") is True
-        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), False, "solid", "敏感性")        # v0.14.0：plan → 群（跨區帶，預設不畫）
+        ev(("p:SQ1-v2", "p:SQ1-v2#S", "sensitivity"), True, "solid", "敏感性")         # v0.18.0：plan → 群 L 形父子線（群縮排在 plan 之下、同區帶）
         ev(("p:SQ1-v2#S", "p:SQ1-v2#R1", "sensitivity"), True, "solid", "敏感性")      # 群 → 子分析
         assert ("p:SQ1-v2", "p:SQ1-v2#R1", "sensitivity") not in edges
-        ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")                  # v0.14.0：子分析 → 主要結果跨區帶，預設不畫
-        ev(("p:SQ1-v2#S", "p:SQ1-v2", "supplements"), True, "solid", "敏感性對照")   # v0.15.0：群 → 所屬 plan 一條
-        assert ("p:SQ1-v2#S", "r:k1", "supplements") not in edges
+        ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")                  # 子分析 → 主要結果預設不畫（plan 的 outputs 已涵蓋）
+        assert not [e for e in g["edges"] if e["type"] == "supplements"]   # v0.18.0：不再有 supplements 敏感性對照邊
         ev(("p:SQ2-v1", "r:k3", "produces"), True, "solid", "")
         ev(("p:SQ2-v1", "r:k_missing", "produces"), True, "solid", "")
         assert not any(e["type"] == "produces" and e["style"] == "dashed" for e in g["edges"]), "fixture 沒有未宣告鍵，不該有虛線 produces"
@@ -1406,8 +1406,8 @@ def test_graph_full_fixture() -> None:
                               "by_type": {"question": 4, "method": 5, "validation": 1, "result": 5, "figure": 0, "decision": 3},
                               "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1,
-                              "sensitivity_groups": 1, "supporting_result_keys": 0, "band_main_nodes": 15, "band_ext_nodes": 0, "band_supp_nodes": 3,
-                              "crossings": 0, "edge_node_overlaps": 0}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵；v0.15.0：ext 與交叉計數
+                              "sensitivity_groups": 1, "supporting_result_keys": 0, "band_main_nodes": 17, "band_ext_nodes": 0, "band_supp_nodes": 1,
+                              "crossings": 0, "edge_node_overlaps": 0}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵；v0.15.0：ext 與交叉計數；v0.18.0：群與子分析回 Main
         # 拿掉 robustness → k2 回到未驗證：produces 邊仍可見實線、徽章仍「主要」、unvalidated 多 1、meta.validated 變 false
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
         g_n = _graph_ir(root)["graph"]
@@ -1418,7 +1418,7 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）；區帶 main 15 節點、ext 0 節點、supp 3 節點、敏感性分析群 1 組；預設檢視線段交叉 0、穿過節點 0。" in out, out
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0）；區帶 main 17 節點、ext 0 節點、supp 1 節點、敏感性分析群 1 組；預設檢視線段交叉 0、穿過節點 0。" in out, out   # v0.18.0：群與子分析回 Main
 
 
 def test_graph_layout_deterministic() -> None:

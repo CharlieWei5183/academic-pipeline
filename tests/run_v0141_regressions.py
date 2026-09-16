@@ -194,7 +194,7 @@ def test_alias_graph() -> None:
         assert "aliases" not in nodes["q:SQ2"]["meta"]
         # 舊版 plan：掛到 AQ2、collapsed、band supp、meta.sq／sq_original、借 AQ2-v1 的列；現行版 superseded_versions 與徽章
         cur = nodes["p:AQ2-v1"]
-        assert cur["meta"]["superseded_versions"] == ["SQ1-v1", "SQ1-v2"] and cur["badge"] == "v1（2 舊版）" and cur["band"] == "supp"
+        assert cur["meta"]["superseded_versions"] == ["SQ1-v1", "SQ1-v2"] and cur["badge"].startswith("v1（2 舊版）") and cur["band"] == "supp"   # v0.18.0：徽章可並列「敏感性 n」
         assert cur["meta"]["sq"] == "AQ2" and "sq_original" not in cur["meta"] and cur["collapsed"] is False and cur["state"] == "done"
         for pid in ("p:SQ1-v1", "p:SQ1-v2"):
             n = nodes[pid]

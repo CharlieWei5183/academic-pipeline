@@ -1663,6 +1663,36 @@ def _validate_move_sensitivity(root: Path, payload) -> tuple[dict | None, str]:
     return {'plan': pid, 'item': rid, 'to_plan': dst}, ''
 
 
+def _validate_demote_plan(root: Path, payload) -> tuple[dict | None, str]:
+    """0.18.0：一份 active plan 降為另一份 active plan 的敏感性子分析。來源須是附錄問題的 active plan、目標須是別的問題的 active plan、來源 outputs 至少一鍵。"""
+    if not isinstance(payload, dict):
+        return None, 'demote_plan 需要 payload object'
+    pid = str(payload.get('plan') or '').strip()
+    dst = str(payload.get('to_plan') or '').strip()
+    index = plan_common.load_index(root)
+    active = {str(k): str(v) for k, v in (index.get('active') or {}).items()}
+    if pid not in active.values():
+        return None, f'payload.plan {pid} 不是任何問題的 active plan'
+    if dst not in active.values():
+        return None, f'payload.to_plan {dst} 不是任何問題的 active plan'
+    if dst == pid:
+        return None, 'payload.to_plan 與 payload.plan 相同'
+    src_q = next(k for k, v in active.items() if v == pid)
+    dst_q = next(k for k, v in active.items() if v == dst)
+    if src_q == dst_q:
+        return None, f'{pid} 與 {dst} 同屬 {src_q}：同一問題的兩份 plan 是版本取代，不是降為敏感性子分析'
+    if not src_q.startswith('AQ'):
+        return None, (f'來源問題 {src_q} 是主問題：降階後它沒有 plan，check_plan 會擋（主問題缺 active plan 是 BLOCKER）；'
+                      '請先把它降為附錄問題或另立 plan')
+    plan_path = root / 'analysis/plans' / f'{pid}.yaml'
+    if not plan_path.is_file():
+        return None, f'plan 檔不存在 {plan_path.name}'
+    plan = plan_common.load_yaml(plan_path)
+    if not any(isinstance(o, dict) and o.get('key') for o in (plan.get('outputs') or [])):
+        return None, f'{pid} 的 outputs 沒有任何鍵，沒有東西可降為敏感性子分析'
+    return {'plan': pid, 'to_plan': dst}, ''
+
+
 def plan_key_places(plan: dict, key: str) -> tuple[bool, list[str]]:
     """該鍵在 plan 裡的位置：(是否在 outputs, 引用它的 robustness id 清單)。"""
     in_out = any(isinstance(o, dict) and str(o.get('key')) == key for o in (plan.get('outputs') or []))
@@ -1910,6 +1940,14 @@ ACTIONS: dict[str, dict[str, Any]] = {
                              f'結果鍵 {p["key"]} 移除 supports、拉回頂層結果（只改呈現層級，不改數字、不改歸屬）'),
                             f'r:{p["key"]}'),
     },
+    'demote_plan': {
+        'script': 'demote_plan.py', 'label': '降為敏感性子分析', 'stage': 'study-design',
+        'validate': _validate_demote_plan, 'argv': lambda p: ['--plan', p['plan'], '--to-plan', p['to_plan']],
+        'extra': lambda p, iid: f'demote_plan:{p.get("plan") or ""}:{p.get("to_plan") or ""}:{iid}',
+        'title': lambda p: (f'降為敏感性子分析：{p["plan"]} → {p["to_plan"]}',
+                            f'分析計畫 {p["plan"]} 整份降為 {p["to_plan"]} 的敏感性子分析（來源 outputs 成為目標新版 robustness 的 R<n+1>、其結果變次要、來源問題無 active plan）',
+                            f'p:{p["plan"]}'),
+    },
 }
 # ---------- 批次（0.17.0）：kind batch，payload {actions: [{kind, payload}, …]}，腳本 run_batch.py ----------
 
@@ -1925,6 +1963,7 @@ BATCH_SHAPE: dict[str, dict[str, tuple[str, ...]]] = {
     'reorder': {},
     'move_result': {'key': ('key',), 'plan': ('to_plan',), 'opt': ('to_item', 'new_item')},
     'nest_result': {'key': ('key',), 'opt': ('under',)},
+    'demote_plan': {'plan': ('plan', 'to_plan')},
 }
 
 
@@ -1993,6 +2032,12 @@ class _Predicted:
             self.bump(self.q_of_plan(str(p.get('to_plan') or '')))
         elif kind == 'move_plan':
             self.bump(str(p.get('to_question') or ''))
+        elif kind == 'demote_plan':   # 0.18.0：目標問題出新版；來源 plan 不再是 active
+            self.bump(self.q_of_plan(str(p.get('to_plan') or '')))
+            src = str(p.get('plan') or '')
+            for q, pid in list(self.active.items()):
+                if pid == src:
+                    self.active.pop(q, None)
         elif kind in ('reassign', 'promote'):
             to = str(p.get('to') or '')
             if to:

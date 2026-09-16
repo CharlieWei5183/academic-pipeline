@@ -101,7 +101,7 @@ def test_new_item_same_plan(tmp: Path) -> None:
     checkers(root)
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
     n = {x['id']: x for x in ir['graph']['nodes']}
-    assert n['r:k2']['band'] == 'supp' and n['r:k2']['parent'] == 'p:SQ1-v2#R3' and n['r:k2']['subtype'] == 'secondary', n['r:k2']
+    assert n['r:k2']['band'] == 'main' and n['r:k2']['parent'] == 'p:SQ1-v2#R3' and n['r:k2']['subtype'] == 'secondary', n['r:k2']   # v0.18.0：次要結果跟 plan（SQ1 → main）
     assert n['p:SQ1-v2#R3']['meta']['change'] == DEFAULT_K2 and n['p:SQ1-v2#R3']['meta']['expected_keys'] == ['k2']
     # 已在新 R 之下再 --new-item 一次：合法（再新增 R4；鍵由 R3 移到 R4）——只驗 dry-run 前置條件過
     out = run(MR, root, '--key', 'k2', '--to-plan', 'SQ1-v2', '--new-item', '再一次', '--dry-run')
@@ -269,8 +269,8 @@ def test_headless_band_drop(tmp: Path) -> bool:
     ws = T3._WS(wsurl)
     try:
         T3._open_page(ws, port)
-        # r:k2（Main 帶主要結果）拖到 Supplementary 帶、p:SQ1-v1#S 左側 120px 的空白處 → 帶打亮、不畫線 → 表單開、下拉可見、預設「新增…」
-        d = json.loads(ws.eval(_band_drop_js('r:k2', 'p:SQ1-v1#S', 120)))
+        # r:k2（Main 帶主要結果）拖到 Supplementary 帶、p:AQ1-v1#S 左側 120px 的空白處（v0.18.0：SQ 的群已回 Main，改以 AQ 的群定位） → 帶打亮、不畫線 → 表單開、下拉可見、預設「新增…」
+        d = json.loads(ws.eval(_band_drop_js('r:k2', 'p:AQ1-v1#S', 120)))
         assert not d.get('missing'), d
         assert d['label'] == '搬結果：放到 Supplementary 帶、降為次要結果（放開後選落點）（放開後填理由）' and 'drop-ok' in d['bandHl'] and d['line'] is False, d
         assert d['formHidden'] is False and d['destHidden'] is False and d['sel'] == '0', d
@@ -294,7 +294,7 @@ def test_headless_band_drop(tmp: Path) -> bool:
         T3._wait(ws, "!window.__oldPage && document.readyState==='complete' && !document.getElementById('inbox-new').disabled && document.getElementById('act-form').hidden", bool, timeout=60)
         assert inbox_status(root)['IN-002'][0] == 'dismissed'
         # 附錄問題的主要結果 r:a1 拖到 Supplementary 帶空白處 → 紅、放開 toast、不開表單
-        d4 = json.loads(ws.eval(_band_drop_js('r:a1', 'p:SQ1-v1#S', 120)))
+        d4 = json.loads(ws.eval(_band_drop_js('r:a1', 'p:AQ1-v1#S', 120)))
         assert d4['label'] == 'a1 已在 Supplementary（附錄問題 AQ1 的主要結果）' and 'drop-bad' in d4['bandHl'] and d4['formHidden'] is True, d4
         toast = ws.eval("document.getElementById('toast').textContent")
         assert '已在 Supplementary' in str(toast), toast
