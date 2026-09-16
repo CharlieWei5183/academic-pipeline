@@ -140,7 +140,7 @@ def test_dialog_anchors(tmp: Path) -> None:
     run('skills/status/scripts/render_progress.py', root)
     html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="act-preview-box" hidden', '<pre id="act-summary" class="act-summary">', 'id="act-dismiss"', 'id="act-keep"', 'id="act-apply" disabled',
-                   'id="act-submit-row"', 'id="act-submit">送出並預覽</button>', 'id="act-item-id"', 'pre.act-summary{', 'pre.act-summary:empty{display:none}',
+                   'id="act-submit-row"', 'id="act-submit"', '送出並預覽</button>', 'id="act-item-id"', 'pre.act-summary{', 'pre.act-summary:empty{display:none}',
                    '按「送出並預覽」先在 PROGRESS.inbox.yaml 加一筆'):
         assert anchor in html, anchor
     assert '#actions-panel pre.act-summary' not in html, '摘要樣式要面板與對話框共用'
@@ -150,7 +150,7 @@ def test_dialog_anchors(tmp: Path) -> None:
         assert js.count('function ' + fn + '(') == 1, fn
     assert js.count("'/api/actions/dry-run'") == 1 and js.count("'/api/actions/apply'") == 1, '預覽／套用的 fetch 只能有一份'
     assert js.count("'/api/inbox/dismiss'") == 1 and "note:'" + DEFAULT_NOTE + "'" in js
-    assert js.count("'/api/inbox'") == 2, 'act-form 與 inbox-form 各送一次'
+    assert js.count("'/api/inbox'") == 3, 'act-form 與 inbox-form 各送一次；0.17.0 起暫存面板的「全部預覽」再建一筆 batch'
     assert "actStage('preview',x.d.id);actPreview(x.d.id,actDialogUi(x.d.id))" in js, '送出成功後不重載、直接預覽'
     assert 'SSOT 已變，重新預覽：' in js and 'ui.onStale' in js and "x.status===403?'server 未開 --allow-apply'" in js
     assert js.count('location.reload()') >= 3

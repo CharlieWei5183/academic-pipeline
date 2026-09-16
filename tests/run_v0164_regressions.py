@@ -314,7 +314,7 @@ def test_headless_band_drop(tmp: Path) -> bool:
 def test_docs_registered() -> None:
     cl = text('CHANGELOG.md')
     sec = re.split(r'(?m)^## 0\.16\.4', cl)[1]; sec = re.split(r'(?m)^## 0\.16\.3', sec)[0]   # 0.16.5 起不再是最上面一條，改看 0.16.4 那一節；只認行首，內文提到「## 0.16.4」不算
-    assert cl.lstrip().startswith('# CHANGELOG\n\n## 0.16.') and '--new-item' in sec and 'act-mr-dest' in sec
+    assert cl.lstrip().startswith('# CHANGELOG\n\n## 0.') and '--new-item' in sec and 'act-mr-dest' in sec   # 0.17.0 起最上面一條不再是 0.16.x
     assert '--new-item' in text('skills/status/SKILL.md') and 'new_item' in text('skills/status/SKILL.md')
     assert '--new-item' in text('README.md')
     assert 'run_v0164_regressions.py' in text('tests/README.md')
