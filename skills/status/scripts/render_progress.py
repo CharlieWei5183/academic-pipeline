@@ -3576,7 +3576,8 @@ GRAPH_JS = """
   function toastUndo(msg,fn){var t=document.getElementById('toast');t.textContent=msg+' ';var a=document.createElement('a');a.href='#';a.className='toast-undo';a.textContent='復原';
     a.addEventListener('click',function(e){e.preventDefault();t.hidden=true;fn();});t.appendChild(a);t.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true;},6000);}
   var actionsOk=false,actionsWhy='server 未開 --allow-apply',nextAq='',nextSq='';   // actionsWhy：「全部套用」停用時顯示在鈕旁的原因（0.17.3）
-  function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});}
+  function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});
+    Array.prototype.forEach.call(document.querySelectorAll('.act-dismiss-row'),function(b){b.disabled=false;b.title='標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT';});}   // 0.18.2 面板每列的撤回鈕只要連上 server（不需 --allow-apply）
   function enableActions(){actionsOk=true;var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok){enableInbox();nextAq=d.next_aq||'';nextSq=d.next_sq||'';if(d.actions_enabled)enableActions();else{var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py，但未開 --allow-apply：這裡只能看，預覽與套用請重啟 server 加 --allow-apply，或由 status skill 跑腳本。';}}else{actionsWhy='未連上 progress_server.py';}renderStaged();}).catch(function(){actionsWhy='未連上 progress_server.py';renderStaged();});}catch(e){}}
@@ -3683,12 +3684,21 @@ GRAPH_JS = """
       if(d.ok){if(ui.onOk)ui.onOk(d);toast(ui.okText?ui.okText(d):('已套用，決策 '+(d.decision||'')+'；重新載入'));setTimeout(function(){location.reload();},1500);}else{if(ui.onFail)ui.onFail(d);actBusy(ui,false);ui.apply.disabled=false;}return x;})
       .catch(function(err){actBusy(ui,false);ui.apply.disabled=false;ui.pre.textContent='套用失敗：'+err;return null;});}
   // ---- 待套用動作面板（第二入口，行為不變）----
-  function actRowUi(id){var row=actRow(id);return {pre:row.querySelector('.act-summary'),apply:row.querySelector('.act-apply'),lock:[row.querySelector('.act-preview')],confirm:true};}
+  function actRowUi(id){var row=actRow(id);return {pre:row.querySelector('.act-summary'),apply:row.querySelector('.act-apply'),lock:[row.querySelector('.act-preview'),row.querySelector('.act-dismiss-row')],confirm:true};}
+  // 0.18.2 面板每列「撤回」：POST /api/inbox/dismiss（只改收件匣狀態、不動 SSOT、不需 --allow-apply）→ toast 後重新載入；失敗把原因寫在該列摘要區。撤回期間該列三個鈕一起停用
+  function actDismissRow(id){var row=actRow(id);if(!row)return Promise.resolve(null);var btns=[row.querySelector('.act-preview'),row.querySelector('.act-apply'),row.querySelector('.act-dismiss-row')],pre=row.querySelector('.act-summary');
+    var was=btns.map(function(b){return b?b.disabled:true;});btns.forEach(function(b){if(b)b.disabled=true;});pre.textContent='撤回中（代跑 check_inbox.py --dismiss）…';
+    function restore(){btns.forEach(function(b,i){if(b)b.disabled=was[i];});}
+    return actPost(DISMISS_PATH,{id:id,note:'使用者在待套用動作面板撤回'}).then(function(x){var d=x.d||{};
+      if(d.ok){delete actTokens[id];pre.textContent=d.summary||('已撤回 '+id);toast('已撤回 '+id);setTimeout(function(){location.reload();},1500);}
+      else{restore();pre.textContent='撤回失敗：'+(d.error||('HTTP '+x.status))+(d.summary?'\\n'+d.summary:'');}return x;})
+      .catch(function(err){restore();pre.textContent='撤回失敗：'+err;return null;});}
   var actPanel=document.getElementById('actions-panel');
   if(actPanel)actPanel.addEventListener('click',function(e){
     var g=e.target.closest('.goto');if(g&&nodes[g.getAttribute('data-goto')]){showTab('relations',true);select(g.getAttribute('data-goto'),true);return;}
     var pv=e.target.closest('.act-preview');if(pv&&!pv.disabled){actPreview(pv.getAttribute('data-id'),actRowUi(pv.getAttribute('data-id')));return;}
-    var apb=e.target.closest('.act-apply');if(apb&&!apb.disabled){actApply(apb.getAttribute('data-id'),actRowUi(apb.getAttribute('data-id')));return;}});
+    var apb=e.target.closest('.act-apply');if(apb&&!apb.disabled){actApply(apb.getAttribute('data-id'),actRowUi(apb.getAttribute('data-id')));return;}
+    var dr=e.target.closest('.act-dismiss-row');if(dr&&!dr.disabled){actDismissRow(dr.getAttribute('data-id'));return;}});
   function fillTargets(sel){fTarget.innerHTML='<option value="">（無）</option>';G.nodes.forEach(function(n){if(n.type!=='question'||n.id==='q:main')return;var o=document.createElement('option');o.value=n.id;o.textContent=n.label+(n.title?'：'+n.title.slice(0,40):'');fTarget.appendChild(o);});
     if(sel&&!Array.prototype.some.call(fTarget.options,function(o){return o.value===sel;})){var o=document.createElement('option');o.value=sel;o.textContent=(nodes[sel]?nodes[sel].label:sel);fTarget.appendChild(o);}fTarget.value=sel||'';}
   function openForm(kind,target){if(!serverOk)return;fErr.textContent='';fKind.value=kind;fillTargets(target||'');fKind.disabled=(kind==='comment');fTarget.disabled=(kind==='comment');
@@ -4609,7 +4619,7 @@ def _inbox_block(ir: dict) -> list[str]:
 
 
 def _actions_panel(ir: dict, labels: dict) -> list[str]:
-    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種；0.16.5 起八種；0.18.0 起十種含 batch）：列 pending 的結構化項目，每筆「預覽變更」「套用」；伺服器未開 --allow-apply
+    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種；0.16.5 起八種；0.18.0 起十種含 batch）：列 pending 的結構化項目，每筆「預覽變更」「套用」「撤回」（0.18.2；撤回只要連上 server，不需 --allow-apply）；伺服器未開 --allow-apply
     或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位），0.16.3 起表單多一個
     預覽區 #act-preview-box（#act-summary 摘要、#act-dismiss 撤回／#act-keep 先留在收件匣／#act-apply 套用），送出後在同一個對話框顯示 dry-run 摘要。"""
     inbox = ir['inbox']
@@ -4627,7 +4637,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
              '<pre id="staged-summary" class="act-summary"></pre><div class="err" id="staged-err"></div></details>',
              '<div id="staged-old" hidden></div>',
              f'<details id="actions-panel" open><summary>待套用動作 {len(acts)} 筆（{kinds_txt}；由腳本確定性執行）</summary>',
-             '<p class="hint" id="actions-hint">用 progress_server.py --allow-apply 開啟才能預覽與套用；預設 server 只寫收件匣。</p>']
+             '<p class="hint" id="actions-hint">用 progress_server.py --allow-apply 開啟才能預覽與套用；預設 server 只寫收件匣。</p>',
+             '<p class="hint" id="actions-dismiss-hint">撤回只改收件匣狀態，不動 SSOT（代跑 check_inbox.py --dismiss；不需 --allow-apply，連上 progress_server.py 就能用）。</p>']
     if acts:
         lines.append('<table><thead><tr><th>id</th><th>kind</th><th>target</th><th>內容</th><th>動作</th></tr></thead><tbody>')
         for it in acts:
@@ -4635,7 +4646,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
             lines.append(f'<tr data-act-id="{_h(it["id"])}"><td>{_h(it["id"])}</td><td>{_h(INBOX_KINDS.get(it["kind"], it["kind"]))}</td><td>{tgt}</td>'
                          f'<td>{_h(_clip(it["title"], 80))}<br><span class="src">{_h(_clip(it["body"], 160))}</span></td>'
                          f'<td><button type="button" class="act-preview" data-id="{_h(it["id"])}" disabled title="server 未開 --allow-apply">預覽變更</button> '
-                         f'<button type="button" class="act-apply" data-id="{_h(it["id"])}" disabled title="先預覽">套用</button>'
+                         f'<button type="button" class="act-apply" data-id="{_h(it["id"])}" disabled title="先預覽">套用</button> '
+                         f'<button type="button" class="act-dismiss-row" data-id="{_h(it["id"])}" disabled title="用 progress_server.py 開啟才能撤回（file:// 或未連上伺服器）">撤回</button>'
                          f'<pre class="act-summary" data-id="{_h(it["id"])}"></pre></td></tr>')
         lines.append('</tbody></table>')
     else:

@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.18.2（2026-09-16）
+
+進度頁面「待套用動作」面板每列補一個**「撤回」鈕**：之前只有放開節點後的對話框能撤回（0.16.3）、舊批次能一鍵撤回（0.17.3），面板裡逐筆 pending 項目沒有撤回入口，要回命令列跑 `check_inbox.py --dismiss`。只改頁面與 JS，不改任何 SSOT、不改 server 端點；skills、agents、管線階段、收件匣與 IR `schema_version` 不變。
+
+1. **面板每列（`render_progress.py` `_actions_panel()`）**：「套用」之後多一個 `<button class="act-dismiss-row" data-id="IN-xxx">撤回</button>`，十種 kind（含 batch）都有；初始 disabled、title「用 progress_server.py 開啟才能撤回（file:// 或未連上伺服器）」。面板標題下方多一句 `#actions-dismiss-hint`「撤回只改收件匣狀態，不動 SSOT（代跑 check_inbox.py --dismiss；不需 --allow-apply，連上 progress_server.py 就能用）」——獨立一段，JS 改 `#actions-hint` 時不會蓋掉。
+2. **JS**：`enableInbox()`（`/api/ping` 回 ok 就跑，不看 `actions_enabled`）啟用 `.act-dismiss-row` 並把 title 改成「標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT」；面板事件委派多接 `.act-dismiss-row` → `actDismissRow(id)`：該列預覽／套用／撤回三個鈕一起停用、摘要區寫「撤回中…」→ `POST /api/inbox/dismiss {id, note:"使用者在待套用動作面板撤回"}` → 成功 toast「已撤回 IN-xxx」、1.5 秒後重新載入（該列消失）；失敗（server 回錯或連不上）把「撤回失敗：<原因>」寫在該列 `act-summary`、三個鈕恢復、不重載。`actRowUi()` 的 lock 也加進撤回鈕，預覽／套用進行中不能撤回。對話框的撤回（note「使用者在放開預覽後撤回」）與舊批次一鍵撤回照舊。
+3. **文件**：README「放開即預覽」段、`status` SKILL.md 放開流程段各補一句；`tests/README.md` 登記；`plugin.json` 0.18.2。
+4. **測試**：新增 `tests/run_v0182_regressions.py`（fixture 沿用 v0.16.1、CDP client 沿用 v0.16.3、`_reload`／`_wait_page` 沿用 v0.17.1）：HTML 十種 kind 每列都有撤回鈕、位置在「套用」之後、`#actions-dismiss-hint`、沒 pending 時不出鈕；JS 錨點與 `node --check`；headless Chrome（server **不開** `--allow-apply`）：撤回鈕啟用而預覽／套用停用 → 按撤回 → 三鈕停用 → 收件匣 `dismissed`、note 正確 → 重載後該列消失、其他列仍 pending、SSOT 檔沒變 → 先從命令列撤回再按頁面撤回 → 「撤回失敗：」寫在該列、鈕恢復、不重載 → file:// 開啟撤回鈕停用且 title 說明；登記錨點與無 arm 的直譯字（U+81C2）。v0.7–v0.18.1 各支照跑、沒有改斷言。
+
 ## 0.18.1（2026-09-16）
 
 進度頁面關聯圖的版面：每個區帶內再依問題分成橫向的**問題帶（strip）**——同一個問題（SQ／AQ）延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊，問題與問題之間留一列空隙。只改畫法與 IR 欄位，不改任何 SSOT；skills、agents、管線階段、收件匣 `schema_version` 不變；IR `schema_version` 維持 1（只加欄位）。
