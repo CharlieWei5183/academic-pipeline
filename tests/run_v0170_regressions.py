@@ -334,7 +334,8 @@ def test_frontend(tmp: Path) -> None:
     proc = subprocess.run([node, '--check', str(js_path)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     g, _by = ir_graph(root)
-    parts = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'nextAqStaged', 'applyOptimistic'))
+    # 0.17.2 起 applyOptimistic 開頭呼叫 snapOrder0（→ anchorOf）保存 IR 基準，抽函式時一併帶上
+    parts = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'anchorOf', 'snapOrder0', 'nextAqStaged', 'applyOptimistic'))
     for name in ('ROLE_BAND', 'DOWN_TYPES'):
         i = js.index('var ' + name + '=')
         parts = js[i:js.index('\n', i)] + '\n' + parts
