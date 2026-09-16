@@ -16,7 +16,7 @@ status／resolved_by／resolved_at／note 四行（--set-reason 則是 batch 項
 
 輸出: `=== check_inbox: <root> ===`、每筆 `IN-001  pending  new_question  q:SQ2  <title>`、統計
 `pending a／done b／dismissed c`、WARNING（id 非連號、status 非法、kind 非法、target 不在 IR、結構化 payload 不合法）、
-`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result／batch（結構化動作，dispatch 表與 payload 驗證在
+`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result／demote_plan／batch（結構化動作，dispatch 表與 payload 驗證在
 ssot_actions_common.ACTIONS）的 pending 項目，另印一行可直接執行的建議命令（`python3 <scripts>/<腳本> <root> … --inbox IN-xxx --dry-run`；batch 為
 `run_batch.py <root> --batch '<inline JSON>' --inbox IN-xxx --dry-run`，payload 每一項各經該 kind 的驗證，第 2 步起對 plan／問題 id 放寬為「現行 id 或前面步驟會產生的 id」），
 status skill 不得人工重做各步，一律跑腳本 --dry-run → 使用者同意 → --apply。

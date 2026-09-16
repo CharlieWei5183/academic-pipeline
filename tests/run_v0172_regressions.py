@@ -89,13 +89,13 @@ act('nest_result',{key:'m1',under:'k1'});out.nest=cell('main|4');out.nestOrd=[no
 act('nest_result',{key:'k2',under:'k1'});out.nest2=cell('main|4');
 // (2) 拉回頂層 → 回 IR 順序
 act('nest_result',{key:'m1'});act('nest_result',{key:'k2'});out.unnest=cell('main|4');out.unnestParent=[nodes['r:m1'].parent,nodes['r:k2'].parent];
-// (3) move_result B 型：k1 → SQ1-v1 R2（次要）→ 排在 r2（R2 既有次要結果）之後；先把 k2 掛在 k1 下，k2 跟著進 supp 且緊接 k1
+// (3) move_result B 型：k1 → SQ1-v1 R2（次要）→ 排在 r2（R2 既有次要結果）之後；先把 k2 掛在 k1 下，k2 跟著、緊接 k1（v0.18.0：次要結果留在 plan 的帶 main）
 fresh();act('nest_result',{key:'k2',under:'k1'});act('move_result',{key:'k1',to_plan:'SQ1-v1',to_item:'R2'});out.moveB=cell('supp|4');out.moveBmain=cell('main|4');
 out.moveBprod=G.edges.filter(function(e){return e.type==='produces'&&e.to==='r:k1';}).map(function(e){return e.from;});
 // (4) move_result A 型：r2 → AQ1-v1 頂層 → 排在 a1 之後
 fresh();act('move_result',{key:'r2',to_plan:'AQ1-v1',to_item:''});out.moveA=cell('supp|4');out.moveAparent=nodes['r:r2'].parent;
-// (5) move_sensitivity：SQ1-v1 R1 → SQ2-v1 → 排在 SQ2-v1#S 既有子分析之後；其次要結果 r1 跟著（排到 r2 之後）
-fresh();act('move_sensitivity',{plan:'SQ1-v1',item:'R1',to_plan:'SQ2-v1'});out.moveS=cell('supp|2');out.moveS4=cell('supp|4');out.moveSparent=nodes['p:SQ1-v1#R1'].parent;
+// (5) move_sensitivity：SQ1-v1 R1 → SQ2-v1 → 排在 SQ2-v1#S 既有子分析之後；其次要結果 r1 跟著（排到 m1 之後）（v0.18.0：都在 main）
+fresh();act('move_sensitivity',{plan:'SQ1-v1',item:'R1',to_plan:'SQ2-v1'});out.moveS=cell('main|2');out.moveS4=cell('main|4');out.moveSparent=nodes['p:SQ1-v1#R1'].parent;
 // (6) reassign SQ2 → supp：整棵子樹在 supp 各格最後、相對順序 plan → 群 → 子分析
 fresh();act('reassign',{from:'SQ2',to:''});out.re=snap();
 // 決定性：reorderStaged 再叫一次不變；同一串動作從頭重跑一次相同
@@ -121,27 +121,28 @@ console.log(JSON.stringify(out));
     assert proc.returncode == 0, proc.stderr[-2000:]
     o = json.loads(proc.stdout.strip().splitlines()[-1])
     b = o['base']
-    assert b['main|4'] == ['r:k1', 'r:k2', 'r:m1'] and b['supp|4'] == ['r:r1', 'r:r2', 'r:a1'] and b['supp|1'] == ['q:AQ1', 'q:AQ2'], b
-    assert b['supp|2'] == ['p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'], b['supp|2']
-    assert o['nest'] == ['r:k1', 'r:m1', 'r:k2'] and o['nestOrd'] == [0, 1, 2] and o['nestBad'] == [], o
-    assert o['nest2'] == ['r:k1', 'r:k2', 'r:m1'], o['nest2']
-    assert o['unnest'] == ['r:k1', 'r:k2', 'r:m1'] and o['unnestParent'] == ['', ''], o
-    assert o['moveB'] == ['r:r1', 'r:r2', 'r:k1', 'r:k2', 'r:a1'] and o['moveBmain'] == ['r:m1'] and o['moveBprod'] == ['p:SQ1-v1#R2'], o
-    assert o['moveA'] == ['r:r1', 'r:a1', 'r:r2'] and o['moveAparent'] == '', o
-    assert o['moveS'] == ['p:SQ1-v1#S', 'p:SQ1-v1#R2', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1#R1', 'p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and o['moveSparent'] == 'p:SQ2-v1#S', o['moveS']
-    assert o['moveS4'] == ['r:r2', 'r:r1', 'r:a1'], o['moveS4']
+    # v0.18.0：群、子分析、次要結果跟 plan 的帶（SQ 的在 main、AQ 的在 supp）
+    assert b['main|4'] == ['r:k1', 'r:k2', 'r:r1', 'r:r2', 'r:m1'] and b['supp|4'] == ['r:a1'] and b['supp|1'] == ['q:AQ1', 'q:AQ2'], b
+    assert b['main|2'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'] and b['supp|2'] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'], b
+    assert o['nest'] == ['r:k1', 'r:m1', 'r:k2', 'r:r1', 'r:r2'] and o['nestOrd'] == [0, 1, 2] and o['nestBad'] == [], o
+    assert o['nest2'] == ['r:k1', 'r:k2', 'r:m1', 'r:r1', 'r:r2'], o['nest2']
+    assert o['unnest'] == ['r:k1', 'r:k2', 'r:r1', 'r:r2', 'r:m1'] and o['unnestParent'] == ['', ''], o
+    assert o['moveB'] == ['r:a1'] and o['moveBmain'] == ['r:r1', 'r:r2', 'r:k1', 'r:k2', 'r:m1'] and o['moveBprod'] == ['p:SQ1-v1#R2'], o
+    assert o['moveA'] == ['r:a1', 'r:r2'] and o['moveAparent'] == '', o
+    assert o['moveS'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R2', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1#R1'] and o['moveSparent'] == 'p:SQ2-v1#S', o['moveS']
+    assert o['moveS4'] == ['r:k1', 'r:k2', 'r:r2', 'r:m1', 'r:r1'], o['moveS4']
     re_ = o['re']
-    assert re_['main|1'] == ['q:SQ1'] and re_['supp|1'] == ['q:AQ1', 'q:AQ2', 'q:SQ2'] and re_['main|2'] == ['p:SQ1-v1'], re_
-    assert re_['supp|2'] == ['p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'], re_['supp|2']
-    assert re_['main|4'] == ['r:k1', 'r:k2'] and re_['supp|4'][-1] == 'r:m1' and re_['supp|3'] == ['v:V3', 'v:V2'] and re_['main|3'] == ['v:V1'], re_
+    assert re_['main|1'] == ['q:SQ1'] and re_['supp|1'] == ['q:AQ1', 'q:AQ2', 'q:SQ2'] and re_['main|2'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2'], re_
+    assert re_['supp|2'] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'], re_['supp|2']   # v0.18.0：群跟 plan 一起換帶
+    assert re_['main|4'] == ['r:k1', 'r:k2', 'r:r1', 'r:r2'] and re_['supp|4'] == ['r:a1', 'r:m1'] and re_['supp|3'] == ['v:V3', 'v:V2'] and re_['main|3'] == ['v:V1'], re_
     assert o['reSame'] is True and o['reSame2'] is True, (o['reSame'], o['reSame2'])
     pr = o['pr']
-    assert pr['main|1'] == ['q:SQ1', 'q:SQ2', 'q:AQ1'] and pr['main|2'] == ['p:SQ1-v1', 'p:SQ2-v1', 'p:AQ1-v1'] and pr['main|4'] == ['r:k1', 'r:k2', 'r:m1', 'r:a1'] and pr['main|3'] == ['v:V1', 'v:V2', 'v:V3'], pr
-    assert pr['supp|2'] == ['p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'], pr['supp|2']   # 群留在 supp
+    assert pr['main|1'] == ['q:SQ1', 'q:SQ2', 'q:AQ1'] and pr['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and pr['main|4'] == ['r:k1', 'r:k2', 'r:r1', 'r:r2', 'r:m1', 'r:a1'] and pr['main|3'] == ['v:V1', 'v:V2', 'v:V3'], pr
+    assert pr['supp|2'] == [] and pr['supp|4'] == [], pr   # v0.18.0：AQ1 的群跟著升到 main，supp 清空
     mp = o['mp']
-    assert mp['main|2'] == ['p:SQ1-v1', 'p:SQ2-v1', 'p:AQ1-v1'] and mp['main|4'] == ['r:k1', 'r:k2', 'r:m1', 'r:a1'] and mp['main|3'] == ['v:V1', 'v:V2', 'v:V3'], mp
+    assert mp['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and mp['main|4'] == ['r:k1', 'r:k2', 'r:r1', 'r:r2', 'r:m1', 'r:a1'] and mp['main|3'] == ['v:V1', 'v:V2', 'v:V3'] and mp['supp|2'] == [], mp
     ro = o['ro']
-    assert ro['main|1'] == ['q:SQ2', 'q:SQ1'] and ro['main|2'] == ['p:SQ2-v1', 'p:SQ1-v1'] and ro['main|3'] == ['v:V2', 'v:V1'] and ro['main|4'] == ['r:m1', 'r:k1', 'r:k2'], ro
+    assert ro['main|1'] == ['q:SQ2', 'q:SQ1'] and ro['main|2'] == ['p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2'] and ro['main|3'] == ['v:V2', 'v:V1'] and ro['main|4'] == ['r:m1', 'r:k1', 'r:k2', 'r:r1', 'r:r2'], ro
     assert o['role']['main|5'] == ['f:F_c'] and 'f:F_a' in o['role']['ext|5'], o['role']
     assert o['replaySame'] is True and o['replayBad'] == [], (o['replaySame'], o['replayBad'])
 
@@ -162,14 +163,14 @@ def test_headless_positions(tmp: Path) -> bool:
     try:
         T3._open_page(ws, port, form_on_drop=False)
         s0 = state()
-        assert s0['n'] == '0' and s0['k1']['parent'] == '' and s0['k2']['y'] == s0['k1']['y'] + ROW and s0['m1']['y'] == s0['k1']['y'] + 2 * ROW, s0
+        assert s0['n'] == '0' and s0['k1']['parent'] == '' and s0['k2']['y'] == s0['k1']['y'] + ROW and s0['m1']['y'] == s0['k1']['y'] + 4 * ROW, s0   # v0.18.0：r1／r2（次要）在 main 帶排在 k2 與 m1 之間
         y1, x1 = s0['k1']['y'], s0['k1']['x']
         # (1) 拖 r:k2 到 r:k1 → k2 在 k1 下一列、縮排；supports 線起於 k1 底、止於 k2 左緣
         d = json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))
         assert d['formHidden'] is True, d
         s1 = state()
         assert s1['n'] == '1' and s1['k2']['parent'] == 'r:k1' and s1['k2']['y'] == s1['k1']['y'] + ROW and s1['k2']['x'] == s1['k1']['x'] + INDENT and s1['k1']['y'] == y1, s1
-        assert s1['m1']['y'] == s1['k2']['y'] + ROW and len(s1['sup']) == 1 and s1['sup'][0][:2] == ['r:k1', 'r:k2'], s1
+        assert s1['m1']['y'] == s1['k2']['y'] + 3 * ROW and len(s1['sup']) == 1 and s1['sup'][0][:2] == ['r:k1', 'r:k2'], s1
         m = re.match(r'M([\d.]+),([\d.]+) ', s1['sup'][0][2])
         assert m and float(m.group(1)) == s1['k1']['x'] + 12 and float(m.group(2)) == s1['k1']['y'] + 36 and s1['sup'][0][2].endswith(f" L{s1['k2']['x']},{s1['k2']['y'] + 18}"), s1['sup']
         # (2) 復原 → 回原位
@@ -182,14 +183,14 @@ def test_headless_positions(tmp: Path) -> bool:
         d = json.loads(ws.eval(T3._drop_js('r:k1', 'r:k2')))
         assert d['formHidden'] is True, d
         s3 = state()
-        assert s3['k1']['parent'] == 'r:k2' and s3['k2']['y'] == y1 and s3['k1']['y'] == y1 + ROW and s3['k1']['x'] == x1 + INDENT and s3['k2']['x'] == x1 and s3['m1']['y'] == y1 + 2 * ROW, s3
+        assert s3['k1']['parent'] == 'r:k2' and s3['k2']['y'] == y1 and s3['k1']['y'] == y1 + ROW and s3['k1']['x'] == x1 + INDENT and s3['k2']['x'] == x1 and s3['m1']['y'] == y1 + 4 * ROW, s3
         assert s3['k1']['order'] == s3['k2']['order'] + 1 and s3['sup'][0][:2] == ['r:k2', 'r:k1'], s3
         # (4) 重新載入（localStorage 還原）→ 位置相同
         T71._reload(ws)
         ws.eval("location.reload();'ok'")
         T71._wait_page(ws)
         s4 = state()
-        assert s4['n'] == '1' and s4['k1']['parent'] == 'r:k2' and s4['k2']['y'] == y1 and s4['k1']['y'] == y1 + ROW and s4['k1']['x'] == x1 + INDENT and s4['m1']['y'] == y1 + 2 * ROW, s4
+        assert s4['n'] == '1' and s4['k1']['parent'] == 'r:k2' and s4['k2']['y'] == y1 and s4['k1']['y'] == y1 + ROW and s4['k1']['x'] == x1 + INDENT and s4['m1']['y'] == y1 + 4 * ROW, s4
         # (5) 清空 → 回原位
         T71._reload(ws)
         ws.eval("document.getElementById('staged-clear').click();'ok'")
