@@ -4,6 +4,7 @@
 
 用法:
   python3 run_batch.py <root> --batch <json 檔 | - | 直接一段 JSON> [--inbox IN-xxx] [--reason "..."] [--daily-log <path>]
+  （--batch 的 JSON 可為 {"actions": [...], "reason": "整批理由"}；--reason 沒給時用 JSON 頂層 reason）
       [--expect-token <token>] [--date YYYY-MM-DD] (--dry-run | --apply)
 
 --batch 的內容：{"actions": [{"kind": "nest_result", "payload": {"key": "k2", "under": "k1"}}, …]}（或直接是清單）；
@@ -47,7 +48,7 @@ RELAY_Q_FIELDS = ('from', 'to_question')
 
 # ---------- 輸入 ----------
 
-def load_batch(arg: str) -> list[dict[str, Any]]:
+def load_batch(arg: str) -> tuple[list[dict[str, Any]], str]:
     """--batch：'-' 讀 stdin；以 { 或 [ 開頭＝直接是 JSON；其餘視為檔案路徑。"""
     text = arg.strip()
     if text == '-':
@@ -64,14 +65,16 @@ def load_batch(arg: str) -> list[dict[str, Any]]:
     actions = C.batch_actions_of(data)
     if actions is None:
         raise ChainError('--batch 須為 {"actions": [{kind, payload}, …]} 或直接是清單')
-    return actions
+    return actions, (str(data.get('reason') or '') if isinstance(data, dict) else '')   # 0.17.1 JSON 頂層 reason（可缺）：--reason 沒給時當整批理由
 
 
 def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
-    raw = load_batch(args.batch)
-    norm, err = C.validate_payload(root, 'batch', {'actions': raw})
+    raw, reason_json = load_batch(args.batch)
+    norm, err = C.validate_payload(root, 'batch', {'actions': raw, 'reason': reason_json})
     if err:
         raise ChainError(err)
+    if not args.reason.strip() and norm.get('reason'):
+        args.reason = norm['reason']
     inbox = C.check_inbox_pending(root, args.inbox)
     if inbox is not None and str(inbox.get('kind') or '') != 'batch':
         raise ChainError(f'{args.inbox} 的 kind 是 {inbox.get("kind")}，不是 batch')
@@ -138,6 +141,9 @@ def relay_payload(kind: str, payload: dict[str, Any], plan_map: dict[str, str], 
 
 # ---------- 執行 ----------
 
+DEFAULT_REASON_TEMPLATE = '使用者於進度頁面批次拖放（{inbox}）'   # 每項與整批理由都空時，各步 D# 的 reason 開頭（0.17.1）
+
+
 def step_argv(target: Path, kind: str, payload: dict[str, Any], reason: str, date: str) -> list[str]:
     argv = C.action_argv(target, kind, payload, '', 'apply')
     if argv is None:
@@ -171,6 +177,8 @@ def run_sequence(target: Path, actions: list[dict[str, Any]], reason_base: str, 
         kind = a['kind']
         payload, changes = relay_payload(kind, a.get('payload') or {}, plan_map, q_map)
         own = str(a.get('reason') or '').strip() or reason_base.strip()   # 每項自己的理由優先，沒有就用整批的 --reason
+        if not own and inbox_id:
+            own = DEFAULT_REASON_TEMPLATE.format(inbox=inbox_id)   # 0.17.1 兩者都空：模板句（收件匣項目多半是進度頁面拖放來的）
         reason = (own + '；' if own else '') + f'批次{"（收件匣 " + inbox_id + "）" if inbox_id else ""}第 {i}／{n} 步'
         argv = step_argv(target, kind, payload, reason, date)
         before = index_active(target)

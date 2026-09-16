@@ -378,3 +378,15 @@ v0.17.0 加「批次模式」：使用者在關聯圖連續拖放多次、每次
 - headless Chrome（有才跑）：拖 `r:k2` 到 `r:k1` → 表單 → 「加入暫存」不呼叫 server（收件匣筆數不變）→ 節點 class `staged`、supports 虛線一條、面板一列、localStorage 有值；再拖 `r:r2` 到 `p:AQ1-v1` → 兩列、`__apStaged()` 兩項；重新載入後還原（兩列、`r:k2` 仍在 `r:k1` 下）；「全部預覽」→ 收件匣 IN-002（kind batch、title「批次 2 項」、target 空、body 含理由）、摘要含兩步與 `預定決策 D-003–D-004`、只動收件匣與進度產物；「全部套用」→ 重新載入後暫存 0、面板隱藏、localStorage 清空、`PROGRESS.actions.log` 一行 `D-003–D-004`、index active 為最終版本；另建一筆 batch 進收件匣後「待套用動作」面板的預覽鈕可用。
 - 登記錨點：CHANGELOG `## 0.17.0` 含 `run_batch.py`、`batch`、`SSOT_ACTIONS_BATCH_STEP`、本檔名；README 與 `status` SKILL.md 含 `run_batch.py`／`暫存`；本檔含 `run_v0170_regressions.py`；`plugin.json` ≥ 0.17.0；相關檔不含 arm 的直譯字。
 - 為了讓舊測試在 0.17.0 之後仍通過：`run_v0163` 的對話框錨點拆成 `id="act-submit"` 與 `送出並預覽</button>`（鈕改名「單獨送出並預覽」並多 title）、`'/api/inbox'` 的出現次數 2 → 3（暫存面板的「全部預覽」再建一筆 batch）；`run_v0165` 的 `ACTION_KINDS` 改為前八種同序（尾端多 `batch`）、面板標題錨點不再要求「掛到主結果下」是最後一個；`run_v0164` 的 CHANGELOG 開頭斷言由 `## 0.16.` 放寬為 `## 0.`（最上面一條已是 0.17.0）。
+
+## run_v0171_regressions.py
+
+v0.17.1 把進度頁面的拖放改成「放開即暫存」（不彈表單、各 kind 預設值、toast 附復原、暫存面板「編輯」、「放開時先開表單」開關）並讓理由整批填一次（batch payload 頂層 `reason` → `run_batch.py --reason`；各步 D# reason ＝ 該項理由否則整批理由，都空則模板句）。fixture 沿用 `run_v0161_regressions.fixture`，headless Chrome 的 CDP client 沿用 `run_v0163_regressions`（`_open_page(..., form_on_drop=False)`）。執行：`python3 tests/run_v0171_regressions.py`。
+
+- 後端：`validate_payload('batch')` 頂層 reason（字串／可缺／非字串 → 「batch 的 reason 須為字串」／截 2000）；`ACTIONS['batch']` argv 帶 `--reason`、body 最後一行「理由：…」、token extra 不含理由；`check_inbox --list` 建議命令帶 `--reason`。
+- `run_batch.py`：`--batch` JSON 頂層 reason、`--reason` 蓋過、該項自己的 reason 優先；都空且有 `--inbox` → D# reason 以「使用者於進度頁面批次拖放（IN-002）；批次（收件匣 IN-002）第 k／2 步」開頭；沒收件匣不加模板。
+- server：`/api/inbox` 收 `{actions, reason}`（reason 非字串 400）→ body 最後一行理由、只一行 → dry-run → apply → D-003／D-004 都以整批理由開頭。
+- 前端：錨點（`#opt-form-on-drop`、`#staged-reason`、`stageDirect`／`defaultPayload`／`stageEdit`／`toastUndo`／`stageRemove`、`.st-edit`、「更新暫存」、「（放開即暫存）」、`FORM_ON_DROP_KEY`、`STAGE_REASON_KEY`、`__apFormOnDrop`）、`node --check`、把 `defaultPayload` 抽到 node 跑（reassign 逐號、`next_aq` 優先、promote to 空、其餘照候選）。
+- headless Chrome（有才跑）：預設不勾 → 拖 `r:k2` 到 `r:k1` 放開 → 預覽標籤尾「（放開即暫存）」、沒有表單、暫存 1 項、toast 含「已暫存」與「復原」、收件匣筆數不變 → 按復原 → 暫存 0、節點回原位、localStorage 空 → 再拖兩次 → 2 列、理由都空 → 「編輯」第 2 項：標題「編輯暫存第 2 項：搬結果：r2 → AQ1-v1」、鈕「更新暫存」、單獨送出鈕隱藏 → 填理由更新 → 再編輯清空 → 理由欄「整批測試」→ 全部預覽（IN-002 payload `reason`、body 三行）→ 全部套用 → D-003／D-004 以「整批測試；批次（收件匣 IN-002）第 k／2 步」開頭、localStorage 兩個 key 都清 → 勾「放開時先開表單」→ 拖 `r:m1` 到 `p:AQ1-v2` 放開有表單（尾「（放開後填理由）」）→ 取消 → 重新載入仍勾著。
+- 登記錨點：CHANGELOG `## 0.17.1` 含「放開即暫存」、「放開時先開表單」、`reason`、本檔名；README／`status` SKILL.md 含「放開時先開表單」；`plugin.json` ≥ 0.17.1；相關檔不含 arm 的直譯字。
+- 為了讓舊測試在 0.17.1 之後仍通過：`run_v0163._open_page()` 多 `form_on_drop=True` 預設（開頁後勾上「放開時先開表單」；v0163／v0164／v0165／v0170 的流程都是「放開 → 表單」）；`run_v0170` 的錨點 `kind:'batch',payload:{actions:actions}` 改為含 `reason:stagedReason()`。

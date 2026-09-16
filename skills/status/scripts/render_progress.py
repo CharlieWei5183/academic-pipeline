@@ -44,7 +44,9 @@ SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，�
 共用同一段預覽／套用 JS（actPreview／actApply）。0.17.0 批次暫存：表單另有「加入暫存」——不呼叫 server，把 {kind, payload, reason} 推進本頁的
 staged[]（localStorage，key ap-staged:<project_root>）並對本地圖模型做樂觀更新（applyOptimistic：parent／band／subtype 一定改對，邊只改做得到的）後
 relayout()，暫存節點加 class staged（虛線外框）；頁首「暫存動作」面板列每項、可刪除／上下移（重新載入後重新套用其餘暫存）、「全部預覽」建一筆
-kind batch 進收件匣並 dry-run（run_batch.py 在同一個工作區依序真跑、版本接力）、「全部套用」帶 token；單動作流程照舊。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
+kind batch 進收件匣並 dry-run（run_batch.py 在同一個工作區依序真跑、版本接力）、「全部套用」帶 token。0.17.1 放開即暫存：放開節點預設不開表單，直接用各 kind
+的預設值（stageDirect／defaultPayload）加進暫存並重排，toast 附「復原」；面板每列「編輯」開原本的表單預填、「更新暫存」取代；「全部預覽」旁「理由（整批，可空）」
+放進 batch payload 頂層 reason（run_batch --reason 收；各步 D# reason＝該項理由否則整批理由，都空則模板句）；核取「放開時先開表單」（localStorage）才回到放開 → 表單。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
 頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
 ＋ 意見）只在經 progress_server.py 以 http 開啟（fetch /api/ping 成功）時啟用，file:// 一律 disabled。
 
@@ -2830,7 +2832,8 @@ path.edge.staged{stroke-dasharray:6 3}
 #staged-panel table{border-collapse:collapse;margin-top:6px;font-size:12px;width:100%}#staged-panel td,#staged-panel th{padding:3px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
 #staged-panel button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
 #staged-panel button[disabled]{opacity:.5;cursor:not-allowed}
-#staged-panel .row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+#staged-panel .row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center}
+#staged-panel .row label{font-weight:600}#staged-panel #staged-reason{flex:1 1 240px;min-width:160px;font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 #staged-panel .err{color:var(--blocked);font-size:12px;margin-top:6px;min-height:1em}
 pre.act-summary{white-space:pre-wrap;font-size:11px;max-height:320px;overflow:auto;margin:4px 0 0;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
 pre.act-summary:empty{display:none}
@@ -2840,6 +2843,7 @@ pre.act-summary:empty{display:none}
 .act-inline button{cursor:pointer}.act-inline button[disabled]{opacity:.5;cursor:not-allowed}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:8px;z-index:70;font-size:13px}
 #toast[hidden]{display:none}
+#toast a.toast-undo{color:var(--bg);text-decoration:underline;margin-left:10px;font-weight:600;cursor:pointer}
 @media (max-width:700px){#gdetail{position:static;width:auto;max-height:none;margin-top:14px}}
 """
 
@@ -3123,11 +3127,13 @@ GRAPH_JS = """
     if(cand.target&&nodes[cand.target]){nodeEls[cand.target].classList.add(cls);var tc=nodeCenter(nodes[cand.target]);var line=document.createElementNS(SVGNS,'path');
       line.setAttribute('d','M'+cx+','+cy+' L'+tc.x+','+tc.y);line.setAttribute('class','preview '+(cand.kind==='nest_result'?'e-supports':(cand.kind==='move_sensitivity'||(cand.kind==='move_result'&&cand.payload&&cand.payload.to_item)?'e-sensitivity':'e-plans'))+' '+cls);previewG.appendChild(line);}
     var lbl=document.createElementNS(SVGNS,'text');lbl.setAttribute('x',cx+12);lbl.setAttribute('y',cy-10);lbl.setAttribute('class','preview-label '+cls);
-    lbl.textContent=cand.ok?(ACT_LABEL[cand.kind]+(cand.label?'：'+cand.label:'')+'（放開後填理由）'):cand.reason;previewG.appendChild(lbl);}
-  // 放開：無候選 → 滑回原位不開表單；非法 → toast 說原因；合法 → 開表單（父節點欄位已帶入、唯讀），使用者只填理由
+    lbl.textContent=cand.ok?(ACT_LABEL[cand.kind]+(cand.label?'：'+cand.label:'')+(formOnDrop?'（放開後填理由）':'（放開即暫存）')):cand.reason;previewG.appendChild(lbl);}
+  // 放開：無候選 → 滑回原位；非法 → toast 說原因；合法 → 0.17.1 預設直接暫存（各 kind 的預設值、理由空；toast 附「復原」），
+  // 勾了「放開時先開表單」才開表單（0.17.0 行為：父節點欄位已帶入、唯讀，使用者填理由後加入暫存或單獨送出）
   function dropTo(id,cand){if(!cand)return;if(!cand.ok){toast(cand.reason||'這個位置不能放');return;}
     if(!serverOk){toast('用 progress_server.py 開啟才能送出（file:// 頁面無法送表單）');return;}
-    openActionForm(cand.kind,cand.payload,cand.options);}
+    if(formOnDrop){openActionForm(cand.kind,cand.payload,cand.options);return;}
+    stageDirect(cand);}
   function center(id){var n=nodes[id];if(!n)return;tx=wrap.clientWidth/2-(n.x+W/2)*sc;ty=wrap.clientHeight/2-(n.y+H/2)*sc;apply();}
   // ---- 高亮 ----
   function clearClasses(){Object.keys(nodeEls).forEach(function(id){nodeEls[id].classList.remove('sel','up','down','onpath','hit','dim');});edgeEls.forEach(function(el){if(el)el.classList.remove('up','down','onpath','dim','own');});Array.prototype.forEach.call(trunkGroup.children,function(tp){['up','down','onpath','own','dim'].forEach(function(c){tp.classList.remove(c);});});}
@@ -3306,7 +3312,11 @@ GRAPH_JS = """
   // ---- 收件匣表單（只在經 progress_server.py 以 http 開啟時啟用） ----
   var serverOk=false,formEl=document.getElementById('inbox-form'),newBtn=document.getElementById('inbox-new'),hintEl=document.getElementById('inbox-hint');
   var fKind=document.getElementById('inbox-kind'),fTarget=document.getElementById('inbox-target'),fTitle=document.getElementById('inbox-title'),fBody=document.getElementById('inbox-body'),fAuthor=document.getElementById('inbox-author'),fErr=document.getElementById('inbox-err');
-  function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.hidden=false;setTimeout(function(){t.hidden=true;},2500);}
+  var toastTimer=null;
+  function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true;},2500);}
+  // 0.17.1 附「復原」連結的 toast（暫存後用）：按了就關 toast 並執行 fn；六秒後自動關
+  function toastUndo(msg,fn){var t=document.getElementById('toast');t.textContent=msg+' ';var a=document.createElement('a');a.href='#';a.className='toast-undo';a.textContent='復原';
+    a.addEventListener('click',function(e){e.preventDefault();t.hidden=true;fn();});t.appendChild(a);t.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true;},6000);}
   var actionsOk=false,nextAq='',nextSq='';
   function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});}
   function enableActions(){actionsOk=true;var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
@@ -3344,7 +3354,7 @@ GRAPH_JS = """
     if(kind==='reassign'){openReassignForm(payload.from);return;}
     if(kind==='promote'){openPromoteForm(payload.from);return;}
     if(kind==='set_role'){openRoleForm(payload.figure,payload.role);return;}
-    actKind=kind;actStage('form');actErr.textContent='';$v('act-reason','');
+    actKind=kind;actStage('form');actErr.textContent='';$v('act-reason','');actOptions=options||null;
     if(kind==='move_plan'){document.getElementById('act-form-title').textContent='搬方法：'+payload.plan+' → '+payload.to_question;showActGroup('move-plan');$v('act-mp-plan',planLabel(payload.plan));$v('act-mp-to',qLabel(payload.to_question));}
     else if(kind==='move_sensitivity'){document.getElementById('act-form-title').textContent='搬敏感性子分析：'+payload.plan+' '+payload.item+' → '+payload.to_plan;showActGroup('move-sens');$v('act-ms-plan',planLabel(payload.plan));$v('act-ms-item',(nodes['p:'+payload.plan+'#'+payload.item]||{label:payload.item}).label);$v('act-ms-to',planLabel(payload.to_plan));}
     else if(kind==='reorder'){document.getElementById('act-form-title').textContent='調順序：goals.'+payload.list;showActGroup('reorder');$v('act-ro-list',payload.list);$v('act-ro-order',payload.order.join(' → '));}
@@ -3363,6 +3373,7 @@ GRAPH_JS = """
   // 對話框兩階段：form（填理由、按「送出並預覽」）→ preview（已進收件匣；顯示 dry-run 摘要；套用／先留在收件匣／撤回）
   var actStageNow='form',actItemId='';
   function actStage(stage,id){actStageNow=stage;actItemId=id||'';document.getElementById('act-preview-box').hidden=(stage!=='preview');document.getElementById('act-submit-row').hidden=(stage==='preview');
+    if(stage==='form'){actEditIndex=-1;actOptions=null;document.getElementById('act-stage').textContent='加入暫存';document.getElementById('act-submit').hidden=false;}   // 0.17.1 離開「編輯暫存」模式
     Array.prototype.forEach.call(actForm.querySelectorAll('input,select,textarea'),function(el){el.disabled=(stage==='preview');});
     if(stage==='preview'){document.getElementById('act-item-id').textContent=id;document.getElementById('act-summary').textContent='';var ap=document.getElementById('act-apply');ap.disabled=true;ap.title='先預覽';document.getElementById('act-keep').disabled=false;document.getElementById('act-dismiss').disabled=false;}}
   function closeActForm(){var keep=(actStageNow==='preview');actForm.hidden=true;actStage('form');if(keep)location.reload();}
@@ -3442,7 +3453,16 @@ GRAPH_JS = """
   var STAGE_KEY='ap-staged:'+String(ir.project_root||location.pathname);
   var ROLE_BAND={main:'main',extended:'ext',supplementary:'supp'};
   var DOWN_TYPES=['plans','sensitivity','validated_by','primary','robustness','produces','depicts','cites','supports'];   // 與 Python DOWNSTREAM_TYPES 同
-  var staged=[],stagedNodes={},stagedBatchId='',stagedAqUsed=0;
+  var staged=[],stagedNodes={},stagedBatchId='',stagedAqUsed=0,actEditIndex=-1,actOptions=null;
+  // 0.17.1 「放開時先開表單」開關（localStorage，預設不勾）：勾了才回到 0.17.0 的放開 → 表單；不勾＝放開即暫存
+  var FORM_ON_DROP_KEY='ap-form-on-drop',formOnDrop=false;try{formOnDrop=localStorage.getItem(FORM_ON_DROP_KEY)==='1';}catch(e){}
+  var optFormOnDrop=document.getElementById('opt-form-on-drop');
+  if(optFormOnDrop){optFormOnDrop.checked=formOnDrop;optFormOnDrop.addEventListener('change',function(){formOnDrop=optFormOnDrop.checked;try{if(formOnDrop)localStorage.setItem(FORM_ON_DROP_KEY,'1');else localStorage.removeItem(FORM_ON_DROP_KEY);}catch(e){}});}
+  var STAGE_REASON_KEY='ap-staged-reason:'+String(ir.project_root||location.pathname),stagedReasonEl=document.getElementById('staged-reason');
+  function stagedReason(){return stagedReasonEl?stagedReasonEl.value.trim():'';}
+  function stagedReasonSave(){try{var v=stagedReason();if(v)localStorage.setItem(STAGE_REASON_KEY,v);else localStorage.removeItem(STAGE_REASON_KEY);}catch(e){}}
+  if(stagedReasonEl){try{stagedReasonEl.value=localStorage.getItem(STAGE_REASON_KEY)||'';}catch(e){}
+    stagedReasonEl.addEventListener('input',function(){stagedReasonSave();if(stagedBatchId)stagedInvalidate();renderStaged();});}   // 理由變了 → 已建的批次項目作廢，要重新預覽
   function stageLoad(){try{var raw=localStorage.getItem(STAGE_KEY);var arr=raw?JSON.parse(raw):[];return Array.isArray(arr)?arr:[];}catch(e){return [];}}
   function stageSave(){try{if(staged.length)localStorage.setItem(STAGE_KEY,JSON.stringify(staged));else localStorage.removeItem(STAGE_KEY);}catch(e){}}
   function rebuildEdgeIndex(){outE={};inE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);(inE[e.to]=inE[e.to]||[]).push(i);});}
@@ -3493,38 +3513,60 @@ GRAPH_JS = """
   function stagedUi(){return {pre:document.getElementById('staged-summary'),apply:document.getElementById('staged-apply'),lock:[document.getElementById('staged-preview'),document.getElementById('staged-clear')],confirm:false,
     onStale:function(){if(stagedBatchId)actPreview(stagedBatchId,stagedUi());},
     okText:function(d){return '已套用 '+staged.length+' 步，'+(d.decision||'')+'；重新載入';},
-    onOk:function(){staged=[];stageSave();},
+    onOk:function(){staged=[];stageSave();try{localStorage.removeItem(STAGE_REASON_KEY);}catch(e){}},
     onFail:function(d){var m=/第 (\\d+) 步失敗/.exec(String(d.summary||''));if(m){var k=parseInt(m[1],10);if(k>1){staged=staged.slice(k-1);stageSave();}}
       document.getElementById('staged-err').textContent='批次未全部完成：'+(d.error||'')+'（摘要寫明停在哪；已套用的步驟各有 D#、失敗那步已還原；暫存清單只留下未套用的步驟，請重新載入頁面後再處理）';}};}
   function renderStaged(){var panel=document.getElementById('staged-panel');if(!panel)return;panel.hidden=!staged.length;document.getElementById('staged-count').textContent=String(staged.length);
     var tb=document.getElementById('staged-body');tb.innerHTML='';
     staged.forEach(function(it,i){var tr=document.createElement('tr');tr.setAttribute('data-staged-i',String(i));var tgt=stagedTarget(it);
-      tr.innerHTML='<td>'+(i+1)+'</td><td>'+esc(ACT_LABEL[it.kind]||it.kind)+'</td><td><span class="goto" data-goto="'+esc(tgt)+'">'+esc(nodes[tgt]?nodes[tgt].label:tgt)+'</span></td><td>'+esc(stagedTitle(it))+'<br><span class="src">'+esc(it.reason||'（未填理由）')+'</span></td>'
-        +'<td><button type="button" class="st-up" data-i="'+i+'"'+(i===0?' disabled':'')+' title="上移">↑</button> <button type="button" class="st-down" data-i="'+i+'"'+(i===staged.length-1?' disabled':'')+' title="下移">↓</button> <button type="button" class="st-del" data-i="'+i+'" title="刪除這一項（重新載入頁面、重新套用其餘暫存）">刪除</button></td>';
+      tr.innerHTML='<td>'+(i+1)+'</td><td>'+esc(ACT_LABEL[it.kind]||it.kind)+'</td><td><span class="goto" data-goto="'+esc(tgt)+'">'+esc(nodes[tgt]?nodes[tgt].label:tgt)+'</span></td><td>'+esc(stagedTitle(it))+'<br><span class="src">'+esc(it.reason||'（未填；用整批理由）')+'</span></td>'
+        +'<td><button type="button" class="st-edit" data-i="'+i+'" title="開表單改這一項（to／primary_model／落點／理由），按「更新暫存」取代並重套用">編輯</button> <button type="button" class="st-up" data-i="'+i+'"'+(i===0?' disabled':'')+' title="上移">↑</button> <button type="button" class="st-down" data-i="'+i+'"'+(i===staged.length-1?' disabled':'')+' title="下移">↓</button> <button type="button" class="st-del" data-i="'+i+'" title="刪除這一項（重新載入頁面、重新套用其餘暫存）">刪除</button></td>';
       tb.appendChild(tr);});
     var pv=document.getElementById('staged-preview');pv.disabled=!actionsOk||!staged.length;pv.title=actionsOk?'':'server 未開 --allow-apply';
     var ap=document.getElementById('staged-apply');if(!stagedBatchId||!actTokens[stagedBatchId]){ap.disabled=true;ap.title='先全部預覽';}
     document.getElementById('staged-batch-id').textContent=stagedBatchId?('收件匣 '+stagedBatchId):'';}
-  function stageAdd(kind,payload,reason){var it={kind:kind,payload:payload,reason:reason||''};staged.push(it);stagedInvalidate();applyOptimistic(kind,payload);stageSave();renderStaged();relayout();
-    closeActForm();toast('已加入暫存（第 '+staged.length+' 項）：'+stagedTitle(it));}
+  function stageAdd(kind,payload,reason,options){var it={kind:kind,payload:payload,reason:reason||''};if(options&&options.length)it.options=options;   // options（區帶落點的下拉）留著給「編輯」用
+    staged.push(it);stagedInvalidate();applyOptimistic(kind,payload);stageSave();renderStaged();relayout();
+    closeActForm();toastUndo('已暫存：'+stagedTitle(it),function(){stageRemove(it);});return it;}
+  function stageRemove(it){var i=staged.indexOf(it);if(i<0)return;staged.splice(i,1);stagedInvalidate();stagedReload();}   // 復原＝移除該項、重新載入並重套用其餘暫存（與刪除單項同一套）
+  // 0.17.1 放開即暫存：各 kind 的預設值——reassign to＝下一個 AQ 號（已暫存的 reassign 各占一號）、不帶 primary_model；promote to 空（腳本回原號或下一號）；
+  // move_result 拖到區帶＝候選的第一個選項（新增子分析、預設描述）、拖到節點照候選；set_role／nest_result／move_plan／move_sensitivity／reorder 照候選；理由空
+  function defaultPayload(cand){var p=cand.payload||{};
+    if(cand.kind==='reassign'){var used=staged.filter(function(it){return it.kind==='reassign';}).length,base=parseInt(String(nextAq||nextAqFromIr()).replace('AQ',''),10)||1;return {from:p.from,to:'AQ'+(base+used),primary_model:''};}
+    if(cand.kind==='promote')return {from:p.from,to:''};
+    return p;}
+  function stageDirect(cand){stageAdd(cand.kind,defaultPayload(cand),'',cand.options);}
+  // 「編輯」：開原本的表單、預填該項；「更新暫存」取代該項並重新載入（重套用全部暫存）
+  function stageEdit(i){var it=staged[i];if(!it||!serverOk)return;var p=it.payload||{};
+    openActionForm(it.kind,p,it.options);if(actForm.hidden)return;
+    if(it.kind==='reassign'){$v('act-to',p.to||'');var pm=document.getElementById('act-pm');pm.value=p.primary_model||'';if(pm.value!==(p.primary_model||''))pm.value='';}
+    else if(it.kind==='promote')$v('act-p-to',p.to||'');
+    else if(it.kind==='move_result'&&it.options&&it.options.length){var sel=document.getElementById('act-mr-dest'),want=JSON.stringify(p);it.options.forEach(function(o,j){if(JSON.stringify(o.payload)===want){sel.value=String(j);actPayload=o.payload;}});mrFill(actPayload);}
+    $v('act-reason',it.reason||'');actEditIndex=i;
+    document.getElementById('act-form-title').textContent='編輯暫存第 '+(i+1)+' 項：'+document.getElementById('act-form-title').textContent;
+    document.getElementById('act-stage').textContent='更新暫存';document.getElementById('act-submit').hidden=true;}
   function stagedInvalidate(){if(stagedBatchId){delete actTokens[stagedBatchId];var old=stagedBatchId;stagedBatchId='';actPost(DISMISS_PATH,{id:old,note:'暫存清單已變更，此批次項目作廢'}).catch(function(){});}
     var pre=document.getElementById('staged-summary');if(pre)pre.textContent='';}
   function stagedReload(){stageSave();location.reload();}
-  document.getElementById('act-stage').addEventListener('click',function(){if(actStageNow!=='form')return;var payload=actFormPayload();if(!payload)return;stageAdd(payload.kind,payload.payload,payload.reason);});
+  document.getElementById('act-stage').addEventListener('click',function(){if(actStageNow!=='form')return;var payload=actFormPayload();if(!payload)return;
+    if(actEditIndex>=0&&staged[actEditIndex]){var old=staged[actEditIndex];staged[actEditIndex]={kind:payload.kind,payload:payload.payload,reason:payload.reason};if(old.options)staged[actEditIndex].options=old.options;
+      stagedInvalidate();stagedReload();return;}
+    stageAdd(payload.kind,payload.payload,payload.reason,actOptions);});
   var stagedPanel=document.getElementById('staged-panel');
   if(stagedPanel)stagedPanel.addEventListener('click',function(e){
     var g=e.target.closest('.goto');if(g&&nodes[g.getAttribute('data-goto')]){showTab('relations',true);select(g.getAttribute('data-goto'),true);return;}
     var b=e.target.closest('button');if(!b||b.disabled)return;var i=parseInt(b.getAttribute('data-i')||'-1',10);
+    if(b.classList.contains('st-edit')){stageEdit(i);return;}
     if(b.classList.contains('st-del')){staged.splice(i,1);stagedInvalidate();stagedReload();return;}
     if(b.classList.contains('st-up')&&i>0){var t=staged[i-1];staged[i-1]=staged[i];staged[i]=t;stagedInvalidate();stagedReload();return;}
     if(b.classList.contains('st-down')&&i<staged.length-1){var t2=staged[i+1];staged[i+1]=staged[i];staged[i]=t2;stagedInvalidate();stagedReload();return;}
-    if(b.id==='staged-clear'){staged=[];stagedInvalidate();stagedReload();return;}
+    if(b.id==='staged-clear'){staged=[];stagedInvalidate();try{localStorage.removeItem(STAGE_REASON_KEY);}catch(e){}stagedReload();return;}
     if(b.id==='staged-preview'){stagedPreview();return;}
     if(b.id==='staged-apply'){if(!stagedBatchId)return;actApply(stagedBatchId,stagedUi());return;}});
   function stagedPreview(){if(!staged.length||!actionsOk)return;var err=document.getElementById('staged-err');err.textContent='';var ui=stagedUi();
     var actions=staged.map(function(it){return {kind:it.kind,payload:it.payload,reason:it.reason||''};});
     var go=function(){actBusy(ui,true);ui.pre.textContent='建立批次項目…';
-      actPost('/api/inbox',{kind:'batch',payload:{actions:actions}})
+      actPost('/api/inbox',{kind:'batch',payload:{actions:actions,reason:stagedReason()}})   // 0.17.1 整批理由放 payload 頂層；各步 D# reason＝該項理由，否則整批理由，都空則模板句
         .then(function(x){var d=x.d||{};if(!d.ok){actBusy(ui,false);ui.pre.textContent='';err.textContent='建立批次項目失敗：'+(d.error||('HTTP '+x.status));return;}
           stagedBatchId=d.id;renderStaged();toast('已送入收件匣 '+d.id+'（批次 '+staged.length+' 項），正在預覽');return actPreview(d.id,stagedUi()).then(function(){renderStaged();});})
         .catch(function(e2){actBusy(ui,false);err.textContent='建立批次項目失敗：'+e2;});};
@@ -3532,6 +3574,7 @@ GRAPH_JS = """
   // 測試用唯讀鉤子：回某節點在本地圖模型的 parent／band／subtype／座標與暫存清單長度（不改任何狀態）
   window.__apNode=function(id){var n=nodes[id];return n?{parent:n.parent||'',band:n.band,subtype:n.subtype||'',x:n.x,y:n.y,staged:!!stagedNodes[id],supports:String((n.meta||{}).supports||'')}:null;};
   window.__apStaged=function(){return staged.map(function(it){return {kind:it.kind,payload:it.payload,reason:it.reason};});};
+  window.__apFormOnDrop=function(){return formOnDrop;};
   // 還原暫存（重新載入後）：依序重做樂觀更新；套用成功或清空後 localStorage 已清
   staged=stageLoad();
   if(staged.length){staged.forEach(function(it){try{applyOptimistic(it.kind,it.payload);}catch(e){}});}
@@ -4111,6 +4154,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<label><input type="checkbox" id="toggle-old"> 顯示舊版計畫</label>',
         '<label><input type="checkbox" id="toggle-alledges"> 顯示全部邊</label>',
         '<label><input type="checkbox" id="toggle-dec"> 顯示決策</label>',
+        '<label title="預設不勾：放開節點直接加進暫存（各 kind 的預設值、理由留給暫存面板整批填）；勾了回到放開先開表單（填理由、加入暫存或單獨送出）"><input type="checkbox" id="opt-form-on-drop"> 放開時先開表單</label>',
         '<button type="button" id="tour-start">導覽（P）</button><button type="button" id="tour-prev">← 上一章</button><button type="button" id="tour-next">下一章 →</button>',
         '<span class="hint">/ 搜尋 · 點節點看上下游（該節點全部邊都顯示）· 點徽章展開該問題的舊版 · Shift+點 找路徑 · P 導覽 · Esc 清除 · 滾輪縮放、拖曳平移</span>',
         '</div>',
@@ -4194,10 +4238,12 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
     acts = [it for it in inbox['items'] if it['status'] == 'pending' and it['kind'] in INBOX_ACTION_KINDS]
     kinds_txt = '／'.join(INBOX_KINDS[k] for k in INBOX_ACTION_KINDS)
     lines = ['<details id="staged-panel" open hidden><summary>暫存動作 <span id="staged-count">0</span> 項（只在本頁暫存、尚未送出；圖已先重排）</summary>',
-             '<p class="hint">放開節點、填理由、按「加入暫存」就會列在這裡（存在瀏覽器 localStorage，重新載入後還原）。「全部預覽」把整串以一筆 batch 送進收件匣並在'
+             '<p class="hint">放開節點就直接列在這裡（各 kind 用預設值、圖立刻重排；要改 to／落點／理由按「編輯」；關聯圖控制列勾「放開時先開表單」則回到放開先填表單）。'
+             '清單存在瀏覽器 localStorage，重新載入後還原。理由整批填一次（各項自己在「編輯」填的理由優先；都空則 D# 寫「使用者於進度頁面批次拖放（IN-xxx）」）。「全部預覽」把整串以一筆 batch 送進收件匣並在'
              '同一個工作區依序真跑（版本接力：後面的步驟自動改指前面步驟封出的新版）；「全部套用」才寫 SSOT——每步各記一筆 D#，中間不重畫、最後重畫一次。</p>',
              '<table><thead><tr><th>#</th><th>kind</th><th>target</th><th>內容</th><th>動作</th></tr></thead><tbody id="staged-body"></tbody></table>',
-             '<div class="row"><button type="button" id="staged-preview" disabled title="server 未開 --allow-apply">全部預覽</button>'
+             '<div class="row"><label for="staged-reason">理由（整批，可空）</label><input id="staged-reason" maxlength="2000" placeholder="寫進每一步的 D# reason">'
+             '<button type="button" id="staged-preview" disabled title="server 未開 --allow-apply">全部預覽</button>'
              '<button type="button" id="staged-apply" disabled title="先全部預覽">全部套用</button>'
              '<button type="button" id="staged-clear">清空暫存</button><span class="src" id="staged-batch-id"></span></div>',
              '<pre id="staged-summary" class="act-summary"></pre><div class="err" id="staged-err"></div></details>',

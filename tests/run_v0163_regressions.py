@@ -310,10 +310,14 @@ def _state(ws: _WS) -> dict:
     return json.loads(ws.eval(_STATE_JS))
 
 
-def _open_page(ws: _WS, port: int) -> None:
+def _open_page(ws: _WS, port: int, form_on_drop: bool = True) -> None:
+    """開頁並等 /api/ping 回來。0.17.1 起放開節點預設直接暫存、不開表單；這裡與 v0164／v0165／v0170 的流程都是「放開 → 表單」，
+    所以預設勾上「放開時先開表單」（#opt-form-on-drop，存 localStorage，之後的 reload 沿用）；v0171 要測預設行為就傳 form_on_drop=False。"""
     ws.send('Page.enable')
     ws.send('Page.navigate', url=f'http://127.0.0.1:{port}/')
     _wait(ws, "document.readyState==='complete' && !document.getElementById('inbox-new').disabled", bool, timeout=60)
+    if form_on_drop:
+        ws.eval("(function(){var c=document.getElementById('opt-form-on-drop');if(c&&!c.checked)c.click();return c?c.checked:null;})()")
 
 
 def test_headless_drop_preview(tmp: Path) -> bool:
