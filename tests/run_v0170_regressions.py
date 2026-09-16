@@ -319,7 +319,7 @@ def test_frontend(tmp: Path) -> None:
     for anchor in ('id="staged-panel"', 'id="staged-count"', 'id="staged-body"', 'id="staged-preview"', 'id="staged-apply"', 'id="staged-clear"', 'id="staged-summary"',
                    'id="act-stage"', '加入暫存</button>', 'id="act-submit"', '單獨送出並預覽</button>', 'function applyOptimistic(', 'function stageAdd(', 'function stagedPreview(',
                    'function actFormPayload(', "var STAGE_KEY='ap-staged:'+String(ir.project_root||location.pathname)", "batch:'批次'", '.gnode.staged .box{', 'path.edge.staged{',
-                   "kind:'batch',payload:{actions:actions}", '虛線外框＝已暫存', '批次'):
+                   "kind:'batch',payload:{actions:actions,reason:stagedReason()}", '虛線外框＝已暫存', '批次'):
         assert anchor in html, anchor
     assert html.count('function actPreview(') == 1 and html.count('function actApply(') == 1 and html.count("actPost('/api/actions/dry-run'") == 1 and html.count("actPost('/api/actions/apply'") == 1
     assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下／批次；由腳本確定性執行）' in html

@@ -2053,6 +2053,9 @@ def _validate_batch(root: Path, payload) -> tuple[dict | None, str]:
         return None, 'batch 的 actions 不得為空'
     if len(actions) > BATCH_MAX:
         return None, f'batch 一次最多 {BATCH_MAX} 項（現有 {len(actions)}）'
+    reason_all = payload.get('reason') if isinstance(payload, dict) else None   # 0.17.1 整批理由（頂層，可缺）：run_batch 以 --reason 收
+    if reason_all is not None and not isinstance(reason_all, str):
+        return None, 'batch 的 reason 須為字串'
     pred = _Predicted(root)
     out: list[dict[str, Any]] = []
     for i, a in enumerate(actions):
@@ -2075,7 +2078,10 @@ def _validate_batch(root: Path, payload) -> tuple[dict | None, str]:
             entry['reason'] = reason.strip()[:2000]   # 每項自己的理由：run_batch 傳給該步腳本的 --reason、進該步的 D#
         out.append(entry)
         pred.after(kind, norm or {})
-    return {'actions': out}, ''
+    norm_all: dict[str, Any] = {'actions': out}
+    if reason_all and reason_all.strip():
+        norm_all['reason'] = reason_all.strip()[:2000]
+    return norm_all, ''
 
 
 def batch_step_titles(actions: list[dict]) -> list[str]:
@@ -2095,10 +2101,12 @@ def batch_step_titles(actions: list[dict]) -> list[str]:
 ACTIONS['batch'] = {
     'script': 'run_batch.py', 'label': '批次', 'stage': 'study-design',
     'validate': _validate_batch,
-    'argv': lambda p: ['--batch', json.dumps({'actions': p.get('actions') or []}, ensure_ascii=False, sort_keys=True)],
-    'extra': lambda p, iid: 'batch:' + json.dumps(p.get('actions') or [], ensure_ascii=False, sort_keys=True) + f':{iid}',
+    'argv': lambda p: ['--batch', json.dumps({'actions': p.get('actions') or []}, ensure_ascii=False, sort_keys=True)]
+    + (['--reason', str(p['reason'])] if p.get('reason') else []),   # 0.17.1 整批理由 → run_batch --reason（各步沒有自己的理由時用它）
+    'extra': lambda p, iid: 'batch:' + json.dumps(p.get('actions') or [], ensure_ascii=False, sort_keys=True) + f':{iid}',   # token 只看 actions，理由不影響
     'title': lambda p: (f'批次 {len(p.get("actions") or [])} 項',
-                        '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(batch_step_titles(p.get('actions') or []))), ''),
+                        '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(batch_step_titles(p.get('actions') or [])))
+                        + (f'\n理由：{p["reason"]}' if p.get('reason') else ''), ''),   # body 每行一項不變；整批理由附最後一行
 }
 ACTION_KINDS = tuple(ACTIONS)
 
