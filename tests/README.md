@@ -411,6 +411,16 @@ v0.17.3 修進度頁面批次模式的流程：理由欄不再作廢已建的批
 - 登記錨點：CHANGELOG `## 0.17.3` 含 `--set-reason`、`BrokenPipeError`、「一鍵撤回」、「預覽後」、`run_v0171_regressions.py`（說明 0.17.1 的作廢規則改掉）、本檔名；README／`status` SKILL.md 含「預覽後」；`plugin.json` ≥ 0.17.3；相關檔不含 arm 的直譯字。
 - 舊測試：v0171 步驟 (5) 是先填理由再預覽，0.17.3 下仍成立，沒有改斷言；v0.7–v0.17.2 各支照跑。
 
+## run_v0182_regressions.py
+
+v0.18.2 進度頁面「待套用動作」面板每列多一個「撤回」鈕（`act-dismiss-row`；`POST /api/inbox/dismiss`，note「使用者在待套用動作面板撤回」；只改收件匣狀態、不動 SSOT、不需 `--allow-apply`）。`python3 tests/run_v0182_regressions.py`，fixture 沿用 v0.16.1、CDP client 沿用 v0.16.3、`_reload`／`_wait_page` 沿用 v0.17.1。
+
+- HTML：經 `/api/inbox` 各建一筆 promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result／demote_plan／batch（加 fixture 的 reassign 共十種 kind）→ 重畫 → 每列 `tr[data-act-id]` 都有 `<button class="act-dismiss-row" data-id="IN-xxx" disabled title="用 progress_server.py 開啟才能撤回（file:// 或未連上伺服器）">撤回</button>`，位置在 `act-apply` 之後、`pre.act-summary` 之前、每列只一個；`#actions-dismiss-hint` 在 `#actions-hint` 之後、表格之前；全部 dismissed 後不出鈕、hint 仍在。
+- JS：錨點（`function actDismissRow(id){`、`actPost(DISMISS_PATH,{id:id,note:'使用者在待套用動作面板撤回'})`、toast 後 `location.reload()`、事件委派 `.act-dismiss-row`、`enableInbox` 啟用並改 title、`actRowUi` lock 含撤回鈕、三鈕陣列、「撤回中」／「撤回失敗：」訊息）只一份；對話框撤回的 note 照舊；`node --check`。
+- headless Chrome（有才跑；server 不開 `--allow-apply`）：建 IN-002（set_role）、IN-003（batch）→ 開頁 → IN-002／IN-003 的預覽／套用停用、撤回啟用且 title「標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT」→ 按 IN-002 撤回 → 送出中三鈕停用 → `PROGRESS.inbox.yaml` IN-002 `('dismissed', note)` → 重載後該列不在、剩兩列、IN-001／IN-003 仍 pending、變動的檔只在 `PROGRESS.inbox.yaml`／`PROGRESS.ir.json`／`PROGRESS.html`／`DECISIONS-TIMELINE.md` → 先 `check_inbox.py --dismiss IN-003` 再按頁面 IN-003 撤回 → 該列摘要「撤回失敗：」開頭、`window.__oldPage` 還在（沒重載）、撤回鈕恢復、預覽／套用仍停用 → 重畫後以 file:// 開 → 撤回鈕 disabled、title 說明句、`#actions-dismiss-hint` 文字。
+- 登記錨點：CHANGELOG `## 0.18.2` 含 `act-dismiss-row`、note 原句、「不動 SSOT」、本檔名；README／`status` SKILL.md 含「撤回」；本檔含 `run_v0182_regressions.py`；`plugin.json` ≥ 0.18.2；相關檔不含 arm 的直譯字（U+81C2）。
+- 舊測試：v0.7–v0.18.1 各支照跑、沒有改斷言。
+
 ## run_v0181_regressions.py
 
 v0.18.1 關聯圖的問題帶（strip）：每個區帶內依問題分成橫向的帶，同一個問題延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊、帶與帶之間留 `STRIP_GAP`（1 列）；只改畫法與 IR 欄位，不改 SSOT。fixture 沿用 v0.16.1 的 `build_fixture`，另加兩張圖（`F_shared`：results_keys `[m1, k1]` → 取 goals 順序最前的 SQ1；`F_aq`：role extended、呈現 a1 → ext 帶多一條 AQ1 的帶）與兩筆決策（D-003 question SQ2、D-004 links 指 SQ2-v1）。
