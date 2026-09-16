@@ -390,3 +390,13 @@ v0.17.1 把進度頁面的拖放改成「放開即暫存」（不彈表單、各
 - headless Chrome（有才跑）：預設不勾 → 拖 `r:k2` 到 `r:k1` 放開 → 預覽標籤尾「（放開即暫存）」、沒有表單、暫存 1 項、toast 含「已暫存」與「復原」、收件匣筆數不變 → 按復原 → 暫存 0、節點回原位、localStorage 空 → 再拖兩次 → 2 列、理由都空 → 「編輯」第 2 項：標題「編輯暫存第 2 項：搬結果：r2 → AQ1-v1」、鈕「更新暫存」、單獨送出鈕隱藏 → 填理由更新 → 再編輯清空 → 理由欄「整批測試」→ 全部預覽（IN-002 payload `reason`、body 三行）→ 全部套用 → D-003／D-004 以「整批測試；批次（收件匣 IN-002）第 k／2 步」開頭、localStorage 兩個 key 都清 → 勾「放開時先開表單」→ 拖 `r:m1` 到 `p:AQ1-v2` 放開有表單（尾「（放開後填理由）」）→ 取消 → 重新載入仍勾著。
 - 登記錨點：CHANGELOG `## 0.17.1` 含「放開即暫存」、「放開時先開表單」、`reason`、本檔名；README／`status` SKILL.md 含「放開時先開表單」；`plugin.json` ≥ 0.17.1；相關檔不含 arm 的直譯字。
 - 為了讓舊測試在 0.17.1 之後仍通過：`run_v0163._open_page()` 多 `form_on_drop=True` 預設（開頁後勾上「放開時先開表單」；v0163／v0164／v0165／v0170 的流程都是「放開 → 表單」）；`run_v0170` 的錨點 `kind:'batch',payload:{actions:actions}` 改為含 `reason:stagedReason()`。
+
+## run_v0172_regressions.py
+
+v0.17.2 修進度頁面暫存（樂觀更新）後的版面：`parent`／`band` 改了但位置留在原列——新增 `reorderStaged()`（每次 `applyOptimistic` 之後、`relayout()` 之前）對每個 (band, col) 格子重算 `order`，暫存後停用 dummy 列（`stagedLayout`）。`python3 tests/run_v0172_regressions.py`，fixture 沿用 v0.16.1。
+
+- 前端：錨點（`reorderStaged`／`anchorOf`／`snapOrder0`／`nodeMoved`、`var stagedLayout=false`、`dummyActive` 先看 `stagedLayout`、`stageAdd` 與重新載入後重套用都是 applyOptimistic → reorderStaged → relayout、`__apNode` 回 `order`、`applyOptimistic` 開頭 `snapOrder0()`）、`node --check`。
+- node：把 `applyOptimistic`＋`reorderStaged` 抽出來對 fixture IR 跑——`nest_result`（m1 掛 k1 → main|4 為 k1、m1、k2，order 0／1／2；再掛 k2 → 兩個都換過 parent，照 order0）、拉回頂層 → 回 IR 序；`move_result` B 型（k1 → SQ1-v1 R2 → supp|4 為 r1、r2、k1、k2、a1，支撐結果跟著；produces 邊來源＝`p:SQ1-v1#R2`）、A 型（r2 → AQ1-v1 → 排在 a1 之後）；`move_sensitivity`（SQ1-v1 R1 → SQ2-v1 → 排在 SQ2-v1#R1 之後、其次要結果 r1 排到 r2 之後）；`reassign` SQ2（supp|1 尾＝SQ2、supp|2 尾＝SQ2-v1 → #S → #R1、supp|3 尾＝V2、supp|4 尾＝m1）；`promote` AQ1（main 各格尾、群留 supp）；`move_plan` AQ1-v1 → SQ2（排在 SQ2-v1 之後、驗證與結果跟著）；`reorder`（plan／驗證／結果跟著問題順序）；`set_role`（F_a 到 ext）；每格 order 連續 0..n−1；決定性（`reorderStaged` 連叫兩次、同一串動作從頭重跑都相同）；一次重套用整串（還原）＝逐步暫存。
+- headless Chrome（有才跑）：拖 `r:k2` 到 `r:k1` → `k2.y === k1.y + 48`、`k2.x === k1.x + 24`、supports 線 `M(k1.x+12),(k1.y+36) … L(k2.x),(k2.y+18)` → 復原回原位 → 拖 `r:k1` 到 `r:k2`（主從對調）→ k2 升到 k1 原列、k1 在下一列且縮排、m1 再下一列、`k1.order === k2.order + 1` → `location.reload()` 後 localStorage 還原、位置相同 → 清空回原位。
+- 登記錨點：CHANGELOG `## 0.17.2` 含 `reorderStaged`、「位置」、本檔名；README／`status` SKILL.md 含「位置」；`plugin.json` ≥ 0.17.2；相關檔不含 arm 的直譯字。
+- 舊測試：`run_v0170` 抽函式清單補 `anchorOf`／`snapOrder0`；v0170／v0171 沒有「位置不變」的斷言，其餘不動。

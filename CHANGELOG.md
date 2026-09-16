@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.17.2（2026-09-16）
+
+進度頁面暫存（樂觀更新）後的版面修正：把子結果掛到主結果下、搬結果到別的方法／子分析、搬子分析、搬 plan、換帶之後，節點的 `parent`／`band` 雖然改了，位置卻留在原列——`relayout()` 只照 IR 給的 `order` 排。現在暫存後每個 (band, col) 格子重算 `order`，節點位置跟著新的歸屬走。skills、agents、管線階段、SSOT schema、收件匣 `schema_version` 與各 kind 的腳本鏈都不變；只改前端 JS。
+
+1. **`render_progress.py` 前端——`reorderStaged()`**：每次 `applyOptimistic` 之後、`relayout()` 之前呼叫（`stageAdd` 與重新載入後重套用 localStorage 暫存兩處；「復原」、刪除單項、「編輯」→「更新暫存」都是重新載入後重套用，走同一條）。第一次呼叫（`snapOrder0()`，在 `applyOptimistic` 開頭）保存 IR 的 `order0`／`parent0`／`band0`／`anchor0` 當基準。每格：頂層節點（`parent` 為空或 parent 不在同格）照 `order0` 排，各頂層節點後緊接其子孫（深度不限——敏感性分析群 → 子分析 → 次要結果三層照樣；各層照 `order0`，被換過 parent 的子節點排在同層最後）。被動過的頂層節點（換帶、換 parent、換 anchor、reorder 標記，或其同帶 anchor 遞迴被動過）視為浮動，依 anchor 的列序逐一插入：排在同格內同 anchor 既有節點之後；沒有就看 anchor 所在格由上而下的鄰居——往上找最近一個在本格有節點者排其後、往下找最近一個排其前；都沒有就排到該格最後。anchor＝`parent`；頂層 plan 用 `plans` 邊的來源問題、頂層結果用 `produces` 邊的來源、驗證用 `validated_by` 的來源、圖表用 `depicts` 的來源結果。重算後寫回整數 `order`（每格 0..n−1），`relayout()` 照舊。決定性：同一串動作重跑結果相同。
+2. **dummy 列停用**：跳欄邊的 `via_order` 是 IR 值，與重算的 `order` 混排會亂——`reorderStaged()` 設 `stagedLayout=true` 後 `dummyActive()` 一律回 false，跳欄邊直接畫折線（暫存畫面是預覽，不求 0 交叉）。沒有暫存時照舊。
+3. **`applyOptimistic` 補欄位**：`move_result` B 型的 `produces` 邊來源改指目標子分析 `p:<pid>#R<n>`（與 IR 慣例一致；A 型仍指目標 plan、parent 空）；`reorder` 同步更新 `order0` 並標 `moved0`，讓該問題的 plan／驗證／結果跟著新順序；其餘 kind（`nest_result` parent 指主結果或清空、`move_sensitivity` parent 指目標群、`move_plan` 改 `plans` 邊與 `meta.sq`、`reassign`／`promote`／`set_role` 換帶）0.17.1 已改對，`reorderStaged()` 據此重排——整棵子樹換帶後在新帶各格排到最後、相對順序不變（plan → 群 → 子分析）。
+4. **邊**：`relayout()` 之後 `redrawEdges()` 以節點新座標重畫；父 → 子 L 形線（群 → 子分析、主結果 → 支撐結果）的起點算法假設父在子上方，重排後子節點緊接父節點之下仍成立。`window.__apNode` 多回 `order`。
+5. **測試**：新增 `tests/run_v0172_regressions.py`（fixture 沿用 v0.16.1）：錨點、`node --check`、把 `applyOptimistic`＋`reorderStaged` 抽到 node 跑——nest 後子結果 `order` 緊接主結果、拉回頂層回 IR 序、`move_result` A／B 型、`move_sensitivity`（子分析與其次要結果跟著）、`reassign`／`promote`（子樹到帶尾、相對順序不變）、`move_plan`、`reorder`、`set_role`、每格 order 連續、決定性、還原重套用＝逐步暫存；headless Chrome：拖 `r:k2` 到 `r:k1` → `k2.y === k1.y + ROW`、x 縮排 24、supports L 形線端點 → 復原回原位 → 拖 `r:k1` 到 `r:k2`（主從對調，k2 升列）→ 重新載入還原位置相同 → 清空回原位。`run_v0170` 抽函式清單補 `anchorOf`／`snapOrder0`（`applyOptimistic` 開頭多了 `snapOrder0()`）；v0170／v0171 原本沒有「位置不變」的斷言，不用改。`tests/README.md` 登記；`plugin.json` 0.17.2；README／`status` SKILL.md 的樂觀更新句補「位置也跟著重排」。
+
 ## 0.17.1（2026-09-16）
 
 進度頁面的拖放改成**放開即暫存**：放開節點後不再彈表單，直接用各 kind 的預設值組 payload、加進暫存、圖立刻重排；理由改在暫存面板整批填一次，各步 D# 共用。0.17.0 的「放開 → 表單」留作開關。skills、agents、管線階段、SSOT schema 與收件匣 `schema_version` 不變；八種單動作 kind 與各腳本的鏈不動。

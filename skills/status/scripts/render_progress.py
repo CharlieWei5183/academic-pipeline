@@ -43,7 +43,7 @@ SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，�
 /api/actions/dry-run、「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）；面板與對話框
 共用同一段預覽／套用 JS（actPreview／actApply）。0.17.0 批次暫存：表單另有「加入暫存」——不呼叫 server，把 {kind, payload, reason} 推進本頁的
 staged[]（localStorage，key ap-staged:<project_root>）並對本地圖模型做樂觀更新（applyOptimistic：parent／band／subtype 一定改對，邊只改做得到的）後
-relayout()，暫存節點加 class staged（虛線外框）；頁首「暫存動作」面板列每項、可刪除／上下移（重新載入後重新套用其餘暫存）、「全部預覽」建一筆
+reorderStaged()（0.17.2：每個 (band, col) 格子以 IR 的 order0 為基準重算 order——頂層節點照 order0、子孫緊接其後；被動過的節點依 anchor 插到目標區塊，換帶的子樹排到新帶最後；暫存期間 dummy 列停用、跳欄邊直接畫折線）再 relayout()，暫存節點加 class staged（虛線外框）；頁首「暫存動作」面板列每項、可刪除／上下移（重新載入後重新套用其餘暫存）、「全部預覽」建一筆
 kind batch 進收件匣並 dry-run（run_batch.py 在同一個工作區依序真跑、版本接力）、「全部套用」帶 token。0.17.1 放開即暫存：放開節點預設不開表單，直接用各 kind
 的預設值（stageDirect／defaultPayload）加進暫存並重排，toast 附「復原」；面板每列「編輯」開原本的表單預填、「更新暫存」取代；「全部預覽」旁「理由（整批，可空）」
 放進 batch payload 頂層 reason（run_batch --reason 收；各步 D# reason＝該項理由否則整批理由，都空則模板句）；核取「放開時先開表單」（localStorage）才回到放開 → 表單。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
@@ -2903,7 +2903,8 @@ GRAPH_JS = """
   Array.prototype.forEach.call(bandsEl.querySelectorAll('.band-divider'),function(el){bandDivs[el.getAttribute('data-band')]=el;});
   Array.prototype.forEach.call(bandsEl.querySelectorAll('.band-title'),function(el){bandTitles[el.getAttribute('data-band')]=el;});
   var dummyY={};  // 跳欄邊 idx → {col: dummy 列 y}（relayout 時依 via_order 與節點一起排列）
-  function dummyActive(i){var e=G.edges[i];return !!(e.default_visible&&e.via_order&&e.via_order.length&&nodeVisible(e.from)&&nodeVisible(e.to));}
+  var stagedLayout=false;  // 0.17.2 暫存後由 reorderStaged() 設 true：via_order 是 IR 值，與重算的 order 混排會亂，跳欄邊改直接畫折線（預覽不求 0 交叉）
+  function dummyActive(i){if(stagedLayout)return false;var e=G.edges[i];return !!(e.default_visible&&e.via_order&&e.via_order.length&&nodeVisible(e.from)&&nodeVisible(e.to));}
   // 與 Python layout_graph 同一套：三個區帶依 BANDS 順序累積——main 只在其他區帶有可見節點時讓出標題列；ext／supp 只在有可見節點
   // （含 dummy 列）時畫分隔線（上一區帶 bottom+BAND_GAP/2）、標題（+BAND_GAP）、節點從 +BAND_TITLE_H 起，沒有就不佔高度；
   // 每個 (band, col) 內依 order 排列，跳欄邊的 dummy 列（via_order）與節點一起佔列
@@ -3474,8 +3475,39 @@ GRAPH_JS = """
   function subtree(id){var seen={},stack=[id];while(stack.length){var k=stack.pop();if(seen[k])continue;seen[k]=true;(outE[k]||[]).forEach(function(ei){var e=G.edges[ei];if(DOWN_TYPES.indexOf(e.type)>=0&&!seen[e.to])stack.push(e.to);});G.nodes.forEach(function(m){if(m.parent===k&&!seen[m.id])stack.push(m.id);});}return Object.keys(seen);}
   function bandFollows(m){if(m.type==='decision')return false;if(m.type==='figure')return String((m.meta||{}).role_source||'')==='derived';if(m.type==='method')return !(m.subtype==='sensitivity_group'||m.subtype==='sensitivity');if(m.type==='result')return m.subtype!=='secondary';return true;}
   function labelOf(id){var el=nodeEls[id];return el?el.querySelector('text.lbl'):null;}
+  // 0.17.2 暫存後重排：relayout() 只照 order 排，applyOptimistic 改了 parent／band 後節點會留在原列，這裡對每個 (band, col) 格子重算 order。
+  // anchor＝節點的歸屬：parent；頂層 plan 用 plans 邊的來源問題、頂層結果用 produces 邊的來源（plan 或子分析）、驗證用 validated_by 的來源 plan、
+  // 圖表用 depicts 的來源結果；問題與決策沒有 anchor。
+  function anchorOf(n){if(n.parent)return n.parent;var t={method:'plans',result:'produces',validation:'validated_by',figure:'depicts'}[n.type]||'';if(!t)return '';var a='';(inE[n.id]||[]).forEach(function(ei){var e=G.edges[ei];if(!a&&e.type===t&&nodes[e.from])a=e.from;});return a;}
+  // 第一次呼叫時保存 IR 的 order／parent／band／anchor（order0 等）當基準；之後只在 reorder 那一種動作更新 order0
+  function snapOrder0(){G.nodes.forEach(function(n){if(n.order0===undefined){n.order0=n.order;n.parent0=n.parent||'';n.band0=n.band;n.anchor0=anchorOf(n);}});}
+  // 節點是否被暫存動作動過：換帶、換 parent、換 anchor、reorder 標記，或其 anchor（同一區帶內、遞迴）被動過——動過的節點才離開 order0 的位置；
+  // anchor 在別的區帶就不跟（例：主結果搬去補充帶，留在 Main 帶的圖表不動）
+  function nodeMoved(n,depth){depth=depth||0;if(!n||n.order0===undefined||depth>16)return false;if(n.moved0||n.band!==n.band0||(n.parent||'')!==n.parent0)return true;var a=anchorOf(n);if(a!==n.anchor0)return true;return !!(a&&nodes[a]&&nodes[a].band===n.band&&nodeMoved(nodes[a],depth+1));}
+  // 每格：頂層節點（parent 為空或 parent 不在同格）照 order0 排，各頂層節點後緊接其子孫（深度不限，各層照 order0、被換過 parent 的子節點排在同層最後）；
+  // 動過的頂層節點視為浮動，依 anchor 在其格內的列序（再 order0）逐一插入：排在同格內同 anchor 的既有節點之後；沒有就看 anchor 所在格由上而下的鄰居——
+  // 往上找最近一個在本格有節點者、排在其後，往下找最近一個、排在其前；都沒有就排到該格最後。格子依 (band, col) 順序處理，anchor 所在格（較左欄）先算好。
+  function reorderStaged(){
+    stagedLayout=true;snapOrder0();
+    var cellOf=function(n){return n.band+'|'+n.col;},cells={};G.nodes.forEach(function(n){var k=cellOf(n);(cells[k]=cells[k]||[]).push(n);});
+    var cmpId=function(a,b){return a.id<b.id?-1:a.id>b.id?1:0;},byOrder0=function(a,b){return (a.order0-b.order0)||cmpId(a,b);},byOrder=function(a,b){return (a.order-b.order)||cmpId(a,b);};
+    var anchorOrder=function(n){var a=anchorOf(n);return (a&&nodes[a])?nodes[a].order:Infinity;},byAnchor=function(a,b){return (anchorOrder(a)-anchorOrder(b))||byOrder0(a,b);};
+    var keys=Object.keys(cells).sort(function(a,b){var pa=a.split('|'),pb=b.split('|');return (BANDS.indexOf(pa[0])-BANDS.indexOf(pb[0]))||(+pa[1]-+pb[1]);});
+    keys.forEach(function(k){
+      var list=cells[k],inCell={},kids={},fixed=[],floating=[];list.forEach(function(n){inCell[n.id]=true;});
+      list.forEach(function(n){if(n.parent&&inCell[n.parent])(kids[n.parent]=kids[n.parent]||[]).push(n);else if(nodeMoved(n))floating.push(n);else fixed.push(n);});
+      fixed.sort(byOrder0);floating.sort(byAnchor);
+      var seq=fixed.slice(),lastWith=function(a){var pos=-1;if(a)seq.forEach(function(m,i){if(anchorOf(m)===a)pos=i;});return pos;},firstWith=function(a){var pos=-1;if(a)seq.forEach(function(m,i){if(pos<0&&anchorOf(m)===a)pos=i;});return pos;};
+      floating.forEach(function(n){var a=anchorOf(n),pos=lastWith(a);
+        if(pos<0&&a&&nodes[a]){var an=nodes[a],col=(cells[cellOf(an)]||[]).slice().sort(byOrder),at=col.indexOf(an);
+          for(var i=at-1;i>=0&&pos<0;i--)pos=lastWith(col[i].id);
+          for(var j=at+1;j<col.length&&pos<0;j++){var f=firstWith(col[j].id);if(f>=0){seq.splice(f,0,n);return;}}}
+        seq.splice(pos<0?seq.length:pos+1,0,n);});
+      var out=[],byKid=function(a,b){var ma=(a.parent||'')!==a.parent0?1:0,mb=(b.parent||'')!==b.parent0?1:0;return (ma-mb)||byOrder0(a,b);},walk=function(n){out.push(n);(kids[n.id]||[]).sort(byKid).forEach(walk);};
+      seq.forEach(walk);out.forEach(function(n,i){n.order=i;});});
+  }
   function nextAqStaged(){var base=parseInt(String(nextAq||nextAqFromIr()).replace('AQ',''),10)||1;stagedAqUsed++;return 'AQ'+(base+stagedAqUsed-1);}
-  function applyOptimistic(kind,p){var marks=[];p=p||{};
+  function applyOptimistic(kind,p){var marks=[];p=p||{};snapOrder0();   // 0.17.2 先保存 IR 基準（order0 等），reorderStaged() 據此判定誰被動過
     if(kind==='reassign'||kind==='promote'){var q='q:'+p.from,band=(kind==='reassign')?'supp':'main';if(!nodes[q])return marks;var to=p.to||(kind==='reassign'?nextAqStaged():'');
       subtree(q).forEach(function(k){var m=nodes[k];if(m&&bandFollows(m))m.band=band;});
       var t=labelOf(q);if(t&&to)t.textContent=nodes[q].label+' → '+to;nodes[q].meta.staged_to=to;marks.push(q);}
@@ -3487,7 +3519,7 @@ GRAPH_JS = """
     else if(kind==='move_result'){var rid='r:'+p.key,tp='p:'+p.to_plan;if(!nodes[rid]||!nodes[tp])return marks;var r=nodes[rid];
       if(p.to_item||p.new_item){var par=p.to_item?('p:'+p.to_plan+'#'+p.to_item):('p:'+p.to_plan+'#S');if(!nodes[par])par=tp;r.parent=par;r.subtype='secondary';setBand(rid,'supp');}
       else{r.parent='';r.subtype='primary';setBand(rid,nodes[tp].band);}
-      r.meta.plan_id=p.to_plan;r.meta.result_kind=(p.to_item||p.new_item)?'secondary':'primary';fixX(r);G.edges.forEach(function(e){if(e.type==='produces'&&e.to===rid)e.from=tp;});rebuildEdgeIndex();marks.push(rid);}
+      r.meta.plan_id=p.to_plan;r.meta.result_kind=(p.to_item||p.new_item)?'secondary':'primary';fixX(r);var src=(r.parent&&nodes[r.parent])?r.parent:tp;G.edges.forEach(function(e){if(e.type==='produces'&&e.to===rid)e.from=src;});rebuildEdgeIndex();marks.push(rid);}
     else if(kind==='nest_result'){var kid='r:'+p.key;if(!nodes[kid])return marks;var kn=nodes[kid];
       if(p.under){var u='r:'+p.under;if(!nodes[u])return marks;kn.parent=u;kn.subtype='supporting';kn.meta.supports=p.under;setBand(kid,nodes[u].band);(nodes[u].meta.supporting_ids=nodes[u].meta.supporting_ids||[]).push(kid);
         G.edges.forEach(function(e){if(e.type==='produces'&&e.to===kid)e.default_visible=false;});addEdge(u,kid,'supports');}
@@ -3496,7 +3528,7 @@ GRAPH_JS = """
       fixX(kn);marks.push(kid);}
     else if(kind==='set_role'){var figs={};if(p.figures)Object.keys(p.figures).forEach(function(f){figs[f]=p.figures[f];});if(p.figure)figs[p.figure]=p.role;
       Object.keys(figs).forEach(function(f){var fn=nodes['f:'+f];if(!fn)return;var b=ROLE_BAND[String(figs[f]||'').toLowerCase()];if(b){fn.band=b;fn.meta.role=figs[f];}marks.push('f:'+f);});}
-    else if(kind==='reorder'){var qs=(p.order||[]).map(function(x){return 'q:'+x;}).filter(function(k){return !!nodes[k];});var ords=qs.map(function(k){return nodes[k].order;}).sort(function(a,b){return a-b;});qs.forEach(function(k,i){nodes[k].order=ords[i];});marks=qs;}
+    else if(kind==='reorder'){var qs=(p.order||[]).map(function(x){return 'q:'+x;}).filter(function(k){return !!nodes[k];});var ords=qs.map(function(k){var n=nodes[k];return n.order0!==undefined?n.order0:n.order;}).sort(function(a,b){return a-b;});qs.forEach(function(k,i){var n=nodes[k];n.order=ords[i];if(n.order0!==undefined)n.order0=ords[i];n.moved0=true;});marks=qs;}
     marks.forEach(function(k){stagedNodes[k]=true;var el=nodeEls[k];if(el)el.classList.add('staged');});
     return marks;}
   function stagedTitle(it){var p=it.payload||{},k=it.kind;
@@ -3526,7 +3558,7 @@ GRAPH_JS = """
     var ap=document.getElementById('staged-apply');if(!stagedBatchId||!actTokens[stagedBatchId]){ap.disabled=true;ap.title='先全部預覽';}
     document.getElementById('staged-batch-id').textContent=stagedBatchId?('收件匣 '+stagedBatchId):'';}
   function stageAdd(kind,payload,reason,options){var it={kind:kind,payload:payload,reason:reason||''};if(options&&options.length)it.options=options;   // options（區帶落點的下拉）留著給「編輯」用
-    staged.push(it);stagedInvalidate();applyOptimistic(kind,payload);stageSave();renderStaged();relayout();
+    staged.push(it);stagedInvalidate();applyOptimistic(kind,payload);reorderStaged();stageSave();renderStaged();relayout();
     closeActForm();toastUndo('已暫存：'+stagedTitle(it),function(){stageRemove(it);});return it;}
   function stageRemove(it){var i=staged.indexOf(it);if(i<0)return;staged.splice(i,1);stagedInvalidate();stagedReload();}   // 復原＝移除該項、重新載入並重套用其餘暫存（與刪除單項同一套）
   // 0.17.1 放開即暫存：各 kind 的預設值——reassign to＝下一個 AQ 號（已暫存的 reassign 各占一號）、不帶 primary_model；promote to 空（腳本回原號或下一號）；
@@ -3572,12 +3604,12 @@ GRAPH_JS = """
         .catch(function(e2){actBusy(ui,false);err.textContent='建立批次項目失敗：'+e2;});};
     if(stagedBatchId){var old=stagedBatchId;stagedBatchId='';delete actTokens[old];actPost(DISMISS_PATH,{id:old,note:'重新預覽，前一筆批次項目作廢'}).then(go,go);}else go();}
   // 測試用唯讀鉤子：回某節點在本地圖模型的 parent／band／subtype／座標與暫存清單長度（不改任何狀態）
-  window.__apNode=function(id){var n=nodes[id];return n?{parent:n.parent||'',band:n.band,subtype:n.subtype||'',x:n.x,y:n.y,staged:!!stagedNodes[id],supports:String((n.meta||{}).supports||'')}:null;};
+  window.__apNode=function(id){var n=nodes[id];return n?{parent:n.parent||'',band:n.band,subtype:n.subtype||'',x:n.x,y:n.y,order:n.order,staged:!!stagedNodes[id],supports:String((n.meta||{}).supports||'')}:null;};
   window.__apStaged=function(){return staged.map(function(it){return {kind:it.kind,payload:it.payload,reason:it.reason};});};
   window.__apFormOnDrop=function(){return formOnDrop;};
   // 還原暫存（重新載入後）：依序重做樂觀更新；套用成功或清空後 localStorage 已清
   staged=stageLoad();
-  if(staged.length){staged.forEach(function(it){try{applyOptimistic(it.kind,it.payload);}catch(e){}});}
+  if(staged.length){staged.forEach(function(it){try{applyOptimistic(it.kind,it.payload);}catch(e){}});reorderStaged();}
   renderStaged();
   relayout();
 })();
