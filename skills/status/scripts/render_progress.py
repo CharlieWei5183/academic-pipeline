@@ -41,7 +41,10 @@ SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，�
 項目留 pending）、「撤回」（POST /api/inbox/dismiss，代跑 check_inbox.py --dismiss）；server 未開 --allow-apply 或 dry-run 前置條件不符時摘要區
 顯示原因、「套用」停用、另外兩個鈕照常。頁首「待套用動作」面板（第二入口，行為不變）列 pending 的七種項目，「預覽變更」呼叫
 /api/actions/dry-run、「套用」帶 token 呼叫 /api/actions/apply（server 未開 --allow-apply 或 file:// 開啟時按鈕停用並說明）；面板與對話框
-共用同一段預覽／套用 JS（actPreview／actApply）。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
+共用同一段預覽／套用 JS（actPreview／actApply）。0.17.0 批次暫存：表單另有「加入暫存」——不呼叫 server，把 {kind, payload, reason} 推進本頁的
+staged[]（localStorage，key ap-staged:<project_root>）並對本地圖模型做樂觀更新（applyOptimistic：parent／band／subtype 一定改對，邊只改做得到的）後
+relayout()，暫存節點加 class staged（虛線外框）；頁首「暫存動作」面板列每項、可刪除／上下移（重新載入後重新套用其餘暫存）、「全部預覽」建一筆
+kind batch 進收件匣並 dry-run（run_batch.py 在同一個工作區依序真跑、版本接力）、「全部套用」帶 token；單動作流程照舊。拖放只產生收件匣項目，頁面不直接改任何 SSOT、預覽不進 IR；
 頁首顯示「收件匣待處理 N 筆」與可展開清單；無法解析 → WARNING 視為無。頁面表單（＋ 新問題／新分析、節點面板
 ＋ 意見）只在經 progress_server.py 以 http 開啟（fetch /api/ping 成功）時啟用，file:// 一律 disabled。
 
@@ -1065,8 +1068,8 @@ IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
 INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見', 'reassign': '降階', 'promote': '升回主問題',
                'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果',
-               'nest_result': '掛到主結果下'}
-INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result')   # 與 ssot_actions_common.ACTIONS 同序
+               'nest_result': '掛到主結果下', 'batch': '批次'}
+INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；batch（0.17.0）
 INBOX_STATUSES = ('pending', 'done', 'dismissed')
 INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
@@ -2819,6 +2822,16 @@ path.edge.e-supplements,path.trunk.e-supplements{stroke:var(--t-method);stroke-w
 #actions-panel table{border-collapse:collapse;margin-top:6px;font-size:12px;width:100%}#actions-panel td,#actions-panel th{padding:3px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
 #actions-panel button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
 #actions-panel button[disabled]{opacity:.5;cursor:not-allowed}
+/* 0.17.0 批次暫存：暫存過的節點虛線外框、暫存加的邊虛線；頁首「暫存動作」面板與待套用面板同一套樣式 */
+.gnode.staged .box{stroke:var(--current);stroke-width:2.5;stroke-dasharray:6 3}
+path.edge.staged{stroke-dasharray:6 3}
+#staged-panel{margin:10px 0 0;padding:8px 12px;border:1px dashed var(--current);border-radius:8px;font-size:13px}
+#staged-panel summary{cursor:pointer;font-weight:600}
+#staged-panel table{border-collapse:collapse;margin-top:6px;font-size:12px;width:100%}#staged-panel td,#staged-panel th{padding:3px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+#staged-panel button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
+#staged-panel button[disabled]{opacity:.5;cursor:not-allowed}
+#staged-panel .row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+#staged-panel .err{color:var(--blocked);font-size:12px;margin-top:6px;min-height:1em}
 pre.act-summary{white-space:pre-wrap;font-size:11px;max-height:320px;overflow:auto;margin:4px 0 0;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
 pre.act-summary:empty{display:none}
 #act-form .err{white-space:pre-wrap}#act-form #act-preview-box .hint{margin:10px 0 4px}#act-form input:disabled,#act-form select:disabled,#act-form textarea:disabled{opacity:.7}
@@ -2863,7 +2876,7 @@ GRAPH_JS = """
   function resultOwner(id){var n=nodes[id];if(!n||n.type!=='result')return '';var pid=String((n.meta||{}).plan_id||'');return (pid&&isActivePlan('p:'+pid))?pid:'';}
   function isDragResult(id){return !!resultOwner(id);}
   function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)));}
-  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下'};
+  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下',batch:'批次'};
   // ---- 分頁 ----
   var tabs={milestones:document.getElementById('tab-milestones'),relations:document.getElementById('tab-relations')};
   var cur='milestones';
@@ -3296,7 +3309,7 @@ GRAPH_JS = """
   function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.hidden=false;setTimeout(function(){t.hidden=true;},2500);}
   var actionsOk=false,nextAq='',nextSq='';
   function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});}
-  function enableActions(){actionsOk=true;var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
+  function enableActions(){actionsOk=true;var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   if(location.protocol==='http:'||location.protocol==='https:'){try{fetch('/api/ping',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d&&d.ok){enableInbox();nextAq=d.next_aq||'';nextSq=d.next_sq||'';if(d.actions_enabled)enableActions();else{var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py，但未開 --allow-apply：這裡只能看，預覽與套用請重啟 server 加 --allow-apply，或由 status skill 跑腳本。';}}}).catch(function(){});}catch(e){}}
   else{var hint0=document.getElementById('actions-hint');if(hint0)hint0.textContent='file:// 開啟的頁面無法呼叫伺服器：預覽與套用請用 progress_server.py --allow-apply 開啟，或由 status skill 跑腳本。';}
@@ -3354,15 +3367,17 @@ GRAPH_JS = """
     if(stage==='preview'){document.getElementById('act-item-id').textContent=id;document.getElementById('act-summary').textContent='';var ap=document.getElementById('act-apply');ap.disabled=true;ap.title='先預覽';document.getElementById('act-keep').disabled=false;document.getElementById('act-dismiss').disabled=false;}}
   function closeActForm(){var keep=(actStageNow==='preview');actForm.hidden=true;actStage('form');if(keep)location.reload();}
   document.getElementById('act-cancel').addEventListener('click',closeActForm);
-  document.getElementById('act-form-inner').addEventListener('submit',function(e){e.preventDefault();actErr.textContent='';var reason=document.getElementById('act-reason').value.trim();var payload;
-    if(actKind==='reassign'){var to=document.getElementById('act-to').value.trim();if(to&&!/^AQ\d+$/.test(to)){actErr.textContent='to 須為 AQ<數字> 或留空';return;}
-      payload={kind:'reassign',payload:{from:document.getElementById('act-from').value,to:to,primary_model:document.getElementById('act-pm').value},reason:reason};}
-    else if(actKind==='promote'){var pto=document.getElementById('act-p-to').value.trim();if(pto&&!/^SQ\d+$/.test(pto)){actErr.textContent='to 須為 SQ<數字> 或留空';return;}
-      payload={kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
-    else if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return;}
-      payload={kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
-    else if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'||actKind==='nest_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return;}payload={kind:actKind,payload:actPayload,reason:reason};}
-    else{actErr.textContent='未知的動作';return;}
+  // 表單 → {kind, payload, reason}（單獨送出與加入暫存共用；錯誤寫進 act-err 並回 null）
+  function actFormPayload(){actErr.textContent='';var reason=document.getElementById('act-reason').value.trim();
+    if(actKind==='reassign'){var to=document.getElementById('act-to').value.trim();if(to&&!/^AQ\d+$/.test(to)){actErr.textContent='to 須為 AQ<數字> 或留空';return null;}
+      return {kind:'reassign',payload:{from:document.getElementById('act-from').value,to:to,primary_model:document.getElementById('act-pm').value},reason:reason};}
+    if(actKind==='promote'){var pto=document.getElementById('act-p-to').value.trim();if(pto&&!/^SQ\d+$/.test(pto)){actErr.textContent='to 須為 SQ<數字> 或留空';return null;}
+      return {kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
+    if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return null;}
+      return {kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
+    if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'||actKind==='nest_result'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return null;}return {kind:actKind,payload:actPayload,reason:reason};}
+    actErr.textContent='未知的動作';return null;}
+  document.getElementById('act-form-inner').addEventListener('submit',function(e){e.preventDefault();var payload=actFormPayload();if(!payload)return;
     var sb=document.getElementById('act-submit');sb.disabled=true;
     actPost('/api/inbox',payload)
       .then(function(x){sb.disabled=false;if(x.d&&x.d.ok){toast('已送入收件匣 '+x.d.id+'，正在預覽變更');actStage('preview',x.d.id);actPreview(x.d.id,actDialogUi(x.d.id));}else{actErr.textContent=(x.d&&x.d.error)||('HTTP '+x.status);}})
@@ -3372,7 +3387,7 @@ GRAPH_JS = """
   document.getElementById('act-apply').addEventListener('click',function(){if(actStageNow!=='preview'||!actItemId)return;actApply(actItemId,actDialogUi(actItemId));});
   document.getElementById('act-keep').addEventListener('click',function(){closeActForm();});
   document.getElementById('act-dismiss').addEventListener('click',function(){if(actStageNow!=='preview'||!actItemId)return;var id=actItemId,db=document.getElementById('act-dismiss');db.disabled=true;actErr.textContent='';
-    actPost('/api/inbox/dismiss',{id:id,note:'使用者在放開預覽後撤回'}).then(function(x){var d=x.d||{};if(d.ok){toast('已撤回 '+id);closeActForm();}else{db.disabled=false;actErr.textContent='撤回失敗：'+(d.error||('HTTP '+x.status))+(d.summary?'\\n'+d.summary:'');}})
+    actPost(DISMISS_PATH,{id:id,note:'使用者在放開預覽後撤回'}).then(function(x){var d=x.d||{};if(d.ok){toast('已撤回 '+id);closeActForm();}else{db.disabled=false;actErr.textContent='撤回失敗：'+(d.error||('HTTP '+x.status))+(d.summary?'\\n'+d.summary:'');}})
       .catch(function(err){db.disabled=false;actErr.textContent='撤回失敗：'+err;});});
   body.addEventListener('click',function(e){var b=e.target.closest('.act-reassign');if(b&&!b.disabled){openReassignForm(b.getAttribute('data-q'));return;}
     var pb=e.target.closest('.act-promote');if(pb&&!pb.disabled){openPromoteForm(pb.getAttribute('data-q'));return;}
@@ -3380,7 +3395,7 @@ GRAPH_JS = """
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!actForm.hidden){closeActForm();}});
   // ---- 共用：預覽（dry-run）→ 套用（apply，帶 token）。面板每一列與放開後的對話框都走 actPreview／actApply，只有一份 ----
   // ui = {pre: 摘要 <pre>, apply: 套用鈕, lock?: 執行期間停用的鈕, confirm?: 套用前是否再彈 confirm（面板 true、對話框 false）, onStale?: 409 時的處理（對話框自動重跑預覽；面板沒給就讓套用鈕停用）}
-  var actTokens={};
+  var actTokens={},DISMISS_PATH='/api/inbox/dismiss';
   function actRow(id){return document.querySelector('#actions-panel tr[data-act-id="'+id.replace(/"/g,'\\"')+'"]');}
   function actPost(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(d){return {status:r.status,d:d};});});}
   function actBusy(ui,on){(ui.lock||[]).forEach(function(b){if(b)b.disabled=on;});}
@@ -3394,7 +3409,7 @@ GRAPH_JS = """
     return actPost('/api/actions/apply',{id:id,token:actTokens[id]}).then(function(x){var d=x.d||{};
       if(x.status===409){delete actTokens[id];actBusy(ui,false);ui.pre.textContent='SSOT 已變，重新預覽：'+(d.error||'');if(ui.onStale)ui.onStale();return x;}
       ui.pre.textContent=(d.summary||d.error||('HTTP '+x.status));
-      if(d.ok){toast('已套用，決策 '+(d.decision||'')+'；重新載入');setTimeout(function(){location.reload();},1500);}else{actBusy(ui,false);ui.apply.disabled=false;}return x;})
+      if(d.ok){if(ui.onOk)ui.onOk(d);toast(ui.okText?ui.okText(d):('已套用，決策 '+(d.decision||'')+'；重新載入'));setTimeout(function(){location.reload();},1500);}else{if(ui.onFail)ui.onFail(d);actBusy(ui,false);ui.apply.disabled=false;}return x;})
       .catch(function(err){actBusy(ui,false);ui.apply.disabled=false;ui.pre.textContent='套用失敗：'+err;return null;});}
   // ---- 待套用動作面板（第二入口，行為不變）----
   function actRowUi(id){var row=actRow(id);return {pre:row.querySelector('.act-summary'),apply:row.querySelector('.act-apply'),lock:[row.querySelector('.act-preview')],confirm:true};}
@@ -3422,6 +3437,105 @@ GRAPH_JS = """
   body.addEventListener('click',function(e){var b=e.target.closest('.inbox-comment');if(b&&!b.disabled){openForm('comment',b.getAttribute('data-target'));}});
   var banner=document.getElementById('inbox-banner');if(banner)banner.addEventListener('click',function(e){var t=e.target.closest('.goto');if(t&&nodes[t.getAttribute('data-goto')]){showTab('relations',true);var id=t.getAttribute('data-goto');if(nodes[id].collapsed&&!nodeVisible(id)){expanded[currentOf[id]]=true;relayout();}select(id,true);}});
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!formEl.hidden){closeForm();}});
+  // ---- 0.17.0 批次暫存：放開節點 → 表單 → 「加入暫存」不呼叫 server，推進 staged[]、對本地圖模型做樂觀更新後 relayout()；「全部預覽」才建一筆 batch 進收件匣 ----
+  // 樂觀更新只是視覺：節點的 parent／band／subtype 一定改對，邊只改做得到的（plans／produces／sensitivity 的起點、supports 新增）；其餘維持原樣。
+  var STAGE_KEY='ap-staged:'+String(ir.project_root||location.pathname);
+  var ROLE_BAND={main:'main',extended:'ext',supplementary:'supp'};
+  var DOWN_TYPES=['plans','sensitivity','validated_by','primary','robustness','produces','depicts','cites','supports'];   // 與 Python DOWNSTREAM_TYPES 同
+  var staged=[],stagedNodes={},stagedBatchId='',stagedAqUsed=0;
+  function stageLoad(){try{var raw=localStorage.getItem(STAGE_KEY);var arr=raw?JSON.parse(raw):[];return Array.isArray(arr)?arr:[];}catch(e){return [];}}
+  function stageSave(){try{if(staged.length)localStorage.setItem(STAGE_KEY,JSON.stringify(staged));else localStorage.removeItem(STAGE_KEY);}catch(e){}}
+  function rebuildEdgeIndex(){outE={};inE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);(inE[e.to]=inE[e.to]||[]).push(i);});}
+  function addEdge(from,to,type){var e={from:from,to:to,type:type,label:edgeLabel[type]||type,source:'staged',style:'solid',default_visible:true,via:[],via_order:[]};G.edges.push(e);
+    var el=document.createElementNS(svg.namespaceURI,'path');el.setAttribute('class','edge e-'+type+' st-solid staged');el.setAttribute('data-idx',String(G.edges.length-1));el.setAttribute('data-from',from);el.setAttribute('data-to',to);el.setAttribute('data-type',type);
+    var grp=document.getElementById('graph-edges');if(grp)grp.appendChild(el);edgeEls.push(el);rebuildEdgeIndex();return G.edges.length-1;}
+  function fixX(n){n.x=PAD+n.col*COL_PITCH+((n.subtype==='sensitivity'||n.subtype==='secondary'||n.subtype==='supporting')?24:0);}
+  function setBand(id,band){var n=nodes[id];if(!n)return;n.band=band;G.nodes.forEach(function(m){if(m.parent===id)setBand(m.id,band);});}
+  function subtree(id){var seen={},stack=[id];while(stack.length){var k=stack.pop();if(seen[k])continue;seen[k]=true;(outE[k]||[]).forEach(function(ei){var e=G.edges[ei];if(DOWN_TYPES.indexOf(e.type)>=0&&!seen[e.to])stack.push(e.to);});G.nodes.forEach(function(m){if(m.parent===k&&!seen[m.id])stack.push(m.id);});}return Object.keys(seen);}
+  function bandFollows(m){if(m.type==='decision')return false;if(m.type==='figure')return String((m.meta||{}).role_source||'')==='derived';if(m.type==='method')return !(m.subtype==='sensitivity_group'||m.subtype==='sensitivity');if(m.type==='result')return m.subtype!=='secondary';return true;}
+  function labelOf(id){var el=nodeEls[id];return el?el.querySelector('text.lbl'):null;}
+  function nextAqStaged(){var base=parseInt(String(nextAq||nextAqFromIr()).replace('AQ',''),10)||1;stagedAqUsed++;return 'AQ'+(base+stagedAqUsed-1);}
+  function applyOptimistic(kind,p){var marks=[];p=p||{};
+    if(kind==='reassign'||kind==='promote'){var q='q:'+p.from,band=(kind==='reassign')?'supp':'main';if(!nodes[q])return marks;var to=p.to||(kind==='reassign'?nextAqStaged():'');
+      subtree(q).forEach(function(k){var m=nodes[k];if(m&&bandFollows(m))m.band=band;});
+      var t=labelOf(q);if(t&&to)t.textContent=nodes[q].label+' → '+to;nodes[q].meta.staged_to=to;marks.push(q);}
+    else if(kind==='move_plan'){var pid='p:'+p.plan,q2='q:'+p.to_question;if(!nodes[pid]||!nodes[q2])return marks;var band2=nodes[q2].band;
+      subtree(pid).forEach(function(k){var m=nodes[k];if(m&&bandFollows(m))m.band=band2;});
+      G.edges.forEach(function(e){if(e.type==='plans'&&e.to===pid)e.from=q2;});nodes[pid].meta.sq=p.to_question;rebuildEdgeIndex();marks.push(pid);}
+    else if(kind==='move_sensitivity'){var sid='p:'+p.plan+'#'+p.item,grp='p:'+p.to_plan+'#S';if(!nodes[sid])return marks;var np=nodes[grp]?grp:('p:'+p.to_plan);if(!nodes[np])return marks;
+      nodes[sid].parent=np;G.edges.forEach(function(e){if(e.type==='sensitivity'&&e.to===sid)e.from=np;});rebuildEdgeIndex();marks.push(sid);}
+    else if(kind==='move_result'){var rid='r:'+p.key,tp='p:'+p.to_plan;if(!nodes[rid]||!nodes[tp])return marks;var r=nodes[rid];
+      if(p.to_item||p.new_item){var par=p.to_item?('p:'+p.to_plan+'#'+p.to_item):('p:'+p.to_plan+'#S');if(!nodes[par])par=tp;r.parent=par;r.subtype='secondary';setBand(rid,'supp');}
+      else{r.parent='';r.subtype='primary';setBand(rid,nodes[tp].band);}
+      r.meta.plan_id=p.to_plan;r.meta.result_kind=(p.to_item||p.new_item)?'secondary':'primary';fixX(r);G.edges.forEach(function(e){if(e.type==='produces'&&e.to===rid)e.from=tp;});rebuildEdgeIndex();marks.push(rid);}
+    else if(kind==='nest_result'){var kid='r:'+p.key;if(!nodes[kid])return marks;var kn=nodes[kid];
+      if(p.under){var u='r:'+p.under;if(!nodes[u])return marks;kn.parent=u;kn.subtype='supporting';kn.meta.supports=p.under;setBand(kid,nodes[u].band);(nodes[u].meta.supporting_ids=nodes[u].meta.supporting_ids||[]).push(kid);
+        G.edges.forEach(function(e){if(e.type==='produces'&&e.to===kid)e.default_visible=false;});addEdge(u,kid,'supports');}
+      else{var old=kn.parent;kn.parent='';kn.subtype='primary';kn.meta.supports='';if(old&&nodes[old]&&nodes[old].meta.supporting_ids)nodes[old].meta.supporting_ids=nodes[old].meta.supporting_ids.filter(function(x){return x!==kid;});
+        G.edges.forEach(function(e){if(e.type==='supports'&&e.to===kid)e.default_visible=false;if(e.type==='produces'&&e.to===kid)e.default_visible=true;});}
+      fixX(kn);marks.push(kid);}
+    else if(kind==='set_role'){var figs={};if(p.figures)Object.keys(p.figures).forEach(function(f){figs[f]=p.figures[f];});if(p.figure)figs[p.figure]=p.role;
+      Object.keys(figs).forEach(function(f){var fn=nodes['f:'+f];if(!fn)return;var b=ROLE_BAND[String(figs[f]||'').toLowerCase()];if(b){fn.band=b;fn.meta.role=figs[f];}marks.push('f:'+f);});}
+    else if(kind==='reorder'){var qs=(p.order||[]).map(function(x){return 'q:'+x;}).filter(function(k){return !!nodes[k];});var ords=qs.map(function(k){return nodes[k].order;}).sort(function(a,b){return a-b;});qs.forEach(function(k,i){nodes[k].order=ords[i];});marks=qs;}
+    marks.forEach(function(k){stagedNodes[k]=true;var el=nodeEls[k];if(el)el.classList.add('staged');});
+    return marks;}
+  function stagedTitle(it){var p=it.payload||{},k=it.kind;
+    if(k==='reassign')return '降階：'+p.from+' → '+(p.to||'（下一個 AQ 號）')+(p.primary_model?'；primary_model '+p.primary_model:'');
+    if(k==='promote')return '升回主問題：'+p.from+' → '+(p.to||'（原號或下一個 SQ 號）');
+    if(k==='set_role'){var figs=p.figures||{};if(p.figure)figs[p.figure]=p.role;return '圖表 role：'+Object.keys(figs).map(function(f){return f+' → '+figs[f];}).join('、');}
+    if(k==='move_plan')return '搬方法：'+p.plan+' → '+p.to_question;
+    if(k==='move_sensitivity')return '搬敏感性子分析：'+p.plan+' '+p.item+' → '+p.to_plan;
+    if(k==='reorder')return '調順序：'+p.list+' → '+(p.order||[]).join('、');
+    if(k==='move_result')return '搬結果：'+p.key+' → '+p.to_plan+(p.to_item?' '+p.to_item:(p.new_item?' 新增子分析':''));
+    if(k==='nest_result')return p.under?('掛到主結果下：'+p.key+' → '+p.under):('拉回頂層：'+p.key);
+    return k;}
+  function stagedTarget(it){var p=it.payload||{},k=it.kind;if(k==='reassign'||k==='promote')return 'q:'+p.from;if(k==='set_role')return 'f:'+(p.figure||Object.keys(p.figures||{})[0]||'');if(k==='move_plan')return 'p:'+p.plan;if(k==='move_sensitivity')return 'p:'+p.plan+'#'+p.item;if(k==='reorder')return 'q:'+((p.order||[])[0]||'');return 'r:'+p.key;}
+  function stagedUi(){return {pre:document.getElementById('staged-summary'),apply:document.getElementById('staged-apply'),lock:[document.getElementById('staged-preview'),document.getElementById('staged-clear')],confirm:false,
+    onStale:function(){if(stagedBatchId)actPreview(stagedBatchId,stagedUi());},
+    okText:function(d){return '已套用 '+staged.length+' 步，'+(d.decision||'')+'；重新載入';},
+    onOk:function(){staged=[];stageSave();},
+    onFail:function(d){var m=/第 (\\d+) 步失敗/.exec(String(d.summary||''));if(m){var k=parseInt(m[1],10);if(k>1){staged=staged.slice(k-1);stageSave();}}
+      document.getElementById('staged-err').textContent='批次未全部完成：'+(d.error||'')+'（摘要寫明停在哪；已套用的步驟各有 D#、失敗那步已還原；暫存清單只留下未套用的步驟，請重新載入頁面後再處理）';}};}
+  function renderStaged(){var panel=document.getElementById('staged-panel');if(!panel)return;panel.hidden=!staged.length;document.getElementById('staged-count').textContent=String(staged.length);
+    var tb=document.getElementById('staged-body');tb.innerHTML='';
+    staged.forEach(function(it,i){var tr=document.createElement('tr');tr.setAttribute('data-staged-i',String(i));var tgt=stagedTarget(it);
+      tr.innerHTML='<td>'+(i+1)+'</td><td>'+esc(ACT_LABEL[it.kind]||it.kind)+'</td><td><span class="goto" data-goto="'+esc(tgt)+'">'+esc(nodes[tgt]?nodes[tgt].label:tgt)+'</span></td><td>'+esc(stagedTitle(it))+'<br><span class="src">'+esc(it.reason||'（未填理由）')+'</span></td>'
+        +'<td><button type="button" class="st-up" data-i="'+i+'"'+(i===0?' disabled':'')+' title="上移">↑</button> <button type="button" class="st-down" data-i="'+i+'"'+(i===staged.length-1?' disabled':'')+' title="下移">↓</button> <button type="button" class="st-del" data-i="'+i+'" title="刪除這一項（重新載入頁面、重新套用其餘暫存）">刪除</button></td>';
+      tb.appendChild(tr);});
+    var pv=document.getElementById('staged-preview');pv.disabled=!actionsOk||!staged.length;pv.title=actionsOk?'':'server 未開 --allow-apply';
+    var ap=document.getElementById('staged-apply');if(!stagedBatchId||!actTokens[stagedBatchId]){ap.disabled=true;ap.title='先全部預覽';}
+    document.getElementById('staged-batch-id').textContent=stagedBatchId?('收件匣 '+stagedBatchId):'';}
+  function stageAdd(kind,payload,reason){var it={kind:kind,payload:payload,reason:reason||''};staged.push(it);stagedInvalidate();applyOptimistic(kind,payload);stageSave();renderStaged();relayout();
+    closeActForm();toast('已加入暫存（第 '+staged.length+' 項）：'+stagedTitle(it));}
+  function stagedInvalidate(){if(stagedBatchId){delete actTokens[stagedBatchId];var old=stagedBatchId;stagedBatchId='';actPost(DISMISS_PATH,{id:old,note:'暫存清單已變更，此批次項目作廢'}).catch(function(){});}
+    var pre=document.getElementById('staged-summary');if(pre)pre.textContent='';}
+  function stagedReload(){stageSave();location.reload();}
+  document.getElementById('act-stage').addEventListener('click',function(){if(actStageNow!=='form')return;var payload=actFormPayload();if(!payload)return;stageAdd(payload.kind,payload.payload,payload.reason);});
+  var stagedPanel=document.getElementById('staged-panel');
+  if(stagedPanel)stagedPanel.addEventListener('click',function(e){
+    var g=e.target.closest('.goto');if(g&&nodes[g.getAttribute('data-goto')]){showTab('relations',true);select(g.getAttribute('data-goto'),true);return;}
+    var b=e.target.closest('button');if(!b||b.disabled)return;var i=parseInt(b.getAttribute('data-i')||'-1',10);
+    if(b.classList.contains('st-del')){staged.splice(i,1);stagedInvalidate();stagedReload();return;}
+    if(b.classList.contains('st-up')&&i>0){var t=staged[i-1];staged[i-1]=staged[i];staged[i]=t;stagedInvalidate();stagedReload();return;}
+    if(b.classList.contains('st-down')&&i<staged.length-1){var t2=staged[i+1];staged[i+1]=staged[i];staged[i]=t2;stagedInvalidate();stagedReload();return;}
+    if(b.id==='staged-clear'){staged=[];stagedInvalidate();stagedReload();return;}
+    if(b.id==='staged-preview'){stagedPreview();return;}
+    if(b.id==='staged-apply'){if(!stagedBatchId)return;actApply(stagedBatchId,stagedUi());return;}});
+  function stagedPreview(){if(!staged.length||!actionsOk)return;var err=document.getElementById('staged-err');err.textContent='';var ui=stagedUi();
+    var actions=staged.map(function(it){return {kind:it.kind,payload:it.payload,reason:it.reason||''};});
+    var go=function(){actBusy(ui,true);ui.pre.textContent='建立批次項目…';
+      actPost('/api/inbox',{kind:'batch',payload:{actions:actions}})
+        .then(function(x){var d=x.d||{};if(!d.ok){actBusy(ui,false);ui.pre.textContent='';err.textContent='建立批次項目失敗：'+(d.error||('HTTP '+x.status));return;}
+          stagedBatchId=d.id;renderStaged();toast('已送入收件匣 '+d.id+'（批次 '+staged.length+' 項），正在預覽');return actPreview(d.id,stagedUi()).then(function(){renderStaged();});})
+        .catch(function(e2){actBusy(ui,false);err.textContent='建立批次項目失敗：'+e2;});};
+    if(stagedBatchId){var old=stagedBatchId;stagedBatchId='';delete actTokens[old];actPost(DISMISS_PATH,{id:old,note:'重新預覽，前一筆批次項目作廢'}).then(go,go);}else go();}
+  // 測試用唯讀鉤子：回某節點在本地圖模型的 parent／band／subtype／座標與暫存清單長度（不改任何狀態）
+  window.__apNode=function(id){var n=nodes[id];return n?{parent:n.parent||'',band:n.band,subtype:n.subtype||'',x:n.x,y:n.y,staged:!!stagedNodes[id],supports:String((n.meta||{}).supports||'')}:null;};
+  window.__apStaged=function(){return staged.map(function(it){return {kind:it.kind,payload:it.payload,reason:it.reason};});};
+  // 還原暫存（重新載入後）：依序重做樂觀更新；套用成功或清空後 localStorage 已清
+  staged=stageLoad();
+  if(staged.length){staged.forEach(function(it){try{applyOptimistic(it.kind,it.payload);}catch(e){}});}
+  renderStaged();
   relayout();
 })();
 """
@@ -4020,7 +4134,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span><span class="st unval" style="color:var(--expired);font-weight:700">未驗證</span>＝結果沒有任何驗證邊</span>',
         '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
-        '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果），支撐結果拖到所在帶的空白處＝拉回頂層、拖到別的結果上＝換主結果；圖表拖到別的帶——放開後只送收件匣</span>',
+        '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果），支撐結果拖到所在帶的空白處＝拉回頂層、拖到別的結果上＝換主結果；圖表拖到別的帶——放開後只送收件匣，或按「加入暫存」先留在本頁、連拖多次後一次預覽套用（虛線外框＝已暫存）</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
@@ -4079,7 +4193,15 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
     inbox = ir['inbox']
     acts = [it for it in inbox['items'] if it['status'] == 'pending' and it['kind'] in INBOX_ACTION_KINDS]
     kinds_txt = '／'.join(INBOX_KINDS[k] for k in INBOX_ACTION_KINDS)
-    lines = [f'<details id="actions-panel" open><summary>待套用動作 {len(acts)} 筆（{kinds_txt}；由腳本確定性執行）</summary>',
+    lines = ['<details id="staged-panel" open hidden><summary>暫存動作 <span id="staged-count">0</span> 項（只在本頁暫存、尚未送出；圖已先重排）</summary>',
+             '<p class="hint">放開節點、填理由、按「加入暫存」就會列在這裡（存在瀏覽器 localStorage，重新載入後還原）。「全部預覽」把整串以一筆 batch 送進收件匣並在'
+             '同一個工作區依序真跑（版本接力：後面的步驟自動改指前面步驟封出的新版）；「全部套用」才寫 SSOT——每步各記一筆 D#，中間不重畫、最後重畫一次。</p>',
+             '<table><thead><tr><th>#</th><th>kind</th><th>target</th><th>內容</th><th>動作</th></tr></thead><tbody id="staged-body"></tbody></table>',
+             '<div class="row"><button type="button" id="staged-preview" disabled title="server 未開 --allow-apply">全部預覽</button>'
+             '<button type="button" id="staged-apply" disabled title="先全部預覽">全部套用</button>'
+             '<button type="button" id="staged-clear">清空暫存</button><span class="src" id="staged-batch-id"></span></div>',
+             '<pre id="staged-summary" class="act-summary"></pre><div class="err" id="staged-err"></div></details>',
+             f'<details id="actions-panel" open><summary>待套用動作 {len(acts)} 筆（{kinds_txt}；由腳本確定性執行）</summary>',
              '<p class="hint" id="actions-hint">用 progress_server.py --allow-apply 開啟才能預覽與套用；預設 server 只寫收件匣。</p>']
     if acts:
         lines.append('<table><thead><tr><th>id</th><th>kind</th><th>target</th><th>內容</th><th>動作</th></tr></thead><tbody>')
@@ -4093,7 +4215,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         lines.append('</tbody></table>')
     else:
         lines.append('<p class="src">沒有待套用的結構化項目。在關聯圖拖節點就會產生一筆：問題拖到另一個帶（降階／升回）或同帶另一個問題上（調順序）、'
-                     '方法拖到問題上（搬方法）、敏感性子分析拖到別的方法上（搬敏感性子分析）、結果拖到別的方法或敏感性子分析上（搬結果）、圖表拖到別的帶（改 role）。</p>')
+                     '方法拖到問題上（搬方法）、敏感性子分析拖到別的方法上（搬敏感性子分析）、結果拖到別的方法或敏感性子分析上（搬結果）、圖表拖到別的帶（改 role）；'
+                     '連續拖放多次可先「加入暫存」，最後在「暫存動作」面板一次預覽、一次套用（batch）。</p>')
     lines.append('</details>')
     lines += [
         '<div id="act-form" hidden><form id="act-form-inner" autocomplete="off">',
@@ -4121,7 +4244,9 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<label for="act-reason">理由（選填，寫進收件匣與決策 reason）</label><textarea id="act-reason" maxlength="2000"></textarea>',
         '<p class="src">按「送出並預覽」先在 PROGRESS.inbox.yaml 加一筆，接著立刻代跑腳本 --dry-run（不寫檔）把變更摘要顯示在這裡；看過摘要再決定套用、先留在收件匣或撤回。</p>',
         '<div class="err" id="act-err"></div>',
-        '<div class="row" id="act-submit-row"><button type="button" id="act-cancel">取消</button><button type="submit" id="act-submit">送出並預覽</button></div>',
+        '<div class="row" id="act-submit-row"><button type="button" id="act-cancel">取消</button>'
+        '<button type="button" id="act-stage" title="不呼叫 server：推進本頁的暫存清單、圖立刻重排；之後在頁首「暫存動作」面板一次預覽、一次套用">加入暫存</button>'
+        '<button type="submit" id="act-submit" title="只送這一項進收件匣並立刻預覽（0.16.3 的單動作流程）">單獨送出並預覽</button></div>',
         '<div id="act-preview-box" hidden><p class="hint">已送入收件匣 <b id="act-item-id"></b>。變更預覽（腳本 --dry-run 的輸出，還沒寫任何檔）：</p>',
         '<pre id="act-summary" class="act-summary"></pre>',
         '<div class="row"><button type="button" id="act-dismiss" title="標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT">撤回</button>'

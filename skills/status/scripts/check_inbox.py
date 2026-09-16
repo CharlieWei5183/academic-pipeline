@@ -4,7 +4,8 @@
 用法:
   python3 check_inbox.py <project-root>                                  # schema 檢查＋列 pending
   python3 check_inbox.py <project-root> --list                           # 同上
-  python3 check_inbox.py <project-root> --resolve IN-001 --by <ref> [--note ...]   # 標 done（ref＝D#／plan id／SQ id）
+  python3 check_inbox.py <project-root> --resolve IN-001 --by <ref> [--note ...]   # 標 done（ref＝D#／plan id／SQ id；batch 為 D# 範圍「D-054–D-058」）
+  python3 check_inbox.py <project-root> --annotate IN-001 --note ...               # 只改 note、status 不動（0.17.0；run_batch.py 中途失敗記停在哪）
   python3 check_inbox.py <project-root> --dismiss IN-001 [--note ...]              # 標 dismissed
 
 收件匣（<root>/PROGRESS.inbox.yaml）由 progress_server.py append，本程式只改指定那一筆的
@@ -14,8 +15,9 @@ status／resolved_by／resolved_at／note 四行——逐行文字替換，不�
 
 輸出: `=== check_inbox: <root> ===`、每筆 `IN-001  pending  new_question  q:SQ2  <title>`、統計
 `pending a／done b／dismissed c`、WARNING（id 非連號、status 非法、kind 非法、target 不在 IR、結構化 payload 不合法）、
-`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result（結構化動作，dispatch 表與 payload 驗證在
-ssot_actions_common.ACTIONS）的 pending 項目，另印一行可直接執行的建議命令（`python3 <scripts>/<腳本> <root> … --inbox IN-xxx --dry-run`），
+`結果: 完成`。kind 為 reassign／promote／set_role／move_plan／move_sensitivity／reorder／move_result／nest_result／batch（結構化動作，dispatch 表與 payload 驗證在
+ssot_actions_common.ACTIONS）的 pending 項目，另印一行可直接執行的建議命令（`python3 <scripts>/<腳本> <root> … --inbox IN-xxx --dry-run`；batch 為
+`run_batch.py <root> --batch '<inline JSON>' --inbox IN-xxx --dry-run`，payload 每一項各經該 kind 的驗證，第 2 步起對 plan／問題 id 放寬為「現行 id 或前面步驟會產生的 id」），
 status skill 不得人工重做各步，一律跑腳本 --dry-run → 使用者同意 → --apply。
 exit code: 0 完成（收件匣不存在 → INFO）; 2 BLOCKER（根目錄不存在、收件匣無法解析、找不到指定 id、
 寫入驗證失敗）。本程式不讀也不寫任何 SSOT。
@@ -103,7 +105,8 @@ def _set_field(block_lines: list[str], field: str, value: str) -> bool:
     return False
 
 
-def resolve_item(root: Path, item_id: str, status: str, by: str, note: str) -> tuple[bool, str]:
+def resolve_item(root: Path, item_id: str, status: str, by: str, note: str, note_only: bool = False) -> tuple[bool, str]:
+    """改該筆的 status／resolved_by／resolved_at／note 四行；note_only（--annotate，0.17.0）只改 note 一行，status 不動。"""
     with RootLock(root):
         text, data, err = load_inbox(root)
         if err:
@@ -130,7 +133,7 @@ def resolve_item(root: Path, item_id: str, status: str, by: str, note: str) -> t
         if end < 0:
             end = len(lines)
         block = lines[start:end]
-        fields = {'status': status, 'resolved_by': by, 'resolved_at': now_iso(), 'note': note}
+        fields = {'note': note} if note_only else {'status': status, 'resolved_by': by, 'resolved_at': now_iso(), 'note': note}
         for fld, val in fields.items():
             if not _set_field(block, fld, val):
                 # 該筆缺這一行 → 在 block 末（去掉尾端空行）補一行
@@ -139,7 +142,7 @@ def resolve_item(root: Path, item_id: str, status: str, by: str, note: str) -> t
                 block.append(f'    {fld}: {yaml_scalar(val)}')
         new_lines = lines[:start] + block + lines[end:]
         new_text = '\n'.join(new_lines)
-        # 驗證：只有該筆的四個欄位改變
+        # 驗證：只有該筆的四個欄位（--annotate 時只有 note）改變
         try:
             new_data = yaml.safe_load(new_text)
         except Exception as exc:
@@ -170,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--list', action='store_true', help='列出 pending（預設行為）')
     parser.add_argument('--resolve', metavar='IN-001', help='標 done；須配 --by')
     parser.add_argument('--dismiss', metavar='IN-001', help='標 dismissed')
+    parser.add_argument('--annotate', metavar='IN-001', help='只改該筆的 note（status 不動；run_batch.py 中途失敗時記停在哪）；須配 --note')
     parser.add_argument('--by', default='', help='resolved_by：D#／plan id／SQ id')
     parser.add_argument('--note', default='', help='註記')
     args = parser.parse_args(argv)
@@ -180,8 +184,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = root.resolve()
     print(f'=== check_inbox: {root} ===')
-    if args.resolve and args.dismiss:
-        print('BLOCKER --resolve 與 --dismiss 不可同時使用')
+    if sum(1 for x in (args.resolve, args.dismiss, args.annotate) if x) > 1:
+        print('BLOCKER --resolve／--dismiss／--annotate 不可同時使用')
+        return 2
+    if args.annotate and not args.note.strip():
+        print('BLOCKER --annotate 須配 --note')
         return 2
     if args.resolve and not args.by.strip():
         print('BLOCKER --resolve 須配 --by <D#／plan id／SQ id>')
@@ -193,20 +200,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if data is None:
         print(f'INFO {INBOX_NAME} 不存在，收件匣為空')
-        if args.resolve or args.dismiss:
-            print(f'BLOCKER 找不到 {args.resolve or args.dismiss}')
+        if args.resolve or args.dismiss or args.annotate:
+            print(f'BLOCKER 找不到 {args.resolve or args.dismiss or args.annotate}')
             return 2
         print('結果: 完成')
         return 0
 
-    if args.resolve or args.dismiss:
-        item_id = args.resolve or args.dismiss
-        status = 'done' if args.resolve else 'dismissed'
-        ok, why = resolve_item(root, item_id, status, args.by.strip(), args.note)
+    if args.resolve or args.dismiss or args.annotate:
+        item_id = args.resolve or args.dismiss or args.annotate
+        status = 'done' if args.resolve else ('dismissed' if args.dismiss else '')
+        ok, why = resolve_item(root, item_id, status, args.by.strip(), args.note, note_only=bool(args.annotate))
         if not ok:
             print(f'BLOCKER {why}')
             return 2
-        print(f'{item_id} → {status}' + (f'（{args.by.strip()}）' if args.by.strip() else ''))
+        print(f'{item_id} → {status}' + (f'（{args.by.strip()}）' if args.by.strip() else '') if not args.annotate else f'{item_id} note 已更新（status 不動）')
         text, data, err = load_inbox(root)
         if err or data is None:
             print(f'BLOCKER 改寫後無法重讀: {err}')

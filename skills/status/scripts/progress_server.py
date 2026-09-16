@@ -12,9 +12,11 @@
     move_plan（分析計畫搬到別的問題，{plan, to_question}）、move_sensitivity（敏感性子分析搬到別的 plan，{plan, item, to_plan}）、
     reorder（問題清單調順序，{list, order}）、move_result（結果鍵搬到別的 plan 的 outputs 或某個敏感性子分析的 expected_keys，
     {key, to_plan, to_item?, new_item?}；0.16.4 的 new_item＝在 to_plan 新增一個 R<n+1> 收該鍵、與 to_item 互斥）、nest_result（0.16.5；結果鍵宣告為同 plan
-    另一個結果鍵的支撐結果或拉回頂層，{key, under}；under 空＝頂層）的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
+    另一個結果鍵的支撐結果或拉回頂層，{key, under}；under 空＝頂層）、batch（0.17.0；前端暫存的整串動作，{actions: [{kind, payload}, …]}，
+    target 空、title「批次 n 項」、body 每行一項；由 run_batch.py 依序執行、版本接力、每步各記 D#、最後只重畫一次；resolved_by 寫 D# 範圍）
+    的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
     （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py／
-    move_result.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用）：
+    move_result.py／nest_result.py／run_batch.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用；batch 的 timeout 乘以項數）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
     瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
     瀏覽器「撤回」    ─POST /api/inbox/dismiss {id, note}─► 子程序 check_inbox.py --dismiss（只動收件匣，不需 --allow-apply）
@@ -45,7 +47,7 @@
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
                      核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
-                     八種結構化 kind 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略
+                     九種結構化 kind 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略（batch 一律空）
                      （reassign／promote 取 q:<from>、set_role 取 f:<figure>、move_plan 取 p:<plan>、move_sensitivity 取
                      p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 與 nest_result 取 r:<key>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
                      清單、to 未使用或省略、figure 存在於 manifest、role 合法、plan 為 active、目標問題沒有 active plan、
@@ -86,7 +88,7 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result')   # 與 ssot_actions_common.ACTIONS 同序
+ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；batch（0.17.0）＝run_batch.py
 KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
@@ -345,9 +347,10 @@ def run_action(root: Path, item: dict, mode: str, daily_log: str = '', token: st
     argv = action_command(root, item, mode, daily_log, token)
     if argv is None:
         return {'ok': False, 'rc': -1, 'summary': '不是結構化動作項目'}
+    n_steps = len(_C.batch_actions_of(item.get('payload')) or []) if str(item.get('kind') or '') == 'batch' else 1
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                              timeout=DRYRUN_TIMEOUT if mode == 'dry-run' else APPLY_TIMEOUT, cwd=str(root))
+                              timeout=(DRYRUN_TIMEOUT if mode == 'dry-run' else APPLY_TIMEOUT) * max(1, n_steps), cwd=str(root))
     except subprocess.TimeoutExpired:
         return {'ok': False, 'rc': -1, 'summary': f'{Path(argv[1]).name} 逾時'}
     except OSError as exc:
@@ -358,7 +361,8 @@ def run_action(root: Path, item: dict, mode: str, daily_log: str = '', token: st
     m = re.search(r'^token: (\S+)$', out, re.M)
     if m:
         result['token'] = m.group(1)
-    m = re.search(r'決策 (D-\d{3})', out)
+    # 先認結尾那行「結果: 完成；決策 D-xxx」（batch 印 D# 範圍「D-054–D-058」；各步摘要裡的「預定決策 D-xxx」不算），沒有才退回第一個「決策 D-xxx」
+    m = re.search(r'^結果: 完成；決策 (D-\d{3}(?:–D-\d{3})?)', out, re.M) or re.search(r'決策 (D-\d{3})', out)
     if m:
         result['decision'] = m.group(1)
     m = re.search(r'run log (\S+)', out)
@@ -619,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     shown = '127.0.0.1' if host in ('127.0.0.1', '::1') else host
     print(f'http://{shown}:{port}/', file=sys.stderr)
     print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}'
-          + ('；--allow-apply 已開（actions 端點代跑八種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
+          + ('；--allow-apply 已開（actions 端點代跑九種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
           + '；Ctrl+C 結束', file=sys.stderr)
     try:
         server.serve_forever()

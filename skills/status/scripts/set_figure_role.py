@@ -273,12 +273,15 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
             e['notes'].append('無收件匣項目')
         log.finish(e)
         e = log.step(4, '重畫與 daily log')
-        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-            backups.backup(root / name)
-            log.file_before(e, root / name)
-        e['notes'].extend(C.rerender(root))
-        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-            log.file_after(e, root / name)
+        if C.batch_step():   # 0.17.0 批次模式：不重畫、不備份進度產物，由 run_batch.py 最後重畫一次
+            e['notes'].append(C.BATCH_NO_RENDER_NOTE)
+        else:
+            for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
+                backups.backup(root / name)
+                log.file_before(e, root / name)
+            e['notes'].extend(C.rerender(root))
+            for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
+                log.file_after(e, root / name)
         summary['files'] = sorted({f for s in log.doc['steps'] for f in s['files']})
         summary['backups'] = backups.listing(root)
         if args.daily_log and not dry:

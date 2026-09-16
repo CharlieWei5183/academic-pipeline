@@ -221,7 +221,7 @@ def test_payload_and_server(tmp: Path) -> None:
     assert vp(root, 'nest_result', {'key': 'k2', 'under': 3})[1] == 'payload.under 須為字串（主結果的鍵；空＝拉回頂層）'
     assert vp(root, 'nest_result', {'under': 'k1'})[1] == 'payload.key 不得為空'
     assert vp(root, 'nest_result', 'k2')[1] == 'nest_result 需要 payload object'
-    assert ps.ACTION_KINDS == C.ACTION_KINDS == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result')
+    assert ps.ACTION_KINDS == C.ACTION_KINDS and C.ACTION_KINDS[:8] == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result')   # 0.17.0 起尾端多 batch
     assert C.action_argv(root, 'nest_result', {'key': 'k2', 'under': 'k1'}, 'IN-009', 'dry-run')[3:] == ['--key', 'k2', '--under', 'k1', '--inbox', 'IN-009', '--dry-run']
     assert C.action_argv(root, 'nest_result', {'key': 'k2', 'under': ''}, '', 'apply', token='t')[3:] == ['--key', 'k2', '--top', '--expect-token', 't', '--apply']
     assert C.ACTIONS['nest_result']['title']({'key': 'k2', 'under': 'k1'}) == ('掛到主結果下：k2 → k1', '結果鍵 k2 宣告為 k1 的支撐結果（同一份 plan；只改呈現層級，不改數字、不改歸屬）', 'r:k2')
@@ -323,9 +323,9 @@ def test_drag_candidates(tmp: Path) -> None:
     html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ("nest_result:'掛到主結果下'", 'id="act-nest-result-fields"', 'id="act-nr-key"', 'id="act-nr-under"', 'var nestHidden={}', 'function isL(e)',
                    '結果主從（outputs 的 supports）：支撐結果縮排在主結果之下、同一區帶', '頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果）',
-                   'supports（主結果）', "data-nest=", '搬結果／掛到主結果下；', 'e-supports'):
+                   'supports（主結果）', "data-nest=", '搬結果／掛到主結果下', 'e-supports'):   # 0.17.0 起面板標題尾端多「／批次」
         assert anchor in html, anchor
-    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下；由腳本確定性執行）' in html
+    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下' in html   # 0.17.0 起尾端多「／批次」
     js = _js_of(html)
     node = shutil.which('node')
     if not node:

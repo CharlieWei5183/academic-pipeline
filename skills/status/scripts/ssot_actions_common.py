@@ -42,6 +42,13 @@ SCRIPTS = {
 TOKEN_FILES = ('project.yaml', 'decisions.yaml', 'analysis/results.json', 'analysis/validation.yaml',
                'analysis/plans/index.yaml', 'analysis/figures/manifest.json', 'PROGRESS.inbox.yaml')
 CJK_NUM = '零一二三四五六七八九十'
+# 批次模式（run_batch.py 0.17.0）：由 run_batch.py 對每個子步驟設這個環境變數＝'1'——子步驟 --apply 時跳過自己的工作區 dry-run（整串已在
+# run_batch 的同一個工作區跑過）、step_finish 不重畫（run_batch 最後重畫一次）；--daily-log 由 run_batch 不傳給子步驟、只在最後追記一段。
+BATCH_STEP_ENV = 'SSOT_ACTIONS_BATCH_STEP'
+
+
+def batch_step() -> bool:
+    return os.environ.get(BATCH_STEP_ENV, '') == '1'
 
 
 class ChainError(Exception):
@@ -355,9 +362,22 @@ def resolve_inbox(root: Path, item_id: str, by: str, note: str) -> str:
     return out
 
 
+def annotate_inbox(root: Path, item_id: str, note: str) -> str:
+    """只改該筆的 note（status 不動；批次中途失敗時記「停在第幾步」）。"""
+    rc, out = run_script('check_inbox', root, '--annotate', item_id, '--note', note)
+    if rc != 0:
+        raise ChainError(f'check_inbox.py --annotate {item_id} 失敗: {out[-400:]}')
+    return out
+
+
 # ---------- 重畫與 daily log ----------
 
+BATCH_NO_RENDER_NOTE = f'批次模式（{BATCH_STEP_ENV}=1）：中間步驟不重畫，由 run_batch.py 最後重畫一次'
+
+
 def rerender(root: Path) -> list[str]:
+    if batch_step():   # 0.17.0：批次的子步驟一律不重畫（包含不經 step_finish 的 set_figure_role.py）
+        return [BATCH_NO_RENDER_NOTE]
     notes = []
     for name in ('render_progress', 'render_decisions_timeline'):
         rc, out = run_script(name, root, timeout=300)
@@ -1416,13 +1436,16 @@ def step_finish(ch: Chain, inbox_id: str, inbox_note: str, daily_log: str, daily
         resolve_inbox(ch.root, inbox_id, ch.did, inbox_note)
         ch.after(inbox_path)
         ch.note(f'{inbox_id} → done（{ch.did}）')
-    for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-        ch.backup(ch.root / name)
-        ch.before(ch.root / name)
-    for n in rerender(ch.root):
-        ch.note(n)
-    for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-        ch.after(ch.root / name)
+    if batch_step():
+        ch.note(BATCH_NO_RENDER_NOTE)
+    else:
+        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
+            ch.backup(ch.root / name)
+            ch.before(ch.root / name)
+        for n in rerender(ch.root):
+            ch.note(n)
+        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
+            ch.after(ch.root / name)
     ch.summary['files'] = sorted({f for s in ch.log.doc['steps'] for f in s['files']})
     ch.summary['backups'] = ch.backups.listing(ch.root)
     if daily_log and not ch.dry:
@@ -1472,17 +1495,20 @@ def action_main(name: str, version: str, args, root: Path, check_preconditions, 
     if getattr(args, 'expect_token', '') and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
         return 2
-    ws = make_workspace(root)
-    try:
-        summary = run_chain(ws, args, ctx, did, args.date, True)
-    except ChainError as exc:
-        print(f'BLOCKER dry-run 失敗：{exc}')
+    if args.dry_run or not batch_step():
+        ws = make_workspace(root)
+        try:
+            summary = run_chain(ws, args, ctx, did, args.date, True)
+        except ChainError as exc:
+            print(f'BLOCKER dry-run 失敗：{exc}')
+            remove_workspace(ws)
+            return 1
         remove_workspace(ws)
-        return 1
-    remove_workspace(ws)
-    if args.dry_run:
-        print_summary(summary, True, token0)
-        return 0
+        if args.dry_run:
+            print_summary(summary, True, token0)
+            return 0
+    else:
+        print(f'（批次模式 {BATCH_STEP_ENV}=1：整串已在 run_batch.py 的工作區跑過，本步驟略過自己的工作區 dry-run）')
     if ssot_token(root, token_extra) != token0:
         print('BLOCKER dry-run 期間 SSOT 已被改動，未 apply；請重跑')
         return 2
@@ -1875,6 +1901,204 @@ ACTIONS: dict[str, dict[str, Any]] = {
                              f'結果鍵 {p["key"]} 移除 supports、拉回頂層結果（只改呈現層級，不改數字、不改歸屬）'),
                             f'r:{p["key"]}'),
     },
+}
+# ---------- 批次（0.17.0）：kind batch，payload {actions: [{kind, payload}, …]}，腳本 run_batch.py ----------
+
+BATCH_MAX = 20
+PLAN_ID_RE = re.compile(r'((?:SQ|AQ)\d+)-v(\d+)$')
+# 各 kind 在批次寬鬆驗證時的欄位形狀：plan＝plan id 欄、q＝問題 id 欄、key＝結果鍵欄、str＝其他必填字串欄、opt＝可省略的字串欄
+BATCH_SHAPE: dict[str, dict[str, tuple[str, ...]]] = {
+    'reassign': {'q': ('from',), 'opt': ('to', 'primary_model')},
+    'promote': {'q': ('from',), 'opt': ('to',)},
+    'set_role': {},
+    'move_plan': {'plan': ('plan',), 'q': ('to_question',)},
+    'move_sensitivity': {'plan': ('plan', 'to_plan'), 'str': ('item',)},
+    'reorder': {},
+    'move_result': {'key': ('key',), 'plan': ('to_plan',), 'opt': ('to_item', 'new_item')},
+    'nest_result': {'key': ('key',), 'opt': ('under',)},
+}
+
+
+def batch_actions_of(payload) -> list | None:
+    """payload 可為 {actions: [...]} 或直接是清單；回 None 表示形狀不對。"""
+    if isinstance(payload, dict):
+        payload = payload.get('actions')
+    return payload if isinstance(payload, list) else None
+
+
+class _Predicted:
+    """批次寬鬆驗證用：目前已知的問題 id 與各問題可能出現的 plan 版本（現行 ＋ 前面步驟會封的新版）。"""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        sub, app = goals_ids(root)
+        self.qs: set[str] = set(sub) | set(app)
+        self.wild_q = False   # 前面有 promote／reassign 沒指定 to → 之後任何合法格式的問題 id 都接受
+        index = plan_common.load_index(root)
+        self.active: dict[str, str] = {str(k): str(v) for k, v in (index.get('active') or {}).items()}
+        self.versions: dict[str, set[int]] = {}
+        for pid in self.active.values():
+            m = PLAN_ID_RE.fullmatch(pid)
+            if m:
+                self.versions.setdefault(m.group(1), set()).add(int(m.group(2)))
+        self.results = load_json(root / 'analysis/results.json') if (root / 'analysis/results.json').is_file() else {}
+
+    def bump(self, q: str) -> None:
+        """問題 q 會出一個新版：預測版本號＝該問題現有 plan 檔／index 的最大版本 +1（再往上疊）。"""
+        if not q:
+            return
+        if q not in self.versions:
+            self.versions[q] = set()
+        cur = int(next_plan_id(self.root, q).split('-v')[1])
+        n = max([cur] + [v + 1 for v in self.versions[q]])
+        self.versions[q].add(n)
+
+    def q_ok(self, q: str) -> bool:
+        return bool(Q_ID_RE.fullmatch(q)) and (q in self.qs or self.wild_q)
+
+    def plan_ok(self, pid: str) -> bool:
+        m = PLAN_ID_RE.fullmatch(pid)
+        if not m:
+            return False
+        if pid in self.active.values():
+            return True
+        return int(m.group(2)) in self.versions.get(m.group(1), set()) or (self.wild_q and m.group(1) not in self.qs)
+
+    def q_of_plan(self, pid: str) -> str:
+        m = PLAN_ID_RE.fullmatch(pid)
+        return m.group(1) if m else ''
+
+    def q_of_key(self, key: str) -> str:
+        pid = str((self.results.get(key) or {}).get('plan_id') or '') if isinstance(self.results, dict) else ''
+        return self.q_of_plan(pid)
+
+    def after(self, kind: str, p: dict) -> None:
+        """套用第 i 步之後的預測：哪些問題會出新版、哪些問題 id 會出現。"""
+        if kind == 'nest_result':
+            self.bump(self.q_of_key(str(p.get('key') or '')))
+        elif kind == 'move_result':
+            self.bump(self.q_of_key(str(p.get('key') or '')))
+            self.bump(self.q_of_plan(str(p.get('to_plan') or '')))
+        elif kind == 'move_sensitivity':
+            self.bump(self.q_of_plan(str(p.get('plan') or '')))
+            self.bump(self.q_of_plan(str(p.get('to_plan') or '')))
+        elif kind == 'move_plan':
+            self.bump(str(p.get('to_question') or ''))
+        elif kind in ('reassign', 'promote'):
+            to = str(p.get('to') or '')
+            if to:
+                self.qs.add(to)
+                self.bump(to)
+            else:
+                self.wild_q = True
+            self.qs.discard(str(p.get('from') or ''))
+
+
+def _validate_loose(root: Path, kind: str, payload, pred: _Predicted) -> tuple[dict | None, str]:
+    """批次第 2 步起的寬鬆驗證：先試嚴格驗證，不過就只驗形狀——plan id 須是現行 id 或前面步驟會產生的版本、問題 id 須現行或前面步驟會產生、
+    結果鍵須存在於 results.json（鍵不會因版本接力改名）。語意（是否已是該狀態、目標是否已含該鍵）留給 run_batch 的工作區 dry-run 判。"""
+    norm, err = ACTIONS[kind]['validate'](root, payload)
+    if not err:
+        return norm, ''
+    if not isinstance(payload, dict):
+        return None, err
+    shape = BATCH_SHAPE.get(kind, {})
+    out: dict[str, Any] = {}
+    for fld in shape.get('plan', ()):
+        v = str(payload.get(fld) or '').strip()
+        if not pred.plan_ok(v):
+            return None, f'{err}；且 {fld}={v!r} 不是現行 plan id、也不是前面步驟會產生的版本'
+        out[fld] = v
+    for fld in shape.get('q', ()):
+        v = str(payload.get(fld) or '').strip()
+        if not pred.q_ok(v):
+            return None, f'{err}；且 {fld}={v!r} 不是現行問題 id、也不是前面步驟會產生的 id'
+        out[fld] = v
+    for fld in shape.get('key', ()):
+        v = str(payload.get(fld) or '').strip()
+        if not v or not (isinstance(pred.results, dict) and v in pred.results):
+            return None, f'{err}；且 {fld}={v!r} 不存在於 results.json'
+        out[fld] = v
+    for fld in shape.get('str', ()):
+        v = str(payload.get(fld) or '').strip()
+        if not v:
+            return None, f'{err}；且 {fld} 不得為空'
+        out[fld] = v
+    for fld in shape.get('opt', ()):
+        if payload.get(fld) is not None and not isinstance(payload.get(fld), str):
+            return None, f'{err}；且 {fld} 須為字串'
+        if payload.get(fld):
+            out[fld] = str(payload[fld]).strip()
+    if kind == 'set_role':
+        return None, err   # 圖表 id 與 role 不受版本接力影響，一律嚴格
+    elif kind == 'reorder':
+        lst, order = payload.get('list'), payload.get('order')
+        if lst not in ('sub_questions', 'appendix_questions') or not isinstance(order, list) or not order or not all(pred.q_ok(str(x)) for x in order):
+            return None, err
+        out = {'list': lst, 'order': [str(x) for x in order]}
+    elif kind == 'nest_result':
+        out['under'] = str(payload.get('under') or '').strip()
+    elif kind == 'move_result':
+        if out.get('to_item') and out.get('new_item'):
+            return None, f'{err}；且 to_item 與 new_item 互斥'
+        out.setdefault('to_item', '')   # 與嚴格驗證的正規化形狀相同
+    return out, ''
+
+
+def _validate_batch(root: Path, payload) -> tuple[dict | None, str]:
+    actions = batch_actions_of(payload)
+    if actions is None:
+        return None, 'batch 需要 payload {actions: [{kind, payload}, …]}'
+    if not actions:
+        return None, 'batch 的 actions 不得為空'
+    if len(actions) > BATCH_MAX:
+        return None, f'batch 一次最多 {BATCH_MAX} 項（現有 {len(actions)}）'
+    pred = _Predicted(root)
+    out: list[dict[str, Any]] = []
+    for i, a in enumerate(actions):
+        if not isinstance(a, dict):
+            return None, f'actions[{i}] 須為 {{kind, payload}}'
+        kind = str(a.get('kind') or '')
+        if kind not in ACTIONS or kind == 'batch':
+            return None, f'actions[{i}] kind 須為 {"／".join(k for k in ACTIONS if k != "batch")} 之一（現值 {kind!r}）'
+        if i == 0:
+            norm, err = ACTIONS[kind]['validate'](root, a.get('payload'))
+        else:
+            norm, err = _validate_loose(root, kind, a.get('payload'), pred)
+        if err:
+            return None, f'actions[{i}]（{kind}）: {err}'
+        entry: dict[str, Any] = {'kind': kind, 'payload': norm or {}}
+        reason = a.get('reason')
+        if reason is not None and not isinstance(reason, str):
+            return None, f'actions[{i}] reason 須為字串'
+        if reason and reason.strip():
+            entry['reason'] = reason.strip()[:2000]   # 每項自己的理由：run_batch 傳給該步腳本的 --reason、進該步的 D#
+        out.append(entry)
+        pred.after(kind, norm or {})
+    return {'actions': out}, ''
+
+
+def batch_step_titles(actions: list[dict]) -> list[str]:
+    """每項一行人話：「<該 kind 的 title>」＋（理由：…）；title 生成失敗就退回 kind＋payload。"""
+    titles = []
+    for a in actions:
+        try:
+            t = ACTIONS[a['kind']]['title'](a.get('payload') or {})[0]
+        except Exception:
+            t = f'{a.get("kind")}：{json.dumps(a.get("payload") or {}, ensure_ascii=False)}'
+        if a.get('reason'):
+            t += f'（理由：{a["reason"]}）'
+        titles.append(t)
+    return titles
+
+
+ACTIONS['batch'] = {
+    'script': 'run_batch.py', 'label': '批次', 'stage': 'study-design',
+    'validate': _validate_batch,
+    'argv': lambda p: ['--batch', json.dumps({'actions': p.get('actions') or []}, ensure_ascii=False, sort_keys=True)],
+    'extra': lambda p, iid: 'batch:' + json.dumps(p.get('actions') or [], ensure_ascii=False, sort_keys=True) + f':{iid}',
+    'title': lambda p: (f'批次 {len(p.get("actions") or [])} 項',
+                        '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(batch_step_titles(p.get('actions') or []))), ''),
 }
 ACTION_KINDS = tuple(ACTIONS)
 
