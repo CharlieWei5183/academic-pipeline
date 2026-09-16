@@ -18,7 +18,9 @@
     （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py／
     move_result.py／nest_result.py／run_batch.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用；batch 的 timeout 乘以項數）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
-    瀏覽器「套用」    ─POST /api/actions/apply {id, token}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
+    瀏覽器「套用」    ─POST /api/actions/apply {id, token, reason?}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
+                     （0.17.3：batch 項目可帶 reason＝進度頁面「理由（整批，可空）」現值 → run_batch.py --reason 蓋過 payload 頂層 reason；
+                     成功後 check_inbox.py --set-reason 讓該筆 payload.reason／body 最後一行與實際用的理由一致；單筆項目忽略 reason）
     瀏覽器「撤回」    ─POST /api/inbox/dismiss {id, note}─► 子程序 check_inbox.py --dismiss（只動收件匣，不需 --allow-apply）
 
 安全邊界:
@@ -58,8 +60,10 @@
                      0.16.3 起放開節點後的對話框「撤回」鈕用這個端點。
 - POST /api/actions/dry-run  {id} → {"ok": true, "summary": "...", "token": "..."}；未開 --allow-apply 403、
                      該筆不是 pending 的結構化項目 400、腳本失敗 200 且 ok false（summary 帶 BLOCKER 原因）
-- POST /api/actions/apply    {id, token} → {"ok": true, "decision": "D-055", "run_log": "reviews/…json", "summary"}；
-                     token 與現行 SSOT 狀態不符 409（期間有別的 session 改了 SSOT，請重跑 dry-run）
+- POST /api/actions/apply    {id, token, reason?} → {"ok": true, "decision": "D-055", "run_log": "reviews/…json", "summary"}；
+                     token 與現行 SSOT 狀態不符 409（期間有別的 session 改了 SSOT，請重跑 dry-run）；reason（選填、字串、截 2000）
+                     只對 batch 項目有效——蓋過 payload 頂層 reason、token 不看理由所以不必重新預覽（0.17.3）
+- 瀏覽器在長 dry-run 期間關頁：寫回應時的 BrokenPipeError／ConnectionResetError 在 handler 內接住、stderr 記一行，不噴 traceback（0.17.3）。
 - 其他方法 405。所有回應 Cache-Control: no-store。stderr 一行一請求。Ctrl+C 乾淨退出。
 """
 from __future__ import annotations
@@ -387,6 +391,28 @@ def run_dismiss(root: Path, item_id: str, note: str) -> dict:
     return {'ok': proc.returncode == 0, 'rc': proc.returncode, 'summary': ((proc.stdout or '') + (proc.stderr or ''))[-8000:]}
 
 
+def run_set_reason(root: Path, item_id: str, reason: str) -> dict:
+    """0.17.3：代跑 check_inbox.py <root> --set-reason <id> --reason <reason>（只改該筆 batch 的 payload.reason 與 body 最後一行）。"""
+    argv = [sys.executable, str(SCRIPT_DIR / 'check_inbox.py'), str(root), '--set-reason', item_id, '--reason', reason]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', timeout=DISMISS_TIMEOUT, cwd=str(root))
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'rc': -1, 'summary': 'check_inbox.py 逾時'}
+    except OSError as exc:
+        return {'ok': False, 'rc': -1, 'summary': f'無法執行 check_inbox.py: {exc}'}
+    return {'ok': proc.returncode == 0, 'rc': proc.returncode, 'summary': ((proc.stdout or '') + (proc.stderr or ''))[-8000:]}
+
+
+def batch_item_with_reason(item: dict, reason: str) -> dict:
+    """回一份 payload 頂層 reason 換成 reason 的 batch 項目複本（reason 空＝拿掉鍵）；原 item 不動。token extra 只看 actions，不受影響。"""
+    payload = dict(item.get('payload') or {}) if isinstance(item.get('payload'), dict) else {}
+    if reason:
+        payload['reason'] = reason
+    else:
+        payload.pop('reason', None)
+    return {**item, 'payload': payload}
+
+
 def append_actions_log(root: Path, item_id: str, script: str, result: str, decision: str) -> None:
     with (root / ACTIONS_LOG_NAME).open('a', encoding='utf-8') as fh:
         fh.write('\t'.join([now_iso(), item_id, script, result, decision]) + '\n')
@@ -399,8 +425,16 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
     action_lock = threading.Lock()   # 同一時間只跑一個 action
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = 'progress_server/0.16'
+        server_version = 'progress_server/0.17'
         protocol_version = 'HTTP/1.1'
+
+        def handle(self) -> None:
+            # 0.17.3：瀏覽器在長 dry-run／apply 期間關頁或重新載入，寫回應時會 BrokenPipe／ConnectionReset——記一行就好，
+            # 不讓 socketserver.handle_error 把整段 traceback 噴進 stderr log（腳本本身已跑完，SSOT 狀態不受影響）
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                print(f'{now_iso()} {getattr(self, "command", "-")} {getattr(self, "path", "-")} 用戶端已斷線（{type(exc).__name__}），回應未送出', file=sys.stderr)
 
         # --- 共用回應 ---
         def _send(self, status: int, body: bytes, ctype: str) -> None:
@@ -537,7 +571,9 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
             if not allow_apply:
                 return self._json(403, {'ok': False, 'error': '伺服器未開 --allow-apply，動作端點關閉'})
             if not isinstance(payload, dict) or not isinstance(payload.get('id'), str):
-                return self._json(400, {'ok': False, 'error': 'body 須為 {id, token?}'})
+                return self._json(400, {'ok': False, 'error': 'body 須為 {id, token?, reason?}'})
+            if 'reason' in payload and not isinstance(payload.get('reason'), str):
+                return self._json(400, {'ok': False, 'error': 'reason 須為字串'})
             _text, data, err = load_inbox(root)
             if err:
                 return self._json(500, {'ok': False, 'error': f'{INBOX_NAME} 無法解析: {err}'})
@@ -556,9 +592,24 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
                         return self._json(400, {'ok': False, 'error': '套用前須先預覽（缺 token）'})
                     if token != action_token(root, item):
                         return self._json(409, {'ok': False, 'error': 'SSOT 狀態已改變（期間有別的 session 動過檔案），請重跑預覽'})
-                    result = run_action(root, item, 'apply', daily_log, token)
+                    # 0.17.3：batch 項目的 reason 由套用時帶來（進度頁面「理由（整批，可空）」現值）蓋過建項目時的 payload 頂層 reason；
+                    # 單筆項目忽略。token extra 只看 actions，換理由不必重新預覽。
+                    run_item, reason_sync = item, None
+                    if str(item.get('kind') or '') == 'batch' and isinstance(payload.get('reason'), str):
+                        reason = payload['reason'].strip()[:2000]
+                        run_item = batch_item_with_reason(item, reason)
+                        if run_item['payload'].get('reason', '') != (item.get('payload') or {}).get('reason', ''):
+                            reason_sync = reason
+                    result = run_action(root, run_item, 'apply', daily_log, token)
                     append_actions_log(root, payload['id'], result.get('script', '?'), 'ok' if result['ok'] else f'failed(rc={result["rc"]})',
                                        result.get('decision', ''))
+                    if result['ok'] and reason_sync is not None:
+                        sync = run_set_reason(root, payload['id'], reason_sync)
+                        if sync['ok']:
+                            result['reason_synced'] = reason_sync
+                        else:
+                            result['summary'] += f'\nWARNING 收件匣 {payload["id"]} 的理由未同步（check_inbox.py --set-reason rc={sync["rc"]}）：{sync["summary"][-300:]}'
+                            print(f'{now_iso()} check_inbox.py --set-reason {payload["id"]} rc={sync["rc"]}: {sync["summary"][-300:]}', file=sys.stderr)
                     if result['ok']:
                         rerender(root, 'apply 之後')
                 else:

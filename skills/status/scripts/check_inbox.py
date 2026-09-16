@@ -7,9 +7,10 @@
   python3 check_inbox.py <project-root> --resolve IN-001 --by <ref> [--note ...]   # 標 done（ref＝D#／plan id／SQ id；batch 為 D# 範圍「D-054–D-058」）
   python3 check_inbox.py <project-root> --annotate IN-001 --note ...               # 只改 note、status 不動（0.17.0；run_batch.py 中途失敗記停在哪）
   python3 check_inbox.py <project-root> --dismiss IN-001 [--note ...]              # 標 dismissed
+  python3 check_inbox.py <project-root> --set-reason IN-001 --reason ...           # 只改 batch 項目的 payload.reason 與 body 最後一行「理由：…」（0.17.3；status 不動）
 
 收件匣（<root>/PROGRESS.inbox.yaml）由 progress_server.py append，本程式只改指定那一筆的
-status／resolved_by／resolved_at／note 四行——逐行文字替換，不重新 dump，其餘位元組不動；寫入前後
+status／resolved_by／resolved_at／note 四行（--set-reason 則是 batch 項目的 payload 與 body 兩行）——逐行文字替換，不重新 dump，其餘位元組不動；寫入前後
 以 yaml 解析比對，除該筆外任何差異都算失敗（不落檔、BLOCKER）。鎖檔與伺服器同一套
 （flock 專案根目錄 fd，寫暫存檔再 os.replace）。
 
@@ -25,6 +26,7 @@ exit code: 0 完成（收件匣不存在 → INFO）; 2 BLOCKER（根目錄不�
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import sys
@@ -105,8 +107,21 @@ def _set_field(block_lines: list[str], field: str, value: str) -> bool:
     return False
 
 
-def resolve_item(root: Path, item_id: str, status: str, by: str, note: str, note_only: bool = False) -> tuple[bool, str]:
-    """改該筆的 status／resolved_by／resolved_at／note 四行；note_only（--annotate，0.17.0）只改 note 一行，status 不動。"""
+def _set_raw_field(block_lines: list[str], field: str, raw: str) -> bool:
+    """同 _set_field，但值照給（payload 那行是 JSON 物件，不能包成字串）。"""
+    pat = re.compile(rf'^(\s{{4}}{re.escape(field)}:\s*).*$')
+    for i, line in enumerate(block_lines):
+        m = pat.match(line)
+        if m:
+            block_lines[i] = f'{m.group(1)}{raw}'
+            return True
+    return False
+
+
+def _rewrite_item(root: Path, item_id: str, fields: dict, raw: dict | None = None) -> tuple[bool, str]:
+    """只改該筆的 fields（欄位 → 新值；raw 給的欄位照 raw[field] 的原文寫，其餘用 yaml_scalar）：逐行文字替換、其餘位元組不動；
+    寫入前重新解析、確認只有這一筆的這幾個欄位改變。resolve／annotate／set-reason 都走這裡。"""
+    raw = raw or {}
     with RootLock(root):
         text, data, err = load_inbox(root)
         if err:
@@ -125,24 +140,22 @@ def resolve_item(root: Path, item_id: str, status: str, by: str, note: str, note
             if m:
                 if start >= 0 and end < 0:
                     end = i
-                raw = m.group(1)
-                if raw.strip('"\'') == item_id and start < 0:
+                if m.group(1).strip('"\'') == item_id and start < 0:
                     start = i
         if start < 0:
             return False, f'找不到 {item_id} 的文字區塊（檔案可能不是 progress_server.py 寫的格式）'
         if end < 0:
             end = len(lines)
         block = lines[start:end]
-        fields = {'note': note} if note_only else {'status': status, 'resolved_by': by, 'resolved_at': now_iso(), 'note': note}
         for fld, val in fields.items():
-            if not _set_field(block, fld, val):
+            ok = _set_raw_field(block, fld, raw[fld]) if fld in raw else _set_field(block, fld, val)
+            if not ok:
                 # 該筆缺這一行 → 在 block 末（去掉尾端空行）補一行
                 while block and not block[-1].strip():
                     block.pop()
-                block.append(f'    {fld}: {yaml_scalar(val)}')
-        new_lines = lines[:start] + block + lines[end:]
-        new_text = '\n'.join(new_lines)
-        # 驗證：只有該筆的四個欄位（--annotate 時只有 note）改變
+                block.append(f'    {fld}: {raw[fld] if fld in raw else yaml_scalar(val)}')
+        new_text = '\n'.join(lines[:start] + block + lines[end:])
+        # 驗證：只有該筆的這幾個欄位改變
         try:
             new_data = yaml.safe_load(new_text)
         except Exception as exc:
@@ -167,6 +180,47 @@ def resolve_item(root: Path, item_id: str, status: str, by: str, note: str, note
     return True, ''
 
 
+def resolve_item(root: Path, item_id: str, status: str, by: str, note: str, note_only: bool = False) -> tuple[bool, str]:
+    """改該筆的 status／resolved_by／resolved_at／note 四行；note_only（--annotate，0.17.0）只改 note 一行，status 不動。"""
+    fields = {'note': note} if note_only else {'status': status, 'resolved_by': by, 'resolved_at': now_iso(), 'note': note}
+    return _rewrite_item(root, item_id, fields)
+
+
+REASON_LINE = '理由：'
+
+
+def batch_body_with_reason(body: str, reason: str) -> str:
+    """body 每行一項不變；最後一行「理由：…」換成新的（reason 空則拿掉那行）。"""
+    lines = body.split('\n') if body else []
+    if lines and lines[-1].startswith(REASON_LINE):
+        lines.pop()
+    if reason:
+        lines.append(REASON_LINE + reason)
+    return '\n'.join(lines)
+
+
+def set_reason_item(root: Path, item_id: str, reason: str) -> tuple[bool, str]:
+    """0.17.3：只改 batch 項目的 payload 頂層 reason 與 body 最後一行「理由：…」（status／note 不動；reason 空＝拿掉）。
+    進度頁面「全部套用」時把理由帶給 server（run_batch.py --reason），套用成功後由 server 呼叫本功能讓收件匣那筆與實際用的理由一致。"""
+    reason = reason.strip()[:2000]
+    _text, data, err = load_inbox(root)
+    if err or data is None:
+        return False, f'{INBOX_NAME} 無法解析: {err}' if err else f'{INBOX_NAME} 不存在'
+    item = next((it for it in inbox_items(data) if str(it.get('id') or '') == item_id), None)
+    if item is None:
+        return False, f'找不到 {item_id}'
+    if str(item.get('kind') or '') != 'batch':
+        return False, f'{item_id} 的 kind 是 {item.get("kind")}，--set-reason 只對 batch'
+    payload = dict(item.get('payload') or {}) if isinstance(item.get('payload'), dict) else {}
+    if reason:
+        payload['reason'] = reason
+    else:
+        payload.pop('reason', None)
+    body = batch_body_with_reason(str(item.get('body') or ''), reason)
+    return _rewrite_item(root, item_id, {'payload': payload, 'body': body},
+                         raw={'payload': json.dumps(payload, ensure_ascii=False, sort_keys=True)})
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='收件匣檢核與結案（只改指定那一筆的 status／resolved_by／resolved_at／note）')
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
@@ -174,8 +228,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--resolve', metavar='IN-001', help='標 done；須配 --by')
     parser.add_argument('--dismiss', metavar='IN-001', help='標 dismissed')
     parser.add_argument('--annotate', metavar='IN-001', help='只改該筆的 note（status 不動；run_batch.py 中途失敗時記停在哪）；須配 --note')
+    parser.add_argument('--set-reason', metavar='IN-001', help='只改 batch 項目的 payload.reason 與 body 最後一行「理由：…」（0.17.3；status 不動；--reason 空＝拿掉）')
     parser.add_argument('--by', default='', help='resolved_by：D#／plan id／SQ id')
     parser.add_argument('--note', default='', help='註記')
+    parser.add_argument('--reason', default=None, help='配 --set-reason：整批理由（截 2000 字）')
     args = parser.parse_args(argv)
 
     root = Path(args.root)
@@ -184,8 +240,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = root.resolve()
     print(f'=== check_inbox: {root} ===')
-    if sum(1 for x in (args.resolve, args.dismiss, args.annotate) if x) > 1:
-        print('BLOCKER --resolve／--dismiss／--annotate 不可同時使用')
+    if sum(1 for x in (args.resolve, args.dismiss, args.annotate, args.set_reason) if x) > 1:
+        print('BLOCKER --resolve／--dismiss／--annotate／--set-reason 不可同時使用')
+        return 2
+    if args.set_reason and args.reason is None:
+        print('BLOCKER --set-reason 須配 --reason（可為空字串＝拿掉理由）')
         return 2
     if args.annotate and not args.note.strip():
         print('BLOCKER --annotate 須配 --note')
@@ -200,13 +259,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if data is None:
         print(f'INFO {INBOX_NAME} 不存在，收件匣為空')
-        if args.resolve or args.dismiss or args.annotate:
-            print(f'BLOCKER 找不到 {args.resolve or args.dismiss or args.annotate}')
+        if args.resolve or args.dismiss or args.annotate or args.set_reason:
+            print(f'BLOCKER 找不到 {args.resolve or args.dismiss or args.annotate or args.set_reason}')
             return 2
         print('結果: 完成')
         return 0
 
-    if args.resolve or args.dismiss or args.annotate:
+    if args.set_reason:
+        ok, why = set_reason_item(root, args.set_reason, args.reason)
+        if not ok:
+            print(f'BLOCKER {why}')
+            return 2
+        print(f'{args.set_reason} 理由已更新（status 不動）')
+        text, data, err = load_inbox(root)
+        if err or data is None:
+            print(f'BLOCKER 改寫後無法重讀: {err}')
+            return 2
+    elif args.resolve or args.dismiss or args.annotate:
         item_id = args.resolve or args.dismiss or args.annotate
         status = 'done' if args.resolve else ('dismissed' if args.dismiss else '')
         ok, why = resolve_item(root, item_id, status, args.by.strip(), args.note, note_only=bool(args.annotate))
