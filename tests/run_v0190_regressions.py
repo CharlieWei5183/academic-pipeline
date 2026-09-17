@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""v0.19.0 回歸：(0) 關聯圖 renderer 效能 patch 的等價性；(1) 結果欄改「宣告粒度」——每個敏感性子分析底下恰一個次要結果聚合節點
-（使用者 2026-09-17 裁定：節點粒度＝plan 的宣告粒度，不看鍵數、不設門檻、不做專案設定）；(2) report.md 節點。
+"""v0.19.0 回歸：(0) 關聯圖 renderer 效能 patch 的等價性；(1) 結果欄改「宣告粒度」——有自有次要鍵的敏感性子分析底下一個次要結果聚合節點
+（使用者 2026-09-17 裁定：節點粒度＝plan 的宣告粒度，不看鍵數多寡、不設門檻、不做專案設定；沒宣告任何次要鍵的子分析沒有這個宣告單位，不建節點）；
+(2) report.md 節點。
 
 - 規格 0（等價）：以 git 取 0.18.2（be25ed8）的 render_progress.py 當舊版——舊版 build_ir 換上新版的 layout_graph／route_edges／_assign_lanes／
   crossing_stats 後，mini-project 與 v0.16.1 fixture 的 IR 都與純舊版逐位元相同；`_assign_lanes`／`crossing_stats` 各 100 組隨機輸入與舊版相同；
   JS `assignLanes` 100 組隨機輸入與舊版相同（node）；`LAYOUT_BIG_ITEMS` 生效時 src.infos 有那一句 INFO。
-- 規格 1（宣告粒度）：fixture 每個子分析恰一個聚合節點 `r:<pid>#R<k>#secondary`（type result、subtype secondary_group、parent＝子分析、帶／帶內位置跟父）；
-  label（1 鍵鍵名／多鍵「次要結果 n 鍵」／沒自有鍵「無自有鍵」）；徽章「未登錄 a／未驗證 b」；state 彙總（全登錄 done、部分 pending、
+- 規格 1（宣告粒度）：fixture 有自有次要鍵的子分析（SQ1-v1 R1／R2）各一個聚合節點 `r:<pid>#R<k>#secondary`（type result、subtype secondary_group、
+  parent＝子分析、帶／帶內位置跟父）；沒自有鍵的子分析（SQ2-v1 R1／AQ1-v1 R1 的 expected_keys 都是本 plan outputs 的主要鍵）不建聚合節點、也沒有
+  子分析 → 聚合的邊；label（1 鍵鍵名／多鍵「次要結果 n 鍵」）；徽章「未登錄 a／未驗證 b」；state 彙總（全登錄 done、部分 pending、
   validation fail → blocked、非 active → expired）；meta.keys／n_keys／cited_by_figures；邊：子分析 → 聚合一條 produces、圖表 depicts「n 鍵」、
   validation primary／robustness 指聚合並記鍵數、決策 refers 指聚合；stats.secondary_result_keys 仍是鍵數、新增 secondary_groups；
-  validate_ir 規則（parent 須是子分析、每個子分析恰一個、id 形狀、meta.keys／label、鍵數加總、report 至多一個、embedded_in 方向）；
-  JS：dragCandidate 三種落點各 n 筆 items、放回自己的子分析無事、拖到結果節點紅線（新提示句）、沒自有鍵紅線；applyOptimistic 兩個方向；
+  validate_ir 規則（parent 須是子分析、每個子分析至多一個且有則 n_keys ≥ 1、id 形狀、meta.keys／label、鍵數加總、report 至多一個、embedded_in 方向）；
+  JS：dragCandidate 三種落點各 n 筆 items、放回自己的子分析無事、拖到結果節點紅線（新提示句）、搬空的聚合節點紅線；applyOptimistic 兩個方向
+  （B 型搬到原本沒有聚合節點的子分析 → 現做聚合節點＋produces 邊）；
   面板 aggKeyList 分頁＋搜尋；headless：點聚合節點 → 面板逐鍵「升為主要結果」→ 暫存 1 筆、聚合節點消失、主要結果節點出現；
   多鍵聚合節點拖到 plan 上 → 暫存 n 筆。
 - 規格 2（report.md）：無檔 → o:report pending、label「report.md（引用 0／manifest m 張）」、圖表不標；有檔 → done、meta.generated_at 取檔頭日期、
   引用比對 manifest file（report.md 所在目錄相對路徑）、圖表 → report 一條 embedded_in（預設不畫）、role=main 未引用徽章「報告未引用」、
   stats.report_cited_figures／report_uncited_main_figures。
-- 登記：CHANGELOG 0.19.0（第一條寫宣告粒度原則與不設門檻的理由）、plugin.json 0.19.0、status SKILL.md、README、tests/README.md；相關檔不含 arm 的直譯字（U+81C2）。
+- 登記：CHANGELOG 0.19.0（第一條寫宣告粒度原則與不設門檻的理由；第 2 條補「聚合節點只在子分析有自有次要鍵時建」與 validate 規則「至多一個、有則 n_keys ≥ 1」）、
+  plugin.json 0.19.0、status SKILL.md、README、tests/README.md；相關檔不含 arm 的直譯字（U+81C2）。
 
 fixture 沿用 v0.16.1 的 build_fixture（SQ1-v1：outputs k1／k2、R1→r1、R2→r2；SQ2-v1：m1、R1→m1；AQ1-v1：a1、R1→a1）；規格 1 的多鍵／未登錄／fail
 與規格 2 的有檔情況各以複本改檔後重畫（不走 check_plan，content_hash 不重接）。
@@ -52,7 +56,8 @@ OLD_REV = 'be25ed8'   # 0.18.2：效能 patch 之前的 render_progress.py
 RENDER = 'skills/status/scripts/render_progress.py'
 run, text, need = T0.run, T0.text, T0.need
 _server, _js_of = T1._server, T1._js_of
-AG = {k: f'r:{k}#secondary' for k in ('SQ1-v1#R1', 'SQ1-v1#R2', 'SQ2-v1#R1', 'AQ1-v1#R1')}
+AG = {k: f'r:{k}#secondary' for k in ('SQ1-v1#R1', 'SQ1-v1#R2', 'SQ2-v1#R1', 'AQ1-v1#R1')}   # 後兩個子分析沒自有次要鍵 → fixture 裡不建（id 只用來斷言「不存在」）
+AG_BUILT = ('SQ1-v1#R1', 'SQ1-v1#R2')
 
 
 def fixture(tmp: Path, name: str) -> Path:
@@ -219,27 +224,30 @@ def test_ir_secondary_groups(tmp: Path) -> Path:
     assert sorted(subs) == sorted('p:' + k for k in AG)
     for sub in subs:
         aggs = [n for n in g['nodes'] if n.get('subtype') == 'secondary_group' and n['parent'] == sub]
+        if sub[2:] not in AG_BUILT:   # 沒自有次要鍵的子分析：不建聚合節點、也沒有子分析 → 聚合的 produces 邊
+            assert aggs == [] and f'r:{sub[2:]}#secondary' not in by and not any(k[0] == sub and k[1].endswith('#secondary') for k in edges), (sub, aggs)
+            continue
         assert len(aggs) == 1 and aggs[0]['id'] == f'r:{sub[2:]}#secondary' and aggs[0]['type'] == 'result', (sub, aggs)
         a, s = aggs[0], by[sub]
         assert a['band'] == s['band'] and a['strip'] == s['strip'] and a['collapsed'] == s['collapsed'] and a['col'] == 4 and a['x'] == by['r:k1']['x'] + 24, a
         assert a['meta']['result_kind'] == 'secondary' and a['meta']['plan_id'] == sub[2:].split('#')[0] and a['meta']['robustness_id'] == sub.split('#')[1]
         assert a['meta']['n_keys'] == len(a['meta']['keys']) and isinstance(a['meta']['cited_by_figures'], list)
-    a1, a2, a3, a4 = (by[AG[k]] for k in ('SQ1-v1#R1', 'SQ1-v1#R2', 'SQ2-v1#R1', 'AQ1-v1#R1'))
-    # label／badge／state：R1 → r1（已登錄、V1 robustness 驗過）done 無徽章；R2 → r2（已登錄、未驗證）done「未驗證 1」；SQ2 R1／AQ1 R1 的 expected 都是主要鍵 → 無自有鍵、pending
+    a1, a2 = (by[AG[k]] for k in AG_BUILT)
+    # label／badge／state：R1 → r1（已登錄、V1 robustness 驗過）done 無徽章；R2 → r2（已登錄、未驗證）done「未驗證 1」；SQ2 R1／AQ1 R1 的 expected 都是主要鍵 → 不建聚合節點
     assert a1['label'] == 'r1' and a1['badge'] == '' and a1['state'] == 'done' and [k['key'] for k in a1['meta']['keys']] == ['r1'], a1
     assert a1['meta']['keys'][0] == {'key': 'r1', 'registered': True, 'validated': True, 'validated_by': ['V1'], 'validation_kind': 'robustness', 'declared_by': ['p:SQ1-v1#R1'],
                                      'plan_id': 'SQ1-v1', 'model_id': 'M1', 'description': 'r1 敏感度'}, a1['meta']['keys']
     assert a2['label'] == 'r2' and a2['badge'] == '未驗證 1' and a2['state'] == 'done' and a2['meta']['n_unvalidated'] == 1 and a2['meta']['validated'] is False, a2
-    assert a3['label'] == '無自有鍵' and a3['state'] == 'pending' and a3['meta']['keys'] == [] and '都是本 plan outputs 的主要結果' in a3['title'], a3
-    assert a4['label'] == '無自有鍵' and a4['band'] == 'supp' and a4['strip'] == 'q:AQ1', a4
-    # 邊：子分析 → 聚合一條 produces（有鍵才預設畫）；V1 robustness → R1 聚合、label 記鍵數；子分析 → 主要鍵的 produces 照舊隱藏
+    assert AG['SQ2-v1#R1'] not in by and AG['AQ1-v1#R1'] not in by and not any(n['label'] == '無自有鍵' for n in g['nodes']), '沒自有次要鍵的子分析不建聚合節點'
+    assert by['p:SQ2-v1#R1']['band'] == 'main' and by['p:AQ1-v1#R1']['band'] == 'supp' and by['p:AQ1-v1#R1']['strip'] == 'q:AQ1'
+    # 邊：子分析 → 聚合一條 produces（預設畫）；V1 robustness → R1 聚合、label 記鍵數；子分析 → 主要鍵的 produces 照舊隱藏；沒聚合節點的子分析沒有這條邊
     assert edges[('p:SQ1-v1#R1', AG['SQ1-v1#R1'], 'produces')]['default_visible'] is True and edges[('p:SQ1-v1#R2', AG['SQ1-v1#R2'], 'produces')]['default_visible'] is True
-    assert edges[('p:SQ2-v1#R1', AG['SQ2-v1#R1'], 'produces')]['default_visible'] is False, '沒自有鍵的聚合節點：產出邊預設不畫'
+    assert ('p:SQ2-v1#R1', AG['SQ2-v1#R1'], 'produces') not in edges and ('p:AQ1-v1#R1', AG['AQ1-v1#R1'], 'produces') not in edges
     assert edges[('v:V1', AG['SQ1-v1#R1'], 'robustness')]['label'] == '驗證（穩健性）1 鍵' and edges[('v:V1', AG['SQ1-v1#R1'], 'robustness')]['style'] == 'thin'
     assert edges[('p:SQ2-v1#R1', 'r:m1', 'produces')]['default_visible'] is False and ('v:V1', 'r:r1', 'robustness') not in edges
     # stats
     st = g['stats']
-    assert st['secondary_result_keys'] == 2 and st['secondary_groups'] == 4 and st['sensitivity_items'] == 4 and st['by_type']['result'] == 8, st
+    assert st['secondary_result_keys'] == 2 and st['secondary_groups'] == 2 and st['sensitivity_items'] == 4 and st['by_type']['result'] == 6, st
     assert st['crossings'] == 0 and st['edge_node_overlaps'] == 0, st
     # HTML：聚合節點縮排、寬減 24、沒有紅字「未驗證」（徽章代替）、圖例句、面板錨點、nest_result 新提示句
     html = (root / rp.HTML_NAME).read_text(encoding='utf-8')
@@ -249,10 +257,12 @@ def test_ir_secondary_groups(tmp: Path) -> Path:
     assert '<text class="badge"' in seg and '未驗證 1' in seg and 'class="st unval"' not in seg, seg
     for token in ('宣告粒度（0.19.0）', '次要結果聚合節點 → 圖表一條、標「n 鍵」', 'function aggKeyList(', 'class="agg-promote"', 'class="agg-search"', 'class="agg-page"',
                   '請先升為主要結果——拖聚合節點到方法上，或在面板逐鍵升級', 'function stageMany(', 'function spawnNode(', 'function makeNodeEl(', "secondary_group:24",
-                  'report.md 節點（圖表欄最後一列）', '.gnode.t-report .tbar', 'data-node-id="o:report"', '（聚合節點 4）', 'function aggOfKey('):
+                  'report.md 節點（圖表欄最後一列）', '.gnode.t-report .tbar', 'data-node-id="o:report"', '（聚合節點 2）', 'function aggOfKey(',
+                  '有次要鍵的敏感性子分析底下一個次要結果節點', '沒宣告次要鍵的子分析不建', '有次要鍵的子分析一個次要結果節點'):
         assert token in html, f'HTML 缺 {token}'
+    assert '無自有鍵' not in html and '恰一個' not in html, 'HTML 不得再有「無自有鍵」節點或「恰一個」的舊句'
     out = run(RENDER, root)
-    assert '次要 2（聚合節點 4）' in out and 'report.md 引用 0' in out, out[-600:]
+    assert '次要 2（聚合節點 2）' in out and 'report.md 引用 0' in out, out[-600:]
     assert rp.validate_ir(ir_of(root)) == []
     return root
 
@@ -303,13 +313,13 @@ def test_ir_variants(tmp: Path) -> Path:
     g = graph(root)
     by = {n['id']: n for n in g['nodes']}
     edges = {(e['from'], e['to'], e['type']): e for e in g['edges']}
-    a1, a2 = by[AG['SQ1-v1#R1']], by[AG['SQ1-v1#R2']]
+    a1 = by[AG['SQ1-v1#R1']]
     assert a1['label'] == '次要結果 3 鍵' and a1['badge'] == '未登錄 1／未驗證 1' and a1['state'] == 'pending' and [k['key'] for k in a1['meta']['keys']] == ['r1', 'r2', 'r9'], a1
     assert a1['meta']['n_unregistered'] == 1 and a1['meta']['n_unvalidated'] == 1 and a1['meta']['keys'][2]['registered'] is False and a1['meta']['keys'][1]['declared_by'] == ['p:SQ1-v1#R1', 'p:SQ1-v1#R2']
-    assert a2['label'] == '無自有鍵' and a2['meta']['keys'] == [] and edges[('p:SQ1-v1#R2', AG['SQ1-v1#R1'], 'produces')]['label'] == 'r2', '同鍵被 R2 也宣告：R2 → r2 所屬聚合節點一條 produces、label 記鍵'
+    assert AG['SQ1-v1#R2'] not in by and edges[('p:SQ1-v1#R2', AG['SQ1-v1#R1'], 'produces')]['label'] == 'r2', '同鍵被 R2 也宣告：r2 歸 R1（R 序最小）→ R2 沒自有鍵不建聚合節點，只有 R2 → r2 所屬聚合節點一條 produces、label 記鍵'
     assert edges[(AG['SQ1-v1#R1'], 'f:F_sec', 'depicts')]['label'] == '2 鍵' and edges[('r:k1', 'f:F_sec', 'depicts')]['label'] == '呈現於' and a1['meta']['cited_by_figures'] == ['F_sec']
     assert ('d:D-009', AG['SQ1-v1#R1'], 'refers') in edges and edges[('q:SQ1', AG['SQ1-v1#R1'], 'cites')]['label'] == 'r2' and ('q:SQ1', 'r:k1', 'cites') in edges
-    assert g['stats']['secondary_result_keys'] == 2 and g['stats']['secondary_groups'] == 4 and g['stats']['dangling_result_keys'] == 0
+    assert g['stats']['secondary_result_keys'] == 2 and g['stats']['secondary_groups'] == 1 and g['stats']['dangling_result_keys'] == 0
     assert rp.validate_ir(ir_of(root)) == []
     # (b) validation fail → blocked
     root_b = _variant(tmp, 'fail', validation_edit=lambda t: t.replace('    status: qualified\n    primary_results: ["k1", "k2"]', '    status: fail\n    primary_results: ["k1", "k2"]', 1))
@@ -332,17 +342,19 @@ def test_validate_rules(tmp: Path) -> None:
         fn(bad, by, ed)
         return rp.validate_ir(bad)
     errs = mutate(lambda b, by, ed: by[AG['SQ1-v1#R1']].update(parent='p:SQ1-v1#S'))
-    assert any(e.endswith('.parent') for e in errs) and any('聚合節點的 parent 須是敏感性子分析' in e for e in errs) and any('實際 0' in e for e in errs), errs
+    assert any(e.endswith('.parent') for e in errs) and any('聚合節點的 parent 須是敏感性子分析' in e for e in errs) and not any('實際 0' in e for e in errs), errs
     errs = mutate(lambda b, by, ed: by[AG['SQ1-v1#R1']].update(parent='p:SQ1-v1#R2'))
-    assert any('聚合節點 id 須是 r:<子分析>#secondary' in e for e in errs) and any('實際 2' in e for e in errs) and any('實際 0' in e for e in errs), errs
+    assert any('聚合節點 id 須是 r:<子分析>#secondary' in e for e in errs) and any('至多一個次要結果聚合節點，實際 2' in e for e in errs) and not any('實際 0' in e for e in errs), errs
     errs = mutate(lambda b, by, ed: b['graph']['nodes'].append(dict(copy.deepcopy(by[AG['SQ1-v1#R1']]), id='r:SQ1-v1#R1#secondary2')))
     assert any('id 重複' in e or 'IR-12' in e for e in errs) and any('實際 2' in e for e in errs), errs
     errs = mutate(lambda b, by, ed: by[AG['SQ1-v1#R1']]['meta'].update(n_keys=5))
     assert any('meta.keys／n_keys' in e for e in errs), errs
     errs = mutate(lambda b, by, ed: by[AG['SQ1-v1#R1']].update(label='別的'))
     assert any('1 鍵須直接顯示鍵名' in e for e in errs), errs
-    errs = mutate(lambda b, by, ed: by[AG['SQ2-v1#R1']].update(label='x'))
-    assert any('沒有自有鍵須為「無自有鍵」' in e for e in errs), errs
+    errs = mutate(lambda b, by, ed: by[AG['SQ1-v1#R1']]['meta'].update(keys=[], n_keys=0))
+    assert any('聚合節點須至少 1 個自有次要鍵' in e for e in errs), errs
+    errs = mutate(lambda b, by, ed: b['graph']['nodes'].remove(by[AG['SQ1-v1#R2']]) or b['graph']['edges'].remove(ed[('p:SQ1-v1#R2', AG['SQ1-v1#R2'], 'produces')]) or b['graph']['stats'].update(secondary_result_keys=1, secondary_groups=1))
+    assert not any('聚合節點' in e for e in errs), ('子分析沒有聚合節點不再是錯', errs)
     def dup(b, by, ed):
         by[AG['SQ1-v1#R1']]['meta']['keys'].append({'key': 'r2', 'registered': True, 'validated': False})
         by[AG['SQ1-v1#R1']]['meta']['n_keys'] = 2
@@ -360,7 +372,7 @@ def test_validate_rules(tmp: Path) -> None:
     assert any('embedded_in 邊只能從圖表指向 report 節點' in e for e in errs), errs
     errs = mutate(lambda b, by, ed: b['graph']['stats'].pop('secondary_groups'))
     assert 'IR-14 graph.stats' in errs, errs
-    print('[regression] validate_ir：聚合節點 parent／id 形狀／每個子分析恰一個／meta.keys／label 三型／鍵重複／鍵數加總／帶跟父、report 至多一個且在 main、embedded_in 方向、stats 新鍵: pass')
+    print('[regression] validate_ir：聚合節點 parent／id 形狀／每個子分析至多一個且有則 n_keys ≥ 1（沒有不算錯）／meta.keys／label 兩型／鍵重複／鍵數加總／帶跟父、report 至多一個且在 main、embedded_in 方向、stats 新鍵: pass')
 
 
 # ---------- 規格 1：前端 ----------
@@ -391,9 +403,13 @@ def test_frontend(tmp: Path, multi_root: Path) -> None:
     def at(nid: str) -> list[int]:
         return [by[nid]['x'] + 5, by[nid]['y'] + 5]
     A2, A3 = AG['SQ1-v1#R2'], AG['SQ2-v1#R1']
+    assert A3 not in by, 'SQ2-v1 R1 沒自有次要鍵 → fixture 沒有它的聚合節點'
+    # A3 在 fixture 裡不存在（沒自有鍵不建）；「搬空的聚合節點」紅線改用合成節點 AX 驗（樂觀更新把鍵全搬走後 keys 為空的情況）
     cases = [[A2] + at('p:AQ1-v1'), [A2] + at('p:SQ2-v1#R1'), [A2] + at('p:SQ1-v1#R2'), [A2] + at('r:k1'), [A2, 10, 10], [A2, 10, 357], [A2, 10, 310],
-             [A3] + at('p:AQ1-v1'), [A3, 10, 10], [A2] + at('p:SQ1-v1')]
-    body = 'var out=%s.map(function(c){return dragCandidate(c[0],c[1],c[2]);});out.push([draggable("%s"),draggable("%s")]);console.log(JSON.stringify(out));' % (json.dumps(cases), A2, A3)
+             ['AX'] + at('p:AQ1-v1'), ['AX', 10, 10], [A2] + at('p:SQ1-v1'), [A3] + at('p:AQ1-v1')]
+    body = ('var AX={id:"AX",type:"result",subtype:"secondary_group",parent:"p:SQ2-v1#R1",band:"main",label:"次要結果 0 鍵",meta:{plan_id:"SQ2-v1",result_kind:"secondary",keys:[],n_keys:0},x:%d,y:%d,col:4};G.nodes.push(AX);nodes.AX=AX;'
+            'var out=%s.map(function(c){return dragCandidate(c[0],c[1],c[2]);});out.push([draggable("%s"),draggable("%s"),draggable("AX")]);console.log(JSON.stringify(out));'
+            % (by['r:k1']['x'] + 24, by['r:k1']['y'] + 400, json.dumps(cases), A2, A3))
     proc = subprocess.run([node, '-e', _drag_harness(g, js, body)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     got = json.loads(proc.stdout)
@@ -408,7 +424,8 @@ def test_frontend(tmp: Path, multi_root: Path) -> None:
     assert got[5] is None and got[6]['ok'] is False and got[6]['band'] == 'ext', (got[5], got[6])
     assert got[7]['ok'] is False and '沒有自有的次要鍵可搬' in got[7]['reason'] and got[8]['ok'] is False and '沒有自有的次要鍵可搬' in got[8]['reason'], (got[7], got[8])
     assert got[9]['ok'] is True and got[9]['label'] == '1 鍵成為 SQ1-v1 的主要結果（升回本 plan outputs）', got[9]
-    assert got[10] == [True, True], got[10]
+    assert got[10] is None, ('不存在的聚合節點 id：dragCandidate 回 null', got[10])
+    assert got[11] == [True, False, True], got[11]
     # 多鍵聚合節點：items 順序照 meta.keys（r1、r2、r9）
     gm = graph(multi_root)
     bym = {n['id']: n for n in gm['nodes']}
@@ -432,8 +449,10 @@ out.m1=applyOptimistic('move_result',{key:'r2',to_plan:'SQ2-v1',to_item:''});
 out.a1={label:nodes[A1].label,keys:nodes[A1].meta.keys.map(function(k){return k.key;}),badge:nodes[A1].badge,gone:!!nodes[A1].staged_gone};
 out.r2={parent:nodes['r:r2'].parent,band:nodes['r:r2'].band,subtype:nodes['r:r2'].subtype,x:nodes['r:r2'].x,plan:nodes['r:r2'].meta.plan_id,state:nodes['r:r2'].state,label:nodes['r:r2'].label,spawned:!!nodes['r:r2'].spawned,
   prod:G.edges.filter(function(e){return e.type==='produces'&&e.to==='r:r2';}).map(function(e){return e.from;}),inG:G.nodes.indexOf(nodes['r:r2'])>=0};
+out.a3before=!!nodes[A3];
 out.m2=applyOptimistic('move_result',{key:'k1',to_plan:'SQ2-v1',to_item:'R1'});
-out.a3={label:nodes[A3].label,keys:nodes[A3].meta.keys.map(function(k){return k.key;}),gone:!!nodes[A3].staged_gone,parent:nodes[A3].parent};out.k1gone=!!nodes['r:k1'].staged_gone;
+out.a3={label:nodes[A3].label,keys:nodes[A3].meta.keys.map(function(k){return k.key;}),gone:!!nodes[A3].staged_gone,parent:nodes[A3].parent,spawned:!!nodes[A3].spawned,subtype:nodes[A3].subtype,band:nodes[A3].band,x:nodes[A3].x,inG:G.nodes.indexOf(nodes[A3])>=0,
+  prod:G.edges.filter(function(e){return e.type==='produces'&&e.to===A3;}).map(function(e){return e.from+'|'+e.source;})};out.k1gone=!!nodes['r:k1'].staged_gone;
 out.m3=applyOptimistic('move_result',{key:'r1',to_plan:'AQ1-v1',to_item:''});out.m4=applyOptimistic('move_result',{key:'r9',to_plan:'AQ1-v1',to_item:''});
 out.a1b={label:nodes[A1].label,keys:nodes[A1].meta.keys.map(function(k){return k.key;}),gone:!!nodes[A1].staged_gone};
 out.r9={state:nodes['r:r9'].state,band:nodes['r:r9'].band,plan:nodes['r:r9'].meta.plan_id};out.r1={state:nodes['r:r1'].state,band:nodes['r:r1'].band};
@@ -447,8 +466,11 @@ console.log(JSON.stringify(out));
     o = json.loads(proc.stdout.strip().splitlines()[-1])
     assert set(o['m1']) == {A1, 'r:r2'} and o['a1'] == {'label': '次要結果 2 鍵', 'keys': ['r1', 'r9'], 'badge': '未登錄 1', 'gone': False}, o
     assert o['r2'] == {'parent': '', 'band': 'main', 'subtype': 'primary', 'x': 20 + 4 * 380, 'plan': 'SQ2-v1', 'state': 'done', 'label': 'r2', 'spawned': True, 'prod': ['p:SQ2-v1'], 'inG': True}, o['r2']
-    assert set(o['m2']) == {'r:k1', A3} and o['a3'] == {'label': 'k1', 'keys': ['k1'], 'gone': False, 'parent': 'p:SQ2-v1#R1'} and o['k1gone'] is True, o
-    assert o['a1b'] == {'label': '無自有鍵', 'keys': [], 'gone': True} and o['r9'] == {'state': 'pending', 'band': 'supp', 'plan': 'AQ1-v1'} and o['r1'] == {'state': 'done', 'band': 'supp'}, o
+    # B 型搬到原本沒有聚合節點的子分析（SQ2-v1 R1 沒自有鍵 → IR 裡沒有 A3）：樂觀更新現做一個聚合節點（spawned、在 G.nodes、縮排 24）＋子分析 → 聚合的 produces 邊
+    assert o['a3before'] is False and set(o['m2']) == {'r:k1', A3} and o['k1gone'] is True, o
+    assert o['a3'] == {'label': 'k1', 'keys': ['k1'], 'gone': False, 'parent': 'p:SQ2-v1#R1', 'spawned': True, 'subtype': 'secondary_group', 'band': 'main', 'x': 20 + 4 * 380 + 24, 'inG': True,
+                       'prod': ['p:SQ2-v1#R1|staged']}, o['a3']
+    assert o['a1b'] == {'label': '次要結果 0 鍵', 'keys': [], 'gone': True} and o['r9'] == {'state': 'pending', 'band': 'supp', 'plan': 'AQ1-v1'} and o['r1'] == {'state': 'done', 'band': 'supp'}, o
     assert o['newAgg'] == {'parent': 'p:SQ1-v1#S', 'keys': ['m1'], 'label': 'm1'}, o['newAgg']   # new_item：子分析還不存在 → 暫掛在群下的預覽聚合節點
     # aggKeyList：> 200 鍵分頁＋搜尋
     fn = '\n'.join(_js_fn(js, n) for n in ('esc', 'isActivePlan', 'aggKeyList'))
@@ -584,7 +606,8 @@ def test_docs_registered() -> None:
     assert m, 'CHANGELOG 缺 0.19.0'
     sec = m.group(0)
     for token in ('宣告粒度', '2026-09-17', '不設門檻', 'secondary_group', 'r:<pid>#R<k>#secondary', 'report.md', 'embedded_in', '報告未引用', 'LAYOUT_BIG_ITEMS', '_assign_lanes',
-                  'crossing_stats', 'run_v0190_regressions.py', 'run_v0180', 'run_v0164', 'run_v0170', 'run_v0172', 'run_v0181', 'run_v0150', 'run_v0140', 'secondary_groups'):
+                  'crossing_stats', 'run_v0190_regressions.py', 'run_v0180', 'run_v0164', 'run_v0170', 'run_v0172', 'run_v0181', 'run_v0150', 'run_v0140', 'secondary_groups',
+                  '聚合節點只在子分析有自有次要鍵時建', '至多一個、有則 `meta.n_keys ≥ 1`'):
         assert token in sec, f'CHANGELOG 0.19.0 缺 {token}'
     first = sec.split('\n\n')[1] if '\n\n' in sec else sec
     assert '宣告粒度' in first and '門檻' in first, '第一條要寫宣告粒度原則與不設門檻的理由'
@@ -607,15 +630,15 @@ def main() -> int:
         print('[regression] 規格 0 效能 patch 等價：舊版 build_ir 換上新版 layout_graph／route_edges／_assign_lanes／crossing_stats 後 mini-project 與 fixture 的 IR 逐位元相同；'
               '_assign_lanes／crossing_stats 各 100 組隨機輸入相同；JS assignLanes 100 組相同；LAYOUT_BIG_ITEMS 生效有 INFO 句: ' + ('pass' if ran0 else 'skipped（無 git 舊版）'))
         test_ir_secondary_groups(tmp)
-        print('[regression] 規格 1 IR：每個子分析恰一個聚合節點（id／type／subtype／parent／帶／帶內位置／縮排）、label 三型、徽章、state 彙總、meta.keys、'
-              '邊改指聚合（produces 一條、robustness 記鍵數、沒自有鍵不畫）、stats（鍵數／聚合節點數）、HTML 錨點與圖例、摘要句、validate_ir 空: pass')
+        print('[regression] 規格 1 IR：有自有次要鍵的子分析一個聚合節點（id／type／subtype／parent／帶／帶內位置／縮排）、label 三型、徽章、state 彙總、meta.keys、'
+              '邊改指聚合（produces 一條、robustness 記鍵數）、沒自有鍵的子分析不建聚合節點也不建邊、stats（鍵數／聚合節點數）、HTML 錨點與圖例、摘要句、validate_ir 空: pass')
         multi_root = test_ir_variants(tmp)
         print('[regression] 規格 1 複本：多鍵「次要結果 3 鍵」＋「未登錄 1／未驗證 1」pending、同鍵兩個子分析宣告（R2 → R1 聚合 produces 記鍵）、圖表 depicts「2 鍵」＋cited_by_figures、'
               '決策 refers 與 goals cites 指聚合、validation fail → blocked: pass')
         test_validate_rules(tmp)
         test_frontend(tmp, multi_root)
-        print('[regression] 前端：node --check、dragCandidate（→ plan／→ 別的子分析／→ 自己的子分析無事／→ 結果紅線新句／Main 帶升回本 plan／Supp 無事／ext 紅／沒自有鍵紅／多鍵 items 順序照 meta.keys）、'
-              'applyOptimistic（聚合少一鍵、空了消失、現做主要結果節點＋produces、主要鍵進目標聚合且逐鍵節點消失、new_item 預覽聚合）、aggKeyList 分頁＋搜尋: pass')
+        print('[regression] 前端：node --check、dragCandidate（→ plan／→ 別的子分析／→ 自己的子分析無事／→ 結果紅線新句／Main 帶升回本 plan／Supp 無事／ext 紅／搬空的聚合節點紅／不存在的聚合節點 null／多鍵 items 順序照 meta.keys）、'
+              'applyOptimistic（聚合少一鍵、空了消失、現做主要結果節點＋produces、主要鍵 B 型進原本沒有聚合節點的子分析 → 現做聚合節點＋produces 邊且逐鍵節點消失、new_item 預覽聚合）、aggKeyList 分頁＋搜尋: pass')
         ran = test_headless(tmp, multi_root)
         print('[regression] headless Chrome：點聚合節點 → 面板逐鍵「升為主要結果」→ 暫存 1 筆、聚合節點消失、主要結果節點出現 → 重新載入還原 → 清空回復；'
               '多鍵聚合節點拖到 plan 上 → 暫存 3 筆、toast「已暫存 3 筆」: ' + ('pass' if ran else 'skipped'))

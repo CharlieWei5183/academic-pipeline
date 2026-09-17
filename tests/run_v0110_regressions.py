@@ -1328,17 +1328,17 @@ def test_graph_full_fixture() -> None:
         # v0.18.0：群與子分析縮排在 plan 之下、同區帶（main）——method 欄序 SQ1-v1（收合）、SQ1-v2、群、R1、SQ2-v1
         assert [nodes[i]["order"] for i in ("p:SQ1-v1", "p:SQ1-v2", "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ2-v1")] == [0, 1, 2, 3, 4]
         # v0.18.1：問題帶——SQ2 的帶接在 SQ1 的帶（3 列）之後、中間留 STRIP_GAP（1 列）：48 + 3 × 48 + 48 = 240
-        # 0.19.0：SQ1 帶的結果欄多一個（空的）聚合節點 r:SQ1-v2#R1#secondary → 帶高 4 列，SQ2 的帶從 48 + 4 × 48 + 48 = 288 起
-        assert y["p:SQ1-v2"] == 48 and y["p:SQ1-v2#S"] == 48 + 48 and y["p:SQ1-v2#R1"] == 48 + 96 and y["p:SQ2-v1"] == 288 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
+        # 0.19.0 宣告粒度：R1 的 expected_keys 只有主要鍵 k2 → 沒自有次要鍵，不建聚合節點（同日改：原本建空的「無自有鍵」節點、帶高 4 列，現回 3 列）
+        assert y["p:SQ1-v2"] == 48 and y["p:SQ1-v2#S"] == 48 + 48 and y["p:SQ1-v2#R1"] == 48 + 96 and y["p:SQ2-v1"] == 240 and y["p:SQ1-v1"] == y["p:SQ1-v2"], {k: v for k, v in y.items() if k.startswith("p:")}
         y0_supp = max(n["y"] for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision") + 36 + 40 + 28
         assert y["q:AQ1"] == y0_supp and nodes["p:SQ1-v2#S"]["band"] == "main" and nodes["p:SQ1-v2#R1"]["band"] == "main", {k: v for k, v in y.items() if k.startswith("q:")}
         assert y["q:SQ1"] < y["q:SQ2"] < y["q:AQ1"] and y["q:main"] == (y["q:SQ1"] + y["q:SQ2"]) / 2, y   # v0.14.0：只對 main 區帶的問題居中
         ry = [n["y"] for n in g["nodes"] if n["type"] == "result"]
-        assert sorted(ry) == [48, 96, 144, 192, 288, 336], "result 欄 y 在各自的問題帶內連續（v0.18.1：SQ1 帶 k1／k2／聚合節點／legacy_key、SQ2 帶 k3／k_missing；0.19.0 加聚合節點）"
-        assert y["r:SQ1-v2#R1#secondary"] == 144 and nodes["r:SQ1-v2#R1#secondary"]["label"] == "無自有鍵", "0.19.0：R1 的 expected_keys 只有主要鍵 k2 → 空聚合節點，排在主要鍵之後、未宣告之前"
+        assert sorted(ry) == [48, 96, 144, 240, 288], "result 欄 y 在各自的問題帶內連續（v0.18.1：SQ1 帶 k1／k2／legacy_key、SQ2 帶 k3／k_missing；0.19.0 沒自有次要鍵的 R1 不建聚合節點）"
+        assert "r:SQ1-v2#R1#secondary" not in nodes and not any(n.get("subtype") == "secondary_group" for n in g["nodes"]), "0.19.0：R1 的 expected_keys 只有主要鍵 k2 → 沒自有次要鍵、不建聚合節點"
         assert y["r:k1"] < y["r:k2"] < y["r:legacy_key"] < y["r:k3"] < y["r:k_missing"], {k: v for k, v in y.items() if k.startswith("r:")}
         dy = sorted(n["y"] for n in g["nodes"] if n["type"] == "decision")
-        assert dy == [48, 288, 432] and [n["id"] for n in sorted((n for n in g["nodes"] if n["type"] == "decision"), key=lambda n: n["y"])] == ["d:D-001", "d:D-002", "d:D-003"]   # v0.18.1：決策掛在 refers 的問題帶（D-001 → SQ1、D-002／D-003 → SQ2）
+        assert dy == [48, 240, 384] and [n["id"] for n in sorted((n for n in g["nodes"] if n["type"] == "decision"), key=lambda n: n["y"])] == ["d:D-001", "d:D-002", "d:D-003"]   # v0.18.1：決策掛在 refers 的問題帶（D-001 → SQ1、D-002／D-003 → SQ2）
         # 邊：型別、方向、default_visible、style、label
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert not any(t in ("uses", "validates") for _, _, t in edges), "不得再有 uses／validates 邊"
@@ -1406,11 +1406,11 @@ def test_graph_full_fixture() -> None:
         assert sh["via"] == ["model:M-shared", "r:k3"] and sh["kinds"] == ["method", "result"], sh
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         assert g["stats"] == {"nodes": len(g["nodes"]), "edges": len(g["edges"]),
-                              "by_type": {"question": 4, "method": 5, "validation": 1, "result": 6, "figure": 0, "decision": 3, "report": 1},
+                              "by_type": {"question": 4, "method": 5, "validation": 1, "result": 5, "figure": 0, "decision": 3, "report": 1},
                               "shared_pairs": len(g["shared"]), "dangling_result_keys": 1, "unvalidated_result_keys": 1, "figures_unreviewed": 0,
                               "secondary_result_keys": 0, "undeclared_result_keys": 0, "sensitivity_items": 1,
-                              "sensitivity_groups": 1, "supporting_result_keys": 0, "secondary_groups": 1, "report_cited_figures": 0, "report_uncited_main_figures": 0,
-                              "band_main_nodes": 19, "band_ext_nodes": 0, "band_supp_nodes": 1,
+                              "sensitivity_groups": 1, "supporting_result_keys": 0, "secondary_groups": 0, "report_cited_figures": 0, "report_uncited_main_figures": 0,
+                              "band_main_nodes": 18, "band_ext_nodes": 0, "band_supp_nodes": 1,
                               "crossings": 0, "edge_node_overlaps": 0, "strips": 4}, g["stats"]   # v0.14.0：method 多 1 個群、三個新鍵；v0.15.0：ext 與交叉計數；v0.18.0：群與子分析回 Main；v0.18.1：問題帶數；0.19.0：result 多 1 個空聚合節點、report 節點（孤兒帶 +1）、三個新鍵
         # 拿掉 robustness → k2 回到未驗證：produces 邊仍可見實線、徽章仍「主要」、unvalidated 多 1、meta.validated 變 false
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION.replace(", robustness: [{id: R1, result_keys: [k2]}]", ""), encoding="utf-8")
@@ -1422,7 +1422,7 @@ def test_graph_full_fixture() -> None:
         (root / "analysis/validation.yaml").write_text(IR_VALIDATION, encoding="utf-8")
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0（聚合節點 1）、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0；report.md 引用 0）；區帶 main {g['stats']['band_main_nodes']} 節點、ext 0 節點、supp 1 節點、問題帶 4、敏感性分析群 1 組；預設檢視線段交叉 0、穿過節點 0。" in out, out   # 0.19.0：聚合節點數、report.md 引用數；main 節點數多了空聚合節點與 report 節點   # v0.18.0：群與子分析回 Main；v0.18.1：問題帶數
+        assert f"關聯圖：節點 {g['stats']['nodes']}、邊 {g['stats']['edges']}、問題間共用 {g['stats']['shared_pairs']} 組、goals 指向不存在的結果鍵 1、未驗證的結果鍵 1、次要 0（聚合節點 0）、未宣告 0、敏感性子分析 1 項、圖表 0 張（未審 0；report.md 引用 0）；區帶 main {g['stats']['band_main_nodes']} 節點、ext 0 節點、supp 1 節點、問題帶 4、敏感性分析群 1 組；預設檢視線段交叉 0、穿過節點 0。" in out, out   # 0.19.0：聚合節點數、report.md 引用數；main 節點數多了空聚合節點與 report 節點   # v0.18.0：群與子分析回 Main；v0.18.1：問題帶數
 
 
 def test_graph_layout_deterministic() -> None:

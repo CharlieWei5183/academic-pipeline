@@ -373,9 +373,9 @@ console.log(JSON.stringify(out));
     assert o['m1'] == ['r:k2'] and o['k2']['parent'] == 'r:k1' and o['k2']['subtype'] == 'supporting' and o['k2']['band'] == 'main' and o['k2']['supports'] == 'k1' and o['k2']['x'] == 20 + 4 * 380 + 24, o['k2']
     assert o['k2']['cls'] == {'staged': 1} and o['k2']['staged'] is True and o['k1_sup'] == ['r:k2']
     assert o['edge']['from'] == 'r:k1' and o['edge']['to'] == 'r:k2' and o['edge']['type'] == 'supports' and o['nEdges'] == o['nEls'] == len(g['edges']) + 1 and o['produces_hidden'] == [False]
-    # 0.19.0 宣告粒度：r2 原在 SQ1-v1#R2 的聚合節點裡 → A 型搬到 AQ1-v1：聚合節點少一鍵（空了就消失、label「無自有鍵」）、目標處現做一個主要結果節點 r:r2
+    # 0.19.0 宣告粒度：r2 原在 SQ1-v1#R2 的聚合節點裡 → A 型搬到 AQ1-v1：聚合節點少一鍵（空了就消失，label 退成「次要結果 0 鍵」）、目標處現做一個主要結果節點 r:r2
     assert set(o['m2']) == {'r:SQ1-v1#R2#secondary', 'r:r2'} and o['r2'] == {'parent': '', 'band': 'supp', 'subtype': 'primary', 'x': 20 + 4 * 380, 'plan': 'AQ1-v1', 'prod': ['p:AQ1-v1']}, o
-    assert o['agg2'] == {'gone': True, 'label': '無自有鍵', 'keys': []}, o['agg2']
+    assert o['agg2'] == {'gone': True, 'label': '次要結果 0 鍵', 'keys': []}, o['agg2']
     # k1（主要）→ SQ1-v1 R2：逐鍵節點消失、目標子分析的聚合節點 meta.keys 增加（回到可見、1 鍵 → label 即鍵名）
     assert set(o['m3']) == {'r:k1', 'r:SQ1-v1#R2#secondary'} and o['k1']['gone'] is True, o
     assert o['agg3'] == {'gone': False, 'label': 'k1', 'keys': ['k1'], 'parent': 'p:SQ1-v1#R2', 'band': 'main', 'x': 20 + 4 * 380 + 24, 'subtype': 'secondary_group'}, o['agg3']   # v0.18.0：次要結果跟 plan 的帶（SQ1 → main）

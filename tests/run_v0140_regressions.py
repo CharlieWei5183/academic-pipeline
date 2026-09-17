@@ -256,9 +256,9 @@ def test_band_assignment_groups_and_edges() -> None:
             # v0.18.0（使用者 2026-09-16 裁定，取代 2026-09-15 D-051 的「群放 Supplementary」畫法）：群、子分析、次要結果跟所屬 plan 的區帶
             "p:SQ1-v1#S": "main", "p:SQ1-v2#S": "main", "p:SQ3-v1#S": "main", "p:AQ1-v1#S": "supp",
             "p:SQ1-v1#R1": "main", "p:SQ1-v2#R1": "main", "p:SQ1-v2#R2": "main", "p:SQ3-v1#R1": "main", "p:AQ1-v1#R1": "supp",
-            # 0.19.0 宣告粒度：次要鍵 k4／z1／a2 不再逐鍵建節點，改進所屬子分析的聚合節點；沒自有鍵的子分析（R1 → k1／k2 都是主要）也各一個；report 節點 main
+            # 0.19.0 宣告粒度：次要鍵 k4／z1／a2 不再逐鍵建節點，改進所屬子分析的聚合節點；沒自有鍵的子分析（SQ1-v1 R1／SQ1-v2 R1 → k1／k2 都是主要）不建聚合節點；report 節點 main
             "r:k1": "main", "r:k2": "main", "r:k3": "main", "r:k5": "main", "r:SQ1-v2#R2#secondary": "main", "r:SQ3-v1#R1#secondary": "main", "r:a1": "supp", "r:AQ1-v1#R1#secondary": "supp",
-            "r:SQ1-v1#R1#secondary": "main", "r:SQ1-v2#R1#secondary": "main", "o:report": "main",
+            "o:report": "main",
             "v:V1": "main", "v:V2": "supp", "f:F1": "main", "f:F2": "supp", "d:D-001": "main",
         }
         for nid, band in expect.items():
@@ -284,7 +284,8 @@ def test_band_assignment_groups_and_edges() -> None:
             assert nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["parent"] == sid.split("#")[0] + "#S", (sid, nodes[sid]["parent"])
             assert nodes[sid]["x"] == nodes[sid.split("#")[0] + "#S"]["x"] + 24 == nodes[sid.split("#")[0]]["x"] + 48
         assert nodes["r:SQ1-v2#R2#secondary"]["parent"] == "p:SQ1-v2#R2" and nodes["r:AQ1-v1#R1#secondary"]["parent"] == "p:AQ1-v1#R1" and nodes["r:SQ3-v1#R1#secondary"]["parent"] == "p:SQ3-v1#R1"
-        assert nodes["r:SQ1-v2#R2#secondary"]["label"] == "k4" and nodes["r:SQ3-v1#R1#secondary"]["label"] == "z1" and nodes["r:SQ1-v2#R1#secondary"]["label"] == "無自有鍵"   # 0.19.0：1 鍵顯示鍵名
+        assert nodes["r:SQ1-v2#R2#secondary"]["label"] == "k4" and nodes["r:SQ3-v1#R1#secondary"]["label"] == "z1"   # 0.19.0：1 鍵顯示鍵名
+        assert "r:SQ1-v2#R1#secondary" not in nodes and "r:SQ1-v1#R1#secondary" not in nodes, "0.19.0：沒自有次要鍵的子分析不建聚合節點"
 
         def ev(key, visible, style, label):
             assert key in edges, f"缺邊 {key}"

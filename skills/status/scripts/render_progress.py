@@ -69,9 +69,9 @@ plan → 群 L 形父子線）、子分析再縮一層（48px）、群／子分�
 plan 徽章「敏感性 n」、面板可收合群與子分析（nestHidden，與主結果的「支撐 n」同一套）；結果依宣告分主要（outputs，頂層）／次要（只在 robustness expected_keys；subtype secondary、
 parent＝宣告它的子分析，縮排成子項、跟父收合）／未宣告（results.json 掛此 plan 但沒宣告，虛線），
 驗證與否改為結果節點的獨立標記（meta.validated、右端「未驗證」小標）。
-0.19.0 宣告粒度（使用者 2026-09-17 裁定，跨專案一致、不設門檻）：次要鍵不再逐鍵建 r:<key>，每個敏感性子分析底下恰一個次要結果聚合節點
-r:<pid>#R<k>#secondary（subtype secondary_group、parent＝子分析、鍵全列在 meta.keys；1 鍵顯示鍵名、多鍵「次要結果 n 鍵」、沒自有鍵「無自有鍵」；
-徽章「未登錄 a／未驗證 b」；圖表／驗證／決策指到次要鍵的邊都改指聚合節點並記鍵數），未宣告鍵仍逐鍵虛線；另有 report.md 節點 o:report
+0.19.0 宣告粒度（使用者 2026-09-17 裁定，跨專案一致、不設門檻）：次要鍵不再逐鍵建 r:<key>，有自有次要鍵的敏感性子分析底下一個次要結果聚合節點
+r:<pid>#R<k>#secondary（subtype secondary_group、parent＝子分析、鍵全列在 meta.keys；1 鍵顯示鍵名、多鍵「次要結果 n 鍵」；沒宣告任何次要鍵的
+子分析沒有這個宣告單位，不建節點也不建邊；徽章「未登錄 a／未驗證 b」；圖表／驗證／決策指到次要鍵的邊都改指聚合節點並記鍵數），未宣告鍵仍逐鍵虛線；另有 report.md 節點 o:report
 （type report、圖表欄最後一列、main 區帶孤兒帶；圖表 → report 的 embedded_in 邊預設不畫；role=main 未被 report.md 引用的圖表徽章「報告未引用」）。
 區帶（每個節點的 band 欄位，main｜ext｜supp）：Main＝主問題、SQ、其計畫（含敏感性分析群、子分析、次要結果）／驗證／結果、只呈現 main
 結果的圖表、決策；Extended Data＝依 manifest role 的圖表；Supplementary＝附錄問題及其一切（計畫、群、子分析、驗證、結果）、補充圖表
@@ -1064,11 +1064,11 @@ SUB_INDENT = 24
 SUB_INDENT_OF = {'sensitivity_group': SUB_INDENT, 'sensitivity': 2 * SUB_INDENT, 'secondary': SUB_INDENT, 'supporting': SUB_INDENT,
                  'secondary_group': SUB_INDENT}
 # 0.19.0 宣告粒度（使用者 2026-09-17 裁定，跨專案一致、無門檻、無專案設定）：節點粒度＝plan 的宣告粒度。outputs 逐條宣告的主要結果一條一個
-# 節點；敏感性子分析 p:<pid>#R<k> 的 expected_keys 是該子分析的屬性、不是獨立宣告單位，所以每個子分析底下恰一個次要結果聚合節點
-# r:<pid>#R<k>#secondary（subtype secondary_group、parent＝子分析、鍵全列在 meta.keys），不看鍵數；未宣告鍵維持逐鍵虛線節點
+# 節點；敏感性子分析 p:<pid>#R<k> 的 expected_keys 是該子分析的屬性、不是獨立宣告單位，所以有自有次要鍵（result_kind secondary、歸本 plan）
+# 的子分析底下一個次要結果聚合節點 r:<pid>#R<k>#secondary（subtype secondary_group、parent＝子分析、鍵全列在 meta.keys），不看鍵數多寡；
+# 沒宣告任何次要鍵的子分析沒有「次要結果」這個宣告單位，不建節點也不建邊（至多一個、有則 n_keys ≥ 1）；未宣告鍵維持逐鍵虛線節點
 SECONDARY_SUFFIX = '#secondary'
-SECONDARY_GROUP_LABEL = '次要結果'        # 多鍵時 label「次要結果 n 鍵」；1 鍵直接顯示鍵名；沒有自有鍵「無自有鍵」
-SECONDARY_GROUP_EMPTY = '無自有鍵'
+SECONDARY_GROUP_LABEL = '次要結果'        # 多鍵時 label「次要結果 n 鍵」；1 鍵直接顯示鍵名
 REPORT_ID = 'o:report'                   # 0.19.0 report.md 節點（type report、圖表欄最後一列、main 區帶、孤兒帶）
 REPORT_REL = 'analysis/report.md'        # methodology adapter 沒有另外的 report 路徑欄位（0.19.0 查過七個 adapter），只認這一個
 MD_IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)')
@@ -1503,7 +1503,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
     for sub, keys in agg_keys.items():   # 聚合節點裡的鍵依該子分析 expected_keys 的順序；別的子分析宣告、歸到這裡的鍵接在後面
         own = [k for k in sub_expected[sub] if agg_of_key.get(k) == f'r:{sub[2:]}{SECONDARY_SUFFIX}']
         keys[:] = own + [k for k in keys if k not in own]
-    # 第二遍：依宣告順序建結果節點與 produces 邊——outputs 的主要鍵逐鍵；每個子分析一個聚合節點（恰一個，沒自有鍵也建）
+    # 第二遍：依宣告順序建結果節點與 produces 邊——outputs 的主要鍵逐鍵；有自有次要鍵的子分析一個聚合節點（沒有就不建、也不建邊）
     undeclared_of: dict[str, list[str]] = {}   # plan_id → 掛在該 plan 但未宣告的結果節點 id（results.json 序）
     for pid, doc in plan_docs.items():
         if not doc:
@@ -1531,8 +1531,11 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 nid = result_node(key, source, '已宣告、results.json 尚無此鍵', 'pending')
                 g.nodes[nid]['meta']['declared_by'].append(sub)
                 g.add_edge(sub, nid, 'produces', source, visible=active)   # 目標為主要／未宣告結果時在結果分類後一律改隱藏（不分區帶）
-            # 聚合節點：id r:<pid>#R<k>#secondary、type result、subtype secondary_group、parent＝子分析、帶／帶內位置跟父
+            # 聚合節點：id r:<pid>#R<k>#secondary、type result、subtype secondary_group、parent＝子分析、帶／帶內位置跟父；
+            # 子分析沒有任何自有次要鍵（expected_keys 為空、或只引用本 plan outputs／別 plan 的鍵）→ 沒有這個宣告單位，不建
             keys = agg_keys[sub]
+            if not keys:
+                continue
             item = sub_item[sub]
             ev_owner = _text(item.get('evidence_owned_by'))
             ev_keys = [_text(k) for k in _list(item.get('evidence_keys')) if _text(k)]
@@ -1560,16 +1563,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
                 if any(vstatus.get(v) == 'fail' for v in vids):
                     blocked = True
                 entries.append(entry)
-            if not keys:
-                label = SECONDARY_GROUP_EMPTY
-            elif len(keys) == 1:
-                label = keys[0]
-            else:
-                label = f'{SECONDARY_GROUP_LABEL} {len(keys)} 鍵'
+            label = keys[0] if len(keys) == 1 else f'{SECONDARY_GROUP_LABEL} {len(keys)} 鍵'
             if not active:
                 state = 'expired'
-            elif not keys:
-                state = 'pending'
             elif blocked:
                 state = 'blocked'
             elif n_unreg == 0:
@@ -1577,10 +1573,9 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             else:
                 state = 'pending'
             badge = '／'.join(x for x in ((f'未登錄 {n_unreg}' if n_unreg else ''), (f'未驗證 {n_unval}' if n_unval else '')) if x)
-            title = (f'{sub[2:]} 的次要結果（expected_keys 中只在此宣告的鍵）共 {len(keys)} 鍵：' + '、'.join(keys[:8]) + ('…' if len(keys) > 8 else '')) if keys \
-                else f'{sub[2:]} 的 expected_keys 沒有自有的次要鍵' + (f'（引用 {ev_owner} 的 {"／".join(ev_keys)}）' if ev_owner else ('（都是本 plan outputs 的主要結果）' if expected else '（expected_keys 為空）'))
+            title = f'{sub[2:]} 的次要結果（expected_keys 中只在此宣告的鍵）共 {len(keys)} 鍵：' + '、'.join(keys[:8]) + ('…' if len(keys) > 8 else '')
             meta = {'plan_id': pid, 'robustness_id': rid, 'result_kind': 'secondary', 'keys': entries, 'n_keys': len(keys),
-                    'n_unregistered': n_unreg, 'n_unvalidated': n_unval, 'validated': bool(keys) and n_unval == 0 and n_unreg == 0,
+                    'n_unregistered': n_unreg, 'n_unvalidated': n_unval, 'validated': n_unval == 0 and n_unreg == 0,
                     'cited_by_figures': [], 'declared_by': [sub]}
             if ev_owner:
                 meta['evidence_owned_by'] = ev_owner
@@ -1591,8 +1586,7 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
             an['collapsed'] = bool(g.nodes[sub]['collapsed'])
             an['badge'] = badge
             an['band'] = ''   # 下面的區帶指派：跟父
-            # 沒自有鍵的聚合節點（「無自有鍵」）：子分析 → 聚合節點的 produces 預設不畫（IR 保留、點選才顯）——它只是占位，畫線只添交叉
-            g.add_edge(sub, agg, 'produces', f'analysis/plans/{pid}.yaml#robustness[{rid}].expected_keys', visible=active and bool(keys))
+            g.add_edge(sub, agg, 'produces', f'analysis/plans/{pid}.yaml#robustness[{rid}].expected_keys', visible=active)
     for key, obj in result_objs.items():
         pid = _text(obj.get('plan_id'))
         if pid and f'p:{pid}' not in g.nodes:
@@ -2763,8 +2757,8 @@ def validate_graph(graph) -> list[str]:
         elif n.get('band') != par.get('band'):
             # 0.18.0：群與子分析的區帶跟所屬 plan、次要結果跟宣告它的子分析（三者都是「跟父」）
             errors.append(f'IR-12 graph.nodes[{i}].band（{"敏感性分析群須與所屬 plan" if n.get("subtype") == "sensitivity_group" else "子分析須與群" if n.get("subtype") == "sensitivity" else "次要結果須與子分析"}同一區帶）')
-    # 0.19.0 宣告粒度：每個敏感性子分析恰一個 secondary_group 聚合節點；meta.keys 為 [{key, registered, validated, …}]、n_keys 一致、
-    # 鍵不得重複、已登錄鍵數加總 == stats.secondary_result_keys；report 節點至多一個
+    # 0.19.0 宣告粒度：每個敏感性子分析至多一個 secondary_group 聚合節點，有則 meta.n_keys ≥ 1（沒自有次要鍵的子分析不該有）；
+    # meta.keys 為 [{key, registered, validated, …}]、n_keys 一致、鍵不得重複、已登錄鍵數加總 == stats.secondary_result_keys；report 節點至多一個
     agg_of_sub: dict[str, list[str]] = {}
     seen_keys: dict[str, str] = {}
     n_registered = 0
@@ -2792,15 +2786,15 @@ def validate_graph(graph) -> list[str]:
             seen_keys[k['key']] = str(n.get('id'))
             if k['registered']:
                 n_registered += 1
-        if not keys and n.get('label') != SECONDARY_GROUP_EMPTY:
-            errors.append(f'IR-12 graph.nodes[{i}].label（沒有自有鍵須為「{SECONDARY_GROUP_EMPTY}」）')
+        if not keys:
+            errors.append(f'IR-12 graph.nodes[{i}].meta.n_keys（聚合節點須至少 1 個自有次要鍵；沒有自有鍵的子分析不建聚合節點）')
         elif len(keys) == 1 and n.get('label') != keys[0]['key']:
             errors.append(f'IR-12 graph.nodes[{i}].label（1 鍵須直接顯示鍵名）')
         elif len(keys) > 1 and n.get('label') != f'{SECONDARY_GROUP_LABEL} {len(keys)} 鍵':
             errors.append(f'IR-12 graph.nodes[{i}].label（多鍵須為「{SECONDARY_GROUP_LABEL} n 鍵」）')
     for nid, n in by_id_v.items():
-        if n.get('type') == 'method' and n.get('subtype') == 'sensitivity' and len(agg_of_sub.get(nid, [])) != 1:
-            errors.append(f'IR-12 graph.nodes[{nid}]（子分析須恰有一個次要結果聚合節點，實際 {len(agg_of_sub.get(nid, []))}）')
+        if n.get('type') == 'method' and n.get('subtype') == 'sensitivity' and len(agg_of_sub.get(nid, [])) > 1:
+            errors.append(f'IR-12 graph.nodes[{nid}]（子分析至多一個次要結果聚合節點，實際 {len(agg_of_sub.get(nid, []))}）')
     for sub, aggs in agg_of_sub.items():
         if by_id_v.get(sub, {}).get('subtype') != 'sensitivity':
             errors.append(f'IR-12 graph.nodes[{aggs[0]}].parent（聚合節點的 parent 須是敏感性子分析）')
@@ -3416,11 +3410,12 @@ GRAPH_JS = """
   // 0.16.1：問題（SQ／AQ）、方法（active plan）、敏感性子分析、圖表都可拖；0.16.2：結果節點（主要／次要／未宣告，來源 plan 由 results.json plan_id 判、須為 active plan）也可拖；落點由 dragCandidate 依游標位置即時判定
   function resultOwner(id){var n=nodes[id];if(!n||n.type!=='result')return '';var pid=String((n.meta||{}).plan_id||'');return (pid&&isActivePlan('p:'+pid))?pid:'';}
   function isDragResult(id){return !!resultOwner(id);}
-  // 0.19.0 宣告粒度：次要結果聚合節點（每個敏感性子分析恰一個；鍵全列在 meta.keys）——整個節點可拖＝裡面全部鍵一起搬
+  // 0.19.0 宣告粒度：次要結果聚合節點（有自有次要鍵的敏感性子分析一個、沒有就沒有；鍵全列在 meta.keys）——整個節點可拖＝裡面全部鍵一起搬；
+  // 樂觀更新把鍵搬進沒有聚合節點的子分析時現做一個（spawnNode＋produces 邊）、搬空了就消失（staged_gone）
   function isAgg(id){var n=nodes[id];return !!(n&&n.type==='result'&&n.subtype==='secondary_group');}
   function aggKeys(id){var n=nodes[id];return (n&&n.meta&&n.meta.keys||[]).map(function(k){return k.key;});}
   function aggOfKey(key){var out='';G.nodes.some(function(n){if(n.type==='result'&&n.subtype==='secondary_group'&&(n.meta.keys||[]).some(function(k){return k.key===key;})){out=n.id;return true;}return false;});return out;}
-  function aggLabel(n){var ks=(n.meta.keys||[]);n.meta.n_keys=ks.length;n.label=!ks.length?'無自有鍵':(ks.length===1?ks[0].key:'次要結果 '+ks.length+' 鍵');var ur=0,uv=0;ks.forEach(function(k){if(!k.registered)ur++;else if(!k.validated)uv++;});n.meta.n_unregistered=ur;n.meta.n_unvalidated=uv;
+  function aggLabel(n){var ks=(n.meta.keys||[]);n.meta.n_keys=ks.length;n.label=ks.length===1?ks[0].key:'次要結果 '+ks.length+' 鍵';var ur=0,uv=0;ks.forEach(function(k){if(!k.registered)ur++;else if(!k.validated)uv++;});n.meta.n_unregistered=ur;n.meta.n_unvalidated=uv;
     var badge=[ur?'未登錄 '+ur:'',uv?'未驗證 '+uv:''].filter(Boolean).join('／');n.badge=badge;var el=(typeof nodeEls!=='undefined')?nodeEls[n.id]:null;
     if(el&&el.querySelector){var b=el.querySelector('text.badge');if(b)b.textContent=badge;else if(badge&&typeof setBadge==='function'&&typeof document!=='undefined')setBadge(n.id,badge);var t=el.querySelector('text.lbl');if(t)t.textContent=n.label.length>26?n.label.slice(0,25)+'…':n.label;}}
   function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)));}
@@ -3802,7 +3797,7 @@ GRAPH_JS = """
     var hit=q?ks.filter(function(k){return k.key.toLowerCase().indexOf(q)>=0||String(k.description||'').toLowerCase().indexOf(q)>=0;}):ks;
     var pages=Math.max(1,Math.ceil(hit.length/AGG_PAGE));if(aggUi.page>=pages)aggUi.page=pages-1;if(aggUi.page<0)aggUi.page=0;var from=aggUi.page*AGG_PAGE,slice=hit.slice(from,from+AGG_PAGE);
     var h='';if(ks.length>AGG_PAGE||q)h+='<div class="agg-tools"><input type="search" class="agg-search" placeholder="搜尋鍵名／描述" value="'+esc(aggUi.q)+'"> <span class="src">'+hit.length+' 筆'+(pages>1?'，第 '+(aggUi.page+1)+'／'+pages+' 頁':'')+'</span>'+(pages>1?' <button type="button" class="agg-page" data-d="-1"'+(aggUi.page===0?' disabled':'')+'>上一頁</button> <button type="button" class="agg-page" data-d="1"'+(aggUi.page>=pages-1?' disabled':'')+'>下一頁</button>':'')+'</div>';
-    if(!ks.length)return h+'<span class="src">無自有鍵（expected_keys 為空、或只引用本 plan outputs／別 plan 的鍵）</span>';
+    if(!ks.length)return h+'<span class="src">這個聚合節點沒有鍵（自有次要鍵都已搬走）</span>';
     h+='<ul class="agg-list">'+slice.map(function(k){var st=!k.registered?'未登錄':(k.validated?'已驗證（'+(k.validated_by||[]).join('、')+'）':'未驗證');
       return '<li><code>'+esc(k.key)+'</code>：'+esc(st)+(k.evidence_owned_by?'；evidence_owned_by '+esc(k.evidence_owned_by):'')+(k.description?'<br><span class="src">'+esc(k.description)+'</span>':'')+(owner&&isActivePlan('p:'+owner)?' <button type="button" class="agg-promote" data-key="'+esc(k.key)+'" data-plan="'+esc(owner)+'"'+(serverOk?'':' disabled title="用 progress_server.py 開啟才能暫存"')+'>升為主要結果</button>':'')+'</li>';}).join('')+'</ul>';return h;}
   function renderPanel(id,up,down){
@@ -3840,7 +3835,7 @@ GRAPH_JS = """
     if(isAgg(id)){skip=['keys','n_keys','n_unregistered','n_unvalidated','cited_by_figures','validated','declared_by','result_kind','robustness_id','plan_id','evidence_owned_by','evidence_keys'];
       // 0.19.0 次要結果聚合節點：鍵全列（> 200 筆分頁＋搜尋），每鍵旁「升為主要結果」＝暫存一筆 move_result{key, to_plan:<本 plan>}
       var ownerP='p:'+String(n.meta.plan_id||'');
-      h+='<dt>父子分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span>（宣告粒度：每個敏感性子分析恰一個次要結果節點，expected_keys 中只在此宣告的鍵全列於下）</dd>';
+      h+='<dt>父子分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span>（宣告粒度：有次要鍵的敏感性子分析一個次要結果節點，expected_keys 中只在此宣告的鍵全列於下）</dd>';
       if(nodes[ownerP])h+='<dt>所屬 plan</dt><dd><span class="goto" data-goto="'+esc(ownerP)+'">'+esc(nodes[ownerP].label)+'</span></dd>';
       if(n.meta.evidence_owned_by)h+='<dt>evidence_owned_by</dt><dd>'+esc(n.meta.evidence_owned_by)+'（引用鍵 '+esc((n.meta.evidence_keys||[]).join('、')||'—')+'；那些鍵歸該 plan，不在本節點）</dd>';
       var ks=n.meta.keys||[];h+='<dt>鍵（'+ks.length+'；未登錄 '+(n.meta.n_unregistered||0)+'／未驗證 '+(n.meta.n_unvalidated||0)+'）</dt><dd id="agg-keys" data-agg="'+esc(id)+'">'+aggKeyList(id)+'</dd>';
@@ -4210,7 +4205,7 @@ GRAPH_JS = """
       if(srcA&&nodes[srcA]){var sa=nodes[srcA];entry=(sa.meta.keys||[]).filter(function(k){return k.key===p.key;})[0]||null;sa.meta.keys=(sa.meta.keys||[]).filter(function(k){return k.key!==p.key;});aggLabel(sa);if(!sa.meta.keys.length)sa.staged_gone=true;marks.push(srcA);}
       if(!r&&!entry)return marks;
       if(p.to_item||p.new_item){var par=p.to_item?('p:'+p.to_plan+'#'+p.to_item):('p:'+p.to_plan+'#S');if(!nodes[par])par=tp;var aid='r:'+par.slice(2)+'#secondary',ta=nodes[aid];
-        if(!ta)ta=spawnNode(aid,{type:'result',subtype:'secondary_group',parent:par,band:nodes[tp].band,state:'done',title:par.slice(2)+' 的次要結果（暫存預覽）',meta:{plan_id:p.to_plan,result_kind:'secondary',keys:[],n_keys:0,cited_by_figures:[],declared_by:[par],validated:true}});
+        if(!ta){ta=spawnNode(aid,{type:'result',subtype:'secondary_group',parent:par,band:nodes[tp].band,state:'done',title:par.slice(2)+' 的次要結果（暫存預覽）',meta:{plan_id:p.to_plan,result_kind:'secondary',keys:[],n_keys:0,cited_by_figures:[],declared_by:[par],validated:true}});addEdge(par,aid,'produces');}   // 目標子分析原本沒有自有次要鍵 → 沒有聚合節點，現做一個並補子分析 → 聚合的 produces 邊
         if(!entry)entry={key:p.key,registered:!!(r&&r.state==='done'),validated:!!(r&&r.meta.validated),validated_by:(r&&r.meta.validated_by)||[],declared_by:(r&&r.meta.declared_by)||[],plan_id:p.to_plan};entry.plan_id=p.to_plan;
         ta.meta.keys=(ta.meta.keys||[]).concat([entry]);ta.staged_gone=false;aggLabel(ta);if(r){r.staged_gone=true;marks.push(rid);}marks.push(aid);}
       else{if(!r){r=spawnNode(rid,{type:'result',subtype:'primary',parent:'',band:nodes[tp].band,label:p.key,badge:'主要',state:(entry&&entry.registered)?'done':'pending',title:(entry&&entry.description)||p.key,meta:{plan_id:p.to_plan,result_kind:'primary',validated:!!(entry&&entry.validated),validated_by:(entry&&entry.validated_by)||[],declared_by:[tp]}});addEdge(tp,rid,'produces');}
@@ -5088,7 +5083,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span><span class="esw thin"></span>細線＝驗證（穩健性）</span>',
         '<span><span class="st unval" style="color:var(--expired);font-weight:700">未驗證</span>＝結果沒有任何驗證邊</span>',
         '<span><span class="esw"></span>結果 → 圖表＝呈現於（depicts）；次要結果聚合節點 → 圖表一條、標「n 鍵」</span>',
-        '<span>宣告粒度（0.19.0）：每個敏感性子分析底下恰一個次要結果節點（1 鍵直接顯示鍵名、多鍵「次要結果 n 鍵」、沒自有鍵「無自有鍵」；徽章「未登錄 a／未驗證 b」），鍵全列在面板，整個節點可拖（裡面的鍵一起搬）；未宣告鍵仍逐鍵虛線</span>',
+        '<span>宣告粒度（0.19.0）：有次要鍵的敏感性子分析底下一個次要結果節點（1 鍵直接顯示鍵名、多鍵「次要結果 n 鍵」；徽章「未登錄 a／未驗證 b」；沒宣告次要鍵的子分析不建），鍵全列在面板，整個節點可拖（裡面的鍵一起搬）；未宣告鍵仍逐鍵虛線</span>',
         '<span>report.md 節點（圖表欄最後一列）：圖表 → report＝嵌入報告（embedded_in，點選才顯）；role=main 且 report.md 沒引用的圖表徽章「報告未引用」</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
         '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果），支撐結果拖到所在帶的空白處＝拉回頂層、拖到別的結果上＝換主結果；active plan 拖到另一個問題的 active plan 上＝降為它的敏感性子分析（來源整份成為 R&lt;n+1&gt;、其結果變次要、來源問題無 active plan）；圖表拖到別的帶——放開後只送收件匣，或按「加入暫存」先留在本頁、連拖多次後一次預覽套用（虛線外框＝已暫存）</span>',
@@ -5096,7 +5091,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
         '</div>',
-        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}（聚合節點 {st.get("secondary_groups", 0)}）、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}；report.md 引用 {st.get("report_cited_figures", 0)}、主圖未引用 {st.get("report_uncited_main_figures", 0)}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、問題帶 {st.get("strips", 0)}、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要逐鍵／每個子分析一個次要結果節點／未宣告逐鍵）→ 圖表（最後一列 report.md）→ 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
+        f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}（聚合節點 {st.get("secondary_groups", 0)}）、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}；report.md 引用 {st.get("report_cited_figures", 0)}、主圖未引用 {st.get("report_uncited_main_figures", 0)}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、問題帶 {st.get("strips", 0)}、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要逐鍵／有次要鍵的子分析一個次要結果節點／未宣告逐鍵）→ 圖表（最後一列 report.md）→ 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         '</section>',
