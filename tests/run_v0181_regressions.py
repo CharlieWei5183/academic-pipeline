@@ -95,12 +95,13 @@ def test_ir_strip_assignment(tmp: Path) -> None:
         'p:SQ1-v1': 'q:SQ1', 'p:SQ1-v1#S': 'q:SQ1', 'p:SQ1-v1#R1': 'q:SQ1', 'p:SQ1-v1#R2': 'q:SQ1', 'p:SQ2-v1': 'q:SQ2', 'p:SQ2-v1#S': 'q:SQ2',
         'p:AQ1-v1': 'q:AQ1', 'p:AQ1-v1#S': 'q:AQ1', 'p:AQ1-v1#R1': 'q:AQ1',
         'v:V1': 'q:SQ1', 'v:V2': 'q:SQ2', 'v:V3': 'q:AQ1',
-        'r:k1': 'q:SQ1', 'r:k2': 'q:SQ1', 'r:r1': 'q:SQ1', 'r:r2': 'q:SQ1', 'r:m1': 'q:SQ2', 'r:a1': 'q:AQ1',
+        'r:k1': 'q:SQ1', 'r:k2': 'q:SQ1', 'r:SQ1-v1#R1#secondary': 'q:SQ1', 'r:SQ1-v1#R2#secondary': 'q:SQ1', 'r:m1': 'q:SQ2', 'r:a1': 'q:AQ1',
+        'r:SQ2-v1#R1#secondary': 'q:SQ2', 'r:AQ1-v1#R1#secondary': 'q:AQ1', 'o:report': '',   # 0.19.0：次要結果改為每個子分析一個聚合節點、report 節點在孤兒帶
         'f:F_a': 'q:SQ1', 'f:F_b': 'q:SQ2', 'f:F_c': '', 'f:F_shared': 'q:SQ1', 'f:F_aq': 'q:AQ1',
     }
     for nid, s in expect.items():
         assert by[nid]['strip'] == s, (nid, by[nid]['strip'], s)
-    assert by['r:r1']['subtype'] == 'secondary' and by['r:r1']['parent'] == 'p:SQ1-v1#R1'   # 次要結果跟子分析
+    assert by['r:SQ1-v1#R1#secondary']['subtype'] == 'secondary_group' and by['r:SQ1-v1#R1#secondary']['parent'] == 'p:SQ1-v1#R1'   # 次要結果（0.19.0 聚合節點）跟子分析
     assert by['f:F_b']['band'] == 'ext' and by['f:F_aq']['band'] == 'ext'                   # 問題節點在別帶：各成一條帶（ext 帶只有圖表）
     for nid, n in by.items():
         if n['type'] == 'decision':
@@ -295,12 +296,13 @@ console.log(JSON.stringify(out));
     # 0.17.2 的規則：anchor 在別的區帶就不跟——k1 搬去 supp，留在 Main 帶的 F_a 不動、strip 仍 q:SQ1
     assert o['mr']['r:k1'] == ['supp', 'q:AQ1'] and o['mr']['f:F_a'] == ['main', 'q:SQ1'] and o['mr']['r:k2'] == ['main', 'q:SQ1'], o['mr']
     assert o['mrOrder']['main'] == ['q:SQ1', 'q:SQ2', ''] and o['mrOrder']['supp'] == ['q:AQ1', 'q:AQ2'], o['mrOrder']
-    assert o['ms']['p:SQ1-v1#R1'] == ['main', 'q:SQ2'] and o['ms']['r:r1'] == ['main', 'q:SQ2'] and o['ms']['p:SQ1-v1#R2'] == ['main', 'q:SQ1'], o['ms']
+    assert o['ms']['p:SQ1-v1#R1'] == ['main', 'q:SQ2'] and o['ms']['r:SQ1-v1#R1#secondary'] == ['main', 'q:SQ2'] and o['ms']['p:SQ1-v1#R2'] == ['main', 'q:SQ1'], o['ms']
     for nid in ('p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1', 'r:a1', 'v:V3'):
         assert o['mp'][nid] == ['main', 'q:SQ2'], (nid, o['mp'][nid])
     assert o['mp']['f:F_aq'] == ['ext', 'q:AQ1'], o['mp']['f:F_aq']   # manifest 定 role 的圖表留在 ext、strip 不動
     assert o['mpOrder']['supp'] == ['q:AQ1', 'q:AQ2'] and o['mpOrder']['main'] == ['q:SQ1', 'q:SQ2', ''] and o['mpOrder']['ext'] == ['q:SQ2', 'q:AQ1'], o['mpOrder']
-    assert o['dp']['p:AQ1-v1'] == ['main', 'q:SQ1'] and o['dp']['r:a1'] == ['main', 'q:SQ1'] and o['dp']['p:AQ1-v1#R1'] == ['main', 'q:SQ1'], o['dp']
+    # 0.19.0：降階後來源 plan 的主要結果進聚合節點 r:AQ1-v1#secondary（跟目標帶）、逐鍵節點 r:a1 消失（staged_gone，帶不動）
+    assert o['dp']['p:AQ1-v1'] == ['main', 'q:SQ1'] and o['dp']['r:AQ1-v1#secondary'] == ['main', 'q:SQ1'] and o['dp']['p:AQ1-v1#R1'] == ['main', 'q:SQ1'], o['dp']
     assert o['nest'] == o['base'], 'nest_result 不該改 strip'
     assert o['ro']['main'] == ['q:SQ2', 'q:SQ1', ''], o['ro']
     assert o['same'] is True

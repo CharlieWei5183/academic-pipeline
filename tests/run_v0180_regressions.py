@@ -88,7 +88,7 @@ def test_ir_groups(tmp: Path) -> None:
     assert by['p:SQ1-v1']['badge'] == '敏感性 2' and by['p:SQ2-v1']['badge'] == '敏感性 1' and by['p:AQ1-v1']['badge'] == '敏感性 1'
     assert by['p:SQ1-v1#S']['badge'] == '2 項' and by['p:SQ1-v1#R1']['y'] == by['p:SQ1-v1#S']['y'] + rp.ROW_GAP and by['p:SQ1-v1#R2']['y'] == by['p:SQ1-v1#S']['y'] + 2 * rp.ROW_GAP
     # 次要結果跟子分析（即跟 plan）：r1／r2 在 main、a1 是 AQ1 的主要結果在 supp
-    assert by['r:r1']['band'] == 'main' and by['r:r1']['parent'] == 'p:SQ1-v1#R1' and by['r:r2']['band'] == 'main' and by['r:a1']['band'] == 'supp'
+    assert by['r:SQ1-v1#R1#secondary']['band'] == 'main' and by['r:SQ1-v1#R1#secondary']['parent'] == 'p:SQ1-v1#R1' and by['r:SQ1-v1#R2#secondary']['band'] == 'main' and by['r:a1']['band'] == 'supp'   # 0.19.0 聚合節點
     assert not [e for e in g['edges'] if e['type'] == 'supplements'] and 'supplements' in {t['id'] for t in g['edge_types']}   # 型別保留、邊不出
     assert g['stats']['crossings'] == 0 and g['stats']['edge_node_overlaps'] == 0, g['stats']
     assert g['stats']['band_main_nodes'] == sum(1 for n in g['nodes'] if n['band'] == 'main') and g['stats']['sensitivity_groups'] == 3
@@ -123,7 +123,7 @@ def test_ir_groups(tmp: Path) -> None:
     assert any('敏感性分析群須與所屬 plan' in e for e in errs), errs
     errs = mutate(lambda b, by_, ed: by_['p:SQ1-v1#R1'].update(band='supp'))
     assert any('子分析須與群' in e for e in errs), errs
-    errs = mutate(lambda b, by_, ed: by_['r:r1'].update(band='supp'))
+    errs = mutate(lambda b, by_, ed: by_['r:SQ1-v1#R1#secondary'].update(band='supp'))
     assert any('次要結果須與子分析' in e for e in errs), errs
     errs = mutate(lambda b, by_, ed: ed[('p:SQ1-v1', 'p:SQ1-v1#S', 'sensitivity')].update(type='supplements'))
     assert any('supplements 已停用' in e for e in errs) and 'IR-13 graph.nodes[p:SQ1-v1#S].sensitivity（plan → 群）' in errs, errs
@@ -138,7 +138,7 @@ def test_ir_groups(tmp: Path) -> None:
     if node:
         js = _js_of(html)
         harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var boxDec={checked:false},boxOld={checked:false},expanded={},currentOf={};'
-                   'var nestHidden={};\n%s\nvar ids=["p:SQ1-v1","p:SQ1-v1#S","p:SQ1-v1#R1","r:r1","p:SQ2-v1#S","r:k1"];'
+                   'var nestHidden={};\n%s\nvar ids=["p:SQ1-v1","p:SQ1-v1#S","p:SQ1-v1#R1","r:SQ1-v1#R1#secondary","p:SQ2-v1#S","r:k1"];'
                    'var a=ids.map(nodeVisible);nestHidden["p:SQ1-v1"]=true;var b=ids.map(nodeVisible);nestHidden["p:SQ1-v1"]=false;var c=ids.map(nodeVisible);'
                    'console.log(JSON.stringify([a,b,c]));' % (json.dumps(g, ensure_ascii=False), _js_fn(js, 'nodeVisible')))
         proc = subprocess.run([node, '-e', harness], capture_output=True, text=True)
@@ -219,7 +219,10 @@ def test_demote_apply(tmp: Path) -> Path:
     # IR：a1 掛在 SQ1-v2#R3 之下、次要、main 帶；AQ1-v1 收合；SQ1-v2 徽章
     g = graph(root)
     by = {n['id']: n for n in g['nodes']}
-    assert by['r:a1']['parent'] == 'p:SQ1-v2#R3' and by['r:a1']['subtype'] == 'secondary' and by['r:a1']['band'] == 'main' and by['r:a1']['meta']['result_kind'] == 'secondary'
+    # 0.19.0 宣告粒度：a1 不再是逐鍵節點，進 SQ1-v2#R3 底下唯一的聚合節點（1 鍵 → label 即鍵名）
+    agg = by['r:SQ1-v2#R3#secondary']
+    assert 'r:a1' not in by and agg['parent'] == 'p:SQ1-v2#R3' and agg['subtype'] == 'secondary_group' and agg['band'] == 'main' and agg['meta']['result_kind'] == 'secondary'
+    assert agg['label'] == 'a1' and [k['key'] for k in agg['meta']['keys']] == ['a1'] and agg['state'] == 'done', agg
     assert by['p:SQ1-v2']['badge'] == 'v2（1 舊版）｜敏感性 4' and by['p:SQ1-v2#S']['badge'] == '4 項' and by['p:SQ1-v2#R4']['parent'] == 'p:SQ1-v2#S'
     assert by['p:AQ1-v1']['collapsed'] is True and by['q:AQ1']['state'] == 'blocked' and 'p:AQ1-v1#S' in by and by['p:AQ1-v1#S']['collapsed'] is True
     assert rp.validate_ir(json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
@@ -355,14 +358,14 @@ def test_frontend(tmp: Path) -> None:
     assert r1['ok'] is False and '同一問題的兩份 plan 不能互降' in r1['reason'], r1
     assert r2['ok'] is False and '不是 active plan（舊版）' in r2['reason'], r2
     # applyOptimistic('demote_plan')：來源 plan 變成目標群下的子分析、其結果變次要、其群隱藏、子分析改掛目標群、來源問題徽章
-    parts2 = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'anchorOf', 'snapOrder0', 'nextAqStaged', 'applyOptimistic'))
+    parts2 = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'anchorOf', 'snapOrder0', 'nextAqStaged', 'applyOptimistic', 'isAgg', 'aggKeys', 'aggOfKey', 'aggLabel', 'spawnNode', 'makeNodeEl'))   # 0.19.0：聚合節點輔助函式
     for name in ('ROLE_BAND', 'DOWN_TYPES'):
         i = js.index('var ' + name + '=')
         parts2 = js[i:js.index('\n', i)] + '\n' + parts2
     script = ('var G=' + json.dumps(g, ensure_ascii=False) + ';\n' + T7._NODE_STUB + parts2 + r"""
 var out={};out.m=applyOptimistic('demote_plan',{plan:'AQ1-v1',to_plan:'SQ1-v1'});
 var n=function(id){var x=nodes[id];return {parent:x.parent||'',band:x.band,subtype:x.subtype||'',x:x.x,gone:!!x.staged_gone,badge:x.badge||''};};
-out.src=n('p:AQ1-v1');out.a1=n('r:a1');out.sg=n('p:AQ1-v1#S');out.r1=n('p:AQ1-v1#R1');out.q=n('q:AQ1');out.rk=nodes['r:a1'].meta.result_kind;
+out.src=n('p:AQ1-v1');out.a1=n('r:a1');out.agg=n('r:AQ1-v1#secondary');out.aggKeys=nodes['r:AQ1-v1#secondary'].meta.keys.map(function(k){return k.key;});out.aggLabel=nodes['r:AQ1-v1#secondary'].label;out.sg=n('p:AQ1-v1#S');out.r1=n('p:AQ1-v1#R1');out.q=n('q:AQ1');out.rk=nodes['r:AQ1-v1#secondary'].meta.result_kind;
 out.sens=G.edges.filter(function(e){return e.type==='sensitivity'&&e.to==='p:AQ1-v1';}).map(function(e){return [e.from,e.default_visible];});
 out.plans=G.edges.filter(function(e){return e.type==='plans'&&e.to==='p:AQ1-v1';}).map(function(e){return e.default_visible;});
 out.r1edge=G.edges.filter(function(e){return e.type==='sensitivity'&&e.to==='p:AQ1-v1#R1';}).map(function(e){return e.from;});
@@ -374,9 +377,11 @@ console.log(JSON.stringify(out));
     proc = subprocess.run([node, str(js2)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-2000:]
     o = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert set(o['m']) >= {'p:AQ1-v1', 'r:a1', 'q:AQ1', 'p:AQ1-v1#R1'}, o['m']
+    assert set(o['m']) >= {'p:AQ1-v1', 'r:a1', 'q:AQ1', 'p:AQ1-v1#R1', 'r:AQ1-v1#secondary'}, o['m']
     assert o['src'] == {'parent': 'p:SQ1-v1#S', 'band': 'main', 'subtype': 'sensitivity', 'x': 20 + 2 * 380 + 48, 'gone': False, 'badge': '敏感性 1'}, o['src']
-    assert o['a1'] == {'parent': 'p:AQ1-v1', 'band': 'main', 'subtype': 'secondary', 'x': 20 + 4 * 380 + 24, 'gone': False, 'badge': '主要'} and o['rk'] == 'secondary', o['a1']
+    # 0.19.0：來源 plan 的主要結果 a1 進一個聚合節點 r:AQ1-v1#secondary（parent＝來源 plan 節點、縮排 24、跟目標帶），逐鍵節點 r:a1 消失
+    assert o['a1']['gone'] is True and o['agg'] == {'parent': 'p:AQ1-v1', 'band': 'main', 'subtype': 'secondary_group', 'x': 20 + 4 * 380 + 24, 'gone': False, 'badge': ''} and o['rk'] == 'secondary', o
+    assert o['aggKeys'] == ['a1'] and o['aggLabel'] == 'a1', o
     assert o['sg']['gone'] is True and o['r1']['parent'] == 'p:SQ1-v1#S' and o['r1']['band'] == 'main' and o['r1edge'] == ['p:SQ1-v1#S'], o
     assert o['q']['badge'] == '無 active plan' and o['sens'] == [['p:SQ1-v1#S', True]] and o['plans'] == [False] and o['gk'][-1] == 'p:AQ1-v1', o
 
@@ -392,7 +397,7 @@ def test_headless(tmp: Path) -> bool:
     daily = tmp / 'daily_headless_180.md'
     srv, port = _server(root, allow_apply=True, daily_log=str(daily))
     ws = T3._WS(wsurl)
-    state_js = ("JSON.stringify({src:window.__apNode('p:AQ1-v1'),grp:window.__apNode('p:SQ1-v1#S'),r2:window.__apNode('p:SQ1-v1#R2'),a1:window.__apNode('r:a1'),"
+    state_js = ("JSON.stringify({src:window.__apNode('p:AQ1-v1'),grp:window.__apNode('p:SQ1-v1#S'),r2:window.__apNode('p:SQ1-v1#R2'),a1:window.__apNode('r:a1'),agg:window.__apNode('r:AQ1-v1#secondary'),agg3:window.__apNode('r:SQ1-v2#R3#secondary'),"
                 "n:document.getElementById('staged-count').textContent,staged:window.__apStaged(),ap:document.getElementById('staged-apply').disabled,"
                 "toast:document.getElementById('toast').textContent,"
                 "srcW:+document.querySelector('.gnode[data-node-id=\"p:AQ1-v1\"] rect.box').getAttribute('width'),"
@@ -409,7 +414,7 @@ def test_headless(tmp: Path) -> bool:
         assert s1['n'] == '1' and s1['staged'] == [{'kind': 'demote_plan', 'payload': {'plan': 'AQ1-v1', 'to_plan': 'SQ1-v1'}, 'reason': ''}], s1['staged']
         assert s1['src']['parent'] == 'p:SQ1-v1#S' and s1['src']['subtype'] == 'sensitivity' and s1['src']['band'] == 'main' and s1['src']['staged'] is True, s1['src']
         assert s1['src']['x'] == s1['grp']['x'] + 24 and s1['src']['y'] == s1['r2']['y'] + 48 and s1['srcW'] == 260 - 48, s1   # 縮排在目標群下、接在 R2 之後、框寬跟著縮
-        assert s1['a1']['parent'] == 'p:AQ1-v1' and s1['a1']['subtype'] == 'secondary' and s1['a1']['band'] == 'main' and s1['gone'] is True and s1['qBadge'] == '無 active plan', s1
+        assert s1['a1']['gone'] is True and s1['agg']['parent'] == 'p:AQ1-v1' and s1['agg']['subtype'] == 'secondary_group' and s1['agg']['band'] == 'main' and s1['agg']['keys'] == ['a1'] and s1['agg']['label'] == 'a1' and s1['gone'] is True and s1['qBadge'] == '無 active plan', s1   # 0.19.0 聚合節點
         assert s1['toast'].startswith('已暫存：降為敏感性子分析：AQ1-v1 → SQ1-v1'), s1['toast']
         ws.eval("document.getElementById('staged-preview').click();'ok'")
         summ = T3._wait(ws, "document.getElementById('staged-summary').textContent", lambda v: v and ('token:' in v or 'BLOCKER' in v or '失敗' in v), timeout=180)
@@ -419,7 +424,7 @@ def test_headless(tmp: Path) -> bool:
         ws.eval("document.getElementById('staged-apply').click();'ok'")
         T71._wait_page(ws, timeout=240)
         s2 = state()
-        assert s2['n'] == '0' and s2['a1']['parent'] == 'p:SQ1-v2#R3' and s2['a1']['subtype'] == 'secondary' and s2['a1']['band'] == 'main' and s2['a1']['staged'] is False, s2
+        assert s2['n'] == '0' and s2['a1'] is None and s2['agg3']['parent'] == 'p:SQ1-v2#R3' and s2['agg3']['subtype'] == 'secondary_group' and s2['agg3']['band'] == 'main' and s2['agg3']['keys'] == ['a1'] and s2['agg3']['staged'] is False, s2   # 0.19.0 套用後 a1 在 SQ1-v2#R3 的聚合節點
         assert decision(root, 'D-003')['method'].startswith('demote_plan.py') and plan_common.load_index(root)['active'] == {'SQ1': 'SQ1-v2', 'SQ2': 'SQ2-v1'}
         assert inbox_status(root)['IN-002'][0] == 'done'
         # 面板：plan 節點「收合敏感性分析」→ 群與子分析隱藏
@@ -428,7 +433,7 @@ def test_headless(tmp: Path) -> bool:
         ws.eval("document.querySelector('#gdetail-body .expand[data-nest=\"p:SQ1-v2\"]').click();'ok'")
         assert ws.eval("document.querySelector('.gnode[data-node-id=\"p:SQ1-v2#S\"]').classList.contains('gone')") is True
         assert ws.eval("document.querySelector('.gnode[data-node-id=\"p:SQ1-v2#R3\"]').classList.contains('gone')") is True
-        assert ws.eval("document.querySelector('.gnode[data-node-id=\"r:a1\"]').classList.contains('gone')") is True
+        assert ws.eval("document.querySelector('.gnode[data-node-id=\"r:SQ1-v2#R3#secondary\"]').classList.contains('gone')") is True   # 0.19.0 聚合節點跟著收合
         ws.eval("document.querySelector('#gdetail-body .expand[data-nest=\"p:SQ1-v2\"]').click();'ok'")
         assert ws.eval("document.querySelector('.gnode[data-node-id=\"p:SQ1-v2#S\"]').classList.contains('gone')") is False
         return True

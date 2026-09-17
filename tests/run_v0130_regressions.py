@@ -169,7 +169,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         nodes = {n["id"]: n for n in g["nodes"]}
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by", "primary",
-                                                       "robustness", "produces", "depicts", "cites", "refers", "supports"]   # v0.14.0 加 supplements、v0.16.5 加 supports
+                                                       "robustness", "produces", "depicts", "cites", "refers", "supports", "embedded_in"]   # v0.14.0 加 supplements、v0.16.5 加 supports
         labels = {t["id"]: t["label"] for t in g["edge_types"]}
         assert labels["sensitivity"] == "敏感性" and labels["produces"] == "產出" and labels["primary"] == "驗證（主要）" and labels["robustness"] == "驗證（穩健性）"
         # 子節點：type method、subtype sensitivity、parent、label／title／meta
@@ -193,18 +193,27 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         old_sub = nodes["p:SQ1-v1#R1"]
         assert old_sub["state"] == "expired" and old_sub["collapsed"] is True and old_sub["y"] == nodes["p:SQ1-v2#S"]["y"]   # v0.14.0：借現行版的群
         assert nodes["p:SQ1-v1"]["collapsed"] is True and nodes["p:SQ1-v1"]["meta"]["sensitivity_ids"] == ["p:SQ1-v1#R1"]
-        # 結果分類：k1／k2 主要（k2 也在 R1 expected）、k4 次要、k5 未宣告、k3 主要、k6／k7 次要（k7 未登錄）
-        kinds = {k: nodes[f"r:{k}"]["meta"]["result_kind"] for k in ("k1", "k2", "k3", "k4", "k5", "k6", "k7")}
-        assert kinds == {"k1": "primary", "k2": "primary", "k3": "primary", "k4": "secondary", "k5": "undeclared", "k6": "secondary", "k7": "secondary"}, kinds
-        badges = {k: nodes[f"r:{k}"]["badge"] for k in ("k1", "k4", "k5")}
-        assert badges == {"k1": "主要", "k4": "次要", "k5": "未宣告"}, badges
-        assert nodes["r:k2"]["meta"]["declared_by"] == ["p:SQ1-v2", "p:SQ1-v2#R1"] and nodes["r:k4"]["meta"]["declared_by"] == ["p:SQ1-v2#R2"]
+        # 結果分類：k1／k2 主要（k2 也在 R1 expected）、k5 未宣告、k3 主要；k4、k6／k7 次要（k7 未登錄）——0.19.0 宣告粒度：次要鍵不逐鍵建節點，
+        # 改進宣告它的子分析底下唯一的聚合節點（R2 → k4 一鍵、R3 → k6／k7 兩鍵）；只有主要鍵的 R1 也各有一個空聚合節點
+        kinds = {k: nodes[f"r:{k}"]["meta"]["result_kind"] for k in ("k1", "k2", "k3", "k5")}
+        assert kinds == {"k1": "primary", "k2": "primary", "k3": "primary", "k5": "undeclared"}, kinds
+        assert not any(f"r:{k}" in nodes for k in ("k4", "k6", "k7")), "0.19.0：次要鍵不再逐鍵建節點"
+        A21, A22, A23 = (nodes[f"r:SQ1-v2#R{i}#secondary"] for i in (1, 2, 3))
+        A11 = nodes["r:SQ1-v1#R1#secondary"]
+        assert A22["label"] == "k4" and A22["badge"] == "" and A22["state"] == "done" and A22["parent"] == "p:SQ1-v2#R2" and A22["subtype"] == "secondary_group"
+        assert A23["label"] == "次要結果 2 鍵" and A23["badge"] == "未登錄 1／未驗證 1" and A23["state"] == "pending" and A23["parent"] == "p:SQ1-v2#R3"
+        assert A21["label"] == "無自有鍵" and A21["state"] == "pending" and A11["label"] == "無自有鍵" and A11["state"] == "expired" and A11["collapsed"] is True
+        badges = {k: nodes[f"r:{k}"]["badge"] for k in ("k1", "k5")}
+        assert badges == {"k1": "主要", "k5": "未宣告"}, badges
+        assert nodes["r:k2"]["meta"]["declared_by"] == ["p:SQ1-v2", "p:SQ1-v2#R1"] and [k["declared_by"] for k in A22["meta"]["keys"]] == [["p:SQ1-v2#R2"]]
         assert nodes["r:k5"]["meta"]["declared_by"] == [] and nodes["r:k1"]["meta"]["declared_by"] == ["p:SQ1-v1", "p:SQ1-v1#R1", "p:SQ1-v2"]
-        assert nodes["r:k7"]["state"] == "pending" and nodes["r:k7"]["title"] == "已宣告、results.json 尚無此鍵"
-        # 驗證標記獨立：k1 主要驗證、k4 穩健性驗證、其餘未驗證
+        k6e, k7e = A23["meta"]["keys"]
+        assert k6e["key"] == "k6" and k6e["registered"] is True and k6e["validated"] is False and k7e == {"key": "k7", "registered": False, "validated": False, "validated_by": [], "validation_kind": "", "declared_by": ["p:SQ1-v2#R3"], "plan_id": ""}, A23["meta"]["keys"]
+        assert A23["meta"]["n_keys"] == 2 and A23["meta"]["n_unregistered"] == 1 and A23["meta"]["n_unvalidated"] == 1 and A23["meta"]["result_kind"] == "secondary"
+        # 驗證標記獨立：k1 主要驗證、k4 穩健性驗證（聚合節點 meta.keys）、其餘未驗證
         assert nodes["r:k1"]["meta"]["validated"] is True and nodes["r:k1"]["meta"]["validation_kind"] == "primary"
-        assert nodes["r:k4"]["meta"]["validated"] is True and nodes["r:k4"]["meta"]["validation_kind"] == "robustness"
-        for k in ("k2", "k3", "k5", "k6"):
+        assert A22["meta"]["keys"][0]["validated"] is True and A22["meta"]["keys"][0]["validation_kind"] == "robustness" and A22["meta"]["validated"] is True
+        for k in ("k2", "k3", "k5"):
             assert nodes[f"r:{k}"]["meta"]["validated"] is False and nodes[f"r:{k}"]["meta"]["validation_kind"] == "", k
         assert "primary" not in nodes["r:k1"]["meta"], "舊的 meta.primary 布林已由 result_kind 取代"
         # 邊：父→子 sensitivity；每個分析有產出都連到結果（visible、solid）；未宣告 dashed；舊版 hidden
@@ -221,17 +230,18 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         ev(("p:SQ1-v2", "r:k1", "produces"), False, "solid", "")   # v0.15.0：p → V1 → k1 已覆蓋，遞移隱藏（IR 保留）
         ev(("p:SQ1-v2", "r:k2", "produces"), True, "solid", "")    # k2 沒有可見驗證邊覆蓋（V1 只驗 k1／k4）→ 維持可見
         ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")   # v0.14.0：子分析 → 主要結果預設不畫（v0.15.0 起不分區帶）
-        ev(("p:SQ1-v2#R2", "r:k4", "produces"), True, "solid", "")
-        ev(("p:SQ1-v2#R3", "r:k6", "produces"), True, "solid", "")
-        ev(("p:SQ1-v2#R3", "r:k7", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R2", "r:SQ1-v2#R2#secondary", "produces"), True, "solid", "")   # 0.19.0：子分析 → 聚合節點一條
+        ev(("p:SQ1-v2#R3", "r:SQ1-v2#R3#secondary", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R1", "r:SQ1-v2#R1#secondary", "produces"), False, "solid", "")   # 沒自有鍵的聚合節點：產出邊預設不畫
+        assert not any(t == "produces" and to in ("r:k4", "r:k6", "r:k7") for _, to, t in edges), "0.19.0：不再有逐鍵的次要 produces 邊"
         ev(("p:SQ1-v2", "r:k5", "produces"), True, "dashed", "未宣告")
         ev(("p:SQ2-v1", "r:k3", "produces"), True, "solid", "")
         ev(("p:SQ1-v1", "r:k1", "produces"), False, "solid", "")
         ev(("p:SQ1-v1#R1", "r:k1", "produces"), False, "solid", "")
-        assert ("p:SQ1-v2", "r:k4", "produces") not in edges, "次要鍵只由子分析連出，主節點不直接連"
+        assert ("p:SQ1-v2", "r:SQ1-v2#R2#secondary", "produces") not in edges, "次要鍵只由子分析連出，主節點不直接連"
         ev(("p:SQ1-v2", "v:V1", "validated_by"), True, "solid", "驗證")
         ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
-        ev(("v:V1", "r:k4", "robustness"), True, "thin", "驗證（穩健性）")   # v0.18.0：次要結果跟 plan 回 main，與驗證同區帶 → 預設畫出
+        ev(("v:V1", "r:SQ1-v2#R2#secondary", "robustness"), True, "thin", "驗證（穩健性）1 鍵")   # v0.18.0：次要結果跟 plan 回 main，與驗證同區帶 → 預設畫出；0.19.0 指聚合節點、label 記鍵數
         # 列序（v0.14.0：order 為每 (band, col) 內的整數序；方法欄 main 區帶＝plan、supp 區帶＝群緊接其子節點；
         # 結果欄 main 區帶 k1 < k2 < k5 < k3、supp 區帶 k4 < k6 < k7，各自 y 連續；main 從 48 起、supp 從 main_bottom + 40 + 28 起）
         order = {n["id"]: n["order"] for n in g["nodes"]}
@@ -242,10 +252,10 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         assert y0 == 20 and [y[i] for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ1-v2#R3")] == [y0 + 48 * i for i in range(1, 5)], y   # 沒有 supp 節點 → main 從 GRAPH_PAD 起
         assert y["p:SQ2-v1"] == y0 + 6 * 48 + 48 == y["q:SQ2"], y   # v0.18.1（STRIP_GAP = 48）：SQ2 的問題帶接在 SQ1 的帶（結果欄 6 列最高）之後、留 STRIP_GAP
         assert nodes["p:SQ1-v2#S"]["x"] == nodes["p:SQ1-v2"]["x"] + 24 and nodes["p:SQ1-v2#R1"]["x"] == nodes["p:SQ1-v2"]["x"] + 48 and nodes["p:SQ1-v2"]["x"] == nodes["p:SQ2-v1"]["x"]
-        assert all(nodes[i]["band"] == "main" for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "r:k4", "r:k6", "r:k7")), "v0.18.0：群、子分析、次要結果跟 plan 的區帶"
-        assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}   # 次要結果與宣告它的子分析同列（barycenter）
-        ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main")
-        assert ry == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]], ry   # v0.18.1：SQ1 帶六個結果連續、k3 在 SQ2 帶首列
+        assert all(nodes[i]["band"] == "main" for i in ("p:SQ1-v2#S", "p:SQ1-v2#R1", "r:SQ1-v2#R1#secondary", "r:SQ1-v2#R2#secondary", "r:SQ1-v2#R3#secondary")), "v0.18.0：群、子分析、次要結果跟 plan 的區帶"
+        assert y["r:SQ1-v2#R1#secondary"] < y["r:SQ1-v2#R2#secondary"] < y["r:SQ1-v2#R3#secondary"] and g["stats"]["crossings"] == 0, {k: v for k, v in y.items() if k.startswith("r:")}   # 聚合節點依 R 序；列由 barycenter 定（0.19.0 多一個空聚合節點後不再與子分析同列，但交叉仍 0）
+        ry = sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main" and not n["collapsed"])   # 0.19.0：舊版 SQ1-v1#R1 的空聚合節點收合、借列，不計
+        assert ry == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]], ry   # v0.18.1：SQ1 帶六個結果（k1／k2／三個聚合節點／k5）連續、k3 在 SQ2 帶首列
         assert not [n for n in g["nodes"] if n["type"] == "result" and n["band"] == "supp"]
         # stats
         st = g["stats"]
@@ -253,7 +263,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         assert st["unvalidated_result_keys"] == 4, st   # k2、k3、k5、k6（k7 不在 results.json）
         rc, out, err = run(root)
         assert rc == 0, out + err
-        assert "次要 2、未宣告 1、敏感性子分析 4 項、" in out, out
+        assert "次要 2（聚合節點 4）、未宣告 1、敏感性子分析 4 項、" in out, out   # 0.19.0：聚合節點數（SQ1-v1#R1、SQ1-v2#R1～R3）
         # 把 k4 從 results.json 拿掉 → R2 pending（無徽章）、k4 節點 pending、次要計數少 1
         results = dict(RESULTS)
         del results["k4"]
@@ -261,7 +271,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         g2 = graph_of(root)
         n2 = {n["id"]: n for n in g2["nodes"]}
         assert n2["p:SQ1-v2#R2"]["state"] == "pending" and n2["p:SQ1-v2#R2"]["badge"] == "" and n2["p:SQ1-v2#R2"]["meta"]["registered_keys"] == []
-        assert n2["r:k4"]["state"] == "pending" and n2["r:k4"]["meta"]["result_kind"] == "secondary" and n2["r:k4"]["badge"] == "次要"
+        assert n2["r:SQ1-v2#R2#secondary"]["state"] == "pending" and n2["r:SQ1-v2#R2#secondary"]["badge"] == "未登錄 1" and n2["r:SQ1-v2#R2#secondary"]["label"] == "k4"   # 0.19.0：聚合節點 pending、徽章「未登錄 1」
         assert g2["stats"]["secondary_result_keys"] == 1 and g2["stats"]["sensitivity_items"] == 4
 
 
@@ -290,7 +300,7 @@ def test_html_subnodes() -> None:
         m3 = re.search(r'data-node-id="p:SQ1-v2#S"[^>]*transform="translate\((\d+),(\d+)\)"', html_text)
         assert m3 and d.startswith(f"M{int(m3.group(1)) + 12},{int(m3.group(2)) + 36} L{int(m3.group(1)) + 12},"), d
         # 未驗證小標只在未驗證的結果節點上：k2、k3、k5、k6、k7（k1 主要驗證、k4 穩健性驗證）
-        assert html_text.count('<text class="st unval"') == 5, html_text.count('<text class="st unval"')
+        assert html_text.count('<text class="st unval"') == 3, html_text.count('<text class="st unval"')   # k2／k3／k5（0.19.0：k6／k7 在聚合節點，以徽章「未登錄 1／未驗證 1」呈現，不出紅字）
         for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text
         parser = TagBalance()
@@ -310,7 +320,7 @@ def test_main_question_own_column() -> None:
         assert main["type"] == "question" and main["col"] == 0 and all(q["col"] == 1 for q in qs)
         assert all(main["x"] < q["x"] for q in qs) and len({q["x"] for q in qs}) == 1, "主問題在更左一欄、SQ／AQ 同 x"
         assert nodes["p:SQ1-v2"]["col"] == 2 and nodes["v:V1"]["col"] == 3 and nodes["r:k1"]["col"] == 4
-        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"], "node_types 不變"
+        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision", "report"]   # 0.19.0 加 report, "node_types 不變"
         assert g["stats"]["by_type"]["question"] == 3, "q:main 仍算 question"
         # 居中：在 SQ／AQ 欄第一筆與最後一筆的中間
         ys = sorted(q["y"] for q in qs)
@@ -485,10 +495,11 @@ def test_secondary_results_are_children() -> None:
         assert rc == 0, out + err
         g = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
         nodes = {n["id"]: n for n in g["nodes"]}
-        k1, k2, k4, k5, k6, k7 = (nodes[f"r:{k}"] for k in ("k1", "k2", "k4", "k5", "k6", "k7"))
-        # 次要結果＝子項：subtype secondary、parent＝宣告它的子分析、縮排 24、寬減 24（HTML）
-        assert k4["subtype"] == "secondary" and k4["parent"] == "p:SQ1-v2#R2" and k4["collapsed"] is False
-        assert k6["subtype"] == "secondary" and k6["parent"] == "p:SQ1-v2#R3" and k7["parent"] == "p:SQ1-v2#R3"
+        A22, A23 = "r:SQ1-v2#R2#secondary", "r:SQ1-v2#R3#secondary"   # 0.19.0：次要結果＝每個子分析一個聚合節點（k4 → R2；k6／k7 → R3）
+        k1, k2, k4, k5, k6 = (nodes[k] for k in ("r:k1", "r:k2", A22, "r:k5", A23))
+        # 次要結果聚合節點＝子項：subtype secondary_group、parent＝宣告它的子分析、縮排 24、寬減 24（HTML）
+        assert k4["subtype"] == "secondary_group" and k4["parent"] == "p:SQ1-v2#R2" and k4["collapsed"] is False
+        assert k6["subtype"] == "secondary_group" and k6["parent"] == "p:SQ1-v2#R3" and [k["key"] for k in k6["meta"]["keys"]] == ["k6", "k7"]
         assert k4["x"] == k1["x"] + 24 and k6["x"] == k1["x"] + 24
         # 主要／未宣告維持頂層
         assert k1["subtype"] == "primary" and k2["subtype"] == "primary" and k5["subtype"] == "undeclared"
@@ -496,13 +507,13 @@ def test_secondary_results_are_children() -> None:
         assert nodes["r:k3"]["subtype"] == "primary" and nodes["r:k3"]["parent"] == ""
         # 列序（v0.18.0：次要結果跟 plan 回 main 區帶）：主要 k1 k2 → R2 的 k4 → R3 的 k6 k7 → 未宣告 k5；y 連續
         y = {n["id"]: n["y"] for n in g["nodes"]}
-        assert y["r:k4"] < y["r:k6"] < y["r:k7"] and y["r:k4"] == y["p:SQ1-v2#R2"] and y["r:k6"] == y["p:SQ1-v2#R3"], {k: v for k, v in y.items() if k.startswith("r:")}
-        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main") == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]]   # v0.18.1：k3 在 SQ2 的帶
-        # 產出邊仍由子分析連到次要結果；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
+        assert y[A22] < y[A23] and g["stats"]["crossings"] == 0, {k: v for k, v in y.items() if k.startswith("r:")}   # 0.19.0：列由 barycenter 定，只驗 R 序與零交叉
+        assert sorted(n["y"] for n in g["nodes"] if n["type"] == "result" and n["band"] == "main" and not n["collapsed"]) == [20 + 48 * i for i in range(6)] + [y["p:SQ2-v1"]]   # v0.18.1：k3 在 SQ2 的帶；0.19.0 不計收合的舊版聚合節點
+        # 產出邊仍由子分析連到次要結果（聚合節點）；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
         edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
-        assert ("p:SQ1-v2#R2", "r:k4", "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
+        assert ("p:SQ1-v2#R2", A22, "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
         html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        mk4 = re.search(r'data-node-id="r:k4"[^>]*data-parent="p:SQ1-v2#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
+        mk4 = re.search(r'data-node-id="r:SQ1-v2#R2#secondary"[^>]*data-parent="p:SQ1-v2#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         mk1 = re.search(r'data-node-id="r:k1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         assert mk4 and mk1 and int(mk4.group(1)) == int(mk1.group(1)) + 24 and int(mk4.group(3)) == int(mk1.group(3)) - 24, (mk4, mk1)
         assert 'class="gnode t-result s-done sub"' in html_text and "縮排子節點＝敏感性子分析與其次要結果、敏感性分析群" in html_text
@@ -517,15 +528,15 @@ def test_secondary_results_are_children() -> None:
                                                           .replace("robustness:", "robustness_old:"), encoding="utf-8")
         g2 = graph_of(root)
         n2 = {n["id"]: n for n in g2["nodes"]}
-        assert n2["p:SQ1-v2#R2"]["collapsed"] is True and n2["r:k4"]["collapsed"] is True and n2["r:k4"]["parent"] == "p:SQ1-v2#R2"
-        assert n2["r:k4"]["y"] == n2["p:SQ1-v3"]["y"], "收合的次要結果沿 parent 鏈借用現行版的列"
+        assert n2["p:SQ1-v2#R2"]["collapsed"] is True and n2[A22]["collapsed"] is True and n2[A22]["parent"] == "p:SQ1-v2#R2"
+        assert n2[A22]["y"] == n2["p:SQ1-v3"]["y"], "收合的次要結果沿 parent 鏈借用現行版的列"
         assert n2["r:k1"]["collapsed"] is False and n2["r:k1"]["subtype"] == "primary"
         rc, out, err = run(root)
         assert rc == 0, out + err
         assert 'class="gnode t-result s-done sub gone"' in (root / "PROGRESS.html").read_text(encoding="utf-8") or \
-            re.search(r'data-node-id="r:k4"[^>]*class=', (root / "PROGRESS.html").read_text(encoding="utf-8")) is None
+            re.search(r'data-node-id="r:SQ1-v2#R2#secondary"[^>]*class=', (root / "PROGRESS.html").read_text(encoding="utf-8")) is None
         html2 = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        assert re.search(r'<g class="gnode t-result s-\w+ sub gone" data-node-id="r:k4"', html2), "收合的次要結果帶 gone"
+        assert re.search(r'<g class="gnode t-result s-\w+ sub gone" data-node-id="r:SQ1-v2#R2#secondary"', html2), "收合的次要結果（聚合節點）帶 gone"
 
 
 def test_validate_graph_subtype_rules() -> None:
@@ -545,11 +556,12 @@ def test_validate_graph_subtype_rules() -> None:
         q["subtype"] = "sensitivity"
         res = [n for n in bad["graph"]["nodes"] if n["id"] == "r:k1"][0]
         res["subtype"] = "weird"
-        k4 = [n for n in bad["graph"]["nodes"] if n["id"] == "r:k4"][0]
+        k4 = [n for n in bad["graph"]["nodes"] if n["id"] == "r:SQ1-v2#R2#secondary"][0]   # 0.19.0：k4 在 R2 的聚合節點
         k4["parent"] = "p:SQ1-v2"   # 結果的 parent 須為敏感性子節點
         del bad["graph"]["stats"]["sensitivity_items"]
         errors = module.validate_ir(bad)
         assert sum(1 for e in errors if e.endswith(".parent")) == 2 and sum(1 for e in errors if e.endswith(".subtype")) == 2, errors
+        assert any("聚合節點的 parent 須是敏感性子分析" in e for e in errors) and any("p:SQ1-v2#R2]（子分析須恰有一個次要結果聚合節點，實際 0）" in e for e in errors), errors   # 0.19.0 規則
         assert "IR-14 graph.stats" in errors, errors
 
 

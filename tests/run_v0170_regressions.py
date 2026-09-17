@@ -335,7 +335,7 @@ def test_frontend(tmp: Path) -> None:
     assert proc.returncode == 0, proc.stderr[-1500:]
     g, _by = ir_graph(root)
     # 0.17.2 起 applyOptimistic 開頭呼叫 snapOrder0（→ anchorOf）保存 IR 基準，抽函式時一併帶上
-    parts = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'anchorOf', 'snapOrder0', 'nextAqStaged', 'applyOptimistic'))
+    parts = '\n'.join(_js_fn(js, n) for n in ('nextAqFromIr', 'rebuildEdgeIndex', 'addEdge', 'fixX', 'setBand', 'subtree', 'bandFollows', 'labelOf', 'anchorOf', 'snapOrder0', 'nextAqStaged', 'applyOptimistic', 'isAgg', 'aggKeys', 'aggOfKey', 'aggLabel', 'spawnNode', 'makeNodeEl'))   # 0.19.0：applyOptimistic 用到聚合節點的輔助函式
     for name in ('ROLE_BAND', 'DOWN_TYPES'):
         i = js.index('var ' + name + '=')
         parts = js[i:js.index('\n', i)] + '\n' + parts
@@ -349,8 +349,10 @@ out.edge=G.edges[G.edges.length-1];out.nEdges=G.edges.length;out.nEls=edgeEls.le
 out.produces_hidden=G.edges.filter(function(e){return e.type==='produces'&&e.to==='r:k2';}).map(function(e){return e.default_visible;});
 out.m2=applyOptimistic('move_result',{key:'r2',to_plan:'AQ1-v1',to_item:''});
 out.r2={parent:nodes['r:r2'].parent,band:nodes['r:r2'].band,subtype:nodes['r:r2'].subtype,x:nodes['r:r2'].x,plan:nodes['r:r2'].meta.plan_id,prod:G.edges.filter(function(e){return e.type==='produces'&&e.to==='r:r2';}).map(function(e){return e.from;})};
+var ag2=nodes['r:SQ1-v1#R2#secondary'];out.agg2={gone:!!ag2.staged_gone,label:ag2.label,keys:ag2.meta.keys.map(function(k){return k.key;})};
 out.m3=applyOptimistic('move_result',{key:'k1',to_plan:'SQ1-v1',to_item:'R2'});
-out.k1={parent:nodes['r:k1'].parent,band:nodes['r:k1'].band,subtype:nodes['r:k1'].subtype,x:nodes['r:k1'].x};
+out.k1={parent:nodes['r:k1'].parent,band:nodes['r:k1'].band,subtype:nodes['r:k1'].subtype,x:nodes['r:k1'].x,gone:!!nodes['r:k1'].staged_gone};
+out.agg3={gone:!!ag2.staged_gone,label:ag2.label,keys:ag2.meta.keys.map(function(k){return k.key;}),parent:ag2.parent,band:ag2.band,x:ag2.x,subtype:ag2.subtype};
 out.k2_follow={parent:nodes['r:k2'].parent,band:nodes['r:k2'].band};
 out.m4=applyOptimistic('reassign',{from:'SQ2',to:''});
 out.sq2={band:nodes['q:SQ2'].band,to:nodes['q:SQ2'].meta.staged_to,plan:nodes['p:SQ2-v1'].band,m1:nodes['r:m1'].band,v:G.nodes.filter(function(n){return n.type==='validation'&&String(n.meta.sq||'')==='SQ2';}).map(function(n){return n.band;})};
@@ -371,8 +373,12 @@ console.log(JSON.stringify(out));
     assert o['m1'] == ['r:k2'] and o['k2']['parent'] == 'r:k1' and o['k2']['subtype'] == 'supporting' and o['k2']['band'] == 'main' and o['k2']['supports'] == 'k1' and o['k2']['x'] == 20 + 4 * 380 + 24, o['k2']
     assert o['k2']['cls'] == {'staged': 1} and o['k2']['staged'] is True and o['k1_sup'] == ['r:k2']
     assert o['edge']['from'] == 'r:k1' and o['edge']['to'] == 'r:k2' and o['edge']['type'] == 'supports' and o['nEdges'] == o['nEls'] == len(g['edges']) + 1 and o['produces_hidden'] == [False]
-    assert o['m2'] == ['r:r2'] and o['r2'] == {'parent': '', 'band': 'supp', 'subtype': 'primary', 'x': 20 + 4 * 380, 'plan': 'AQ1-v1', 'prod': ['p:AQ1-v1']}, o['r2']
-    assert o['k1']['parent'] == 'p:SQ1-v1#R2' and o['k1']['subtype'] == 'secondary' and o['k1']['band'] == 'main' and o['k1']['x'] == 20 + 4 * 380 + 24, o['k1']   # v0.18.0：次要結果跟 plan 的帶（SQ1 → main）
+    # 0.19.0 宣告粒度：r2 原在 SQ1-v1#R2 的聚合節點裡 → A 型搬到 AQ1-v1：聚合節點少一鍵（空了就消失、label「無自有鍵」）、目標處現做一個主要結果節點 r:r2
+    assert set(o['m2']) == {'r:SQ1-v1#R2#secondary', 'r:r2'} and o['r2'] == {'parent': '', 'band': 'supp', 'subtype': 'primary', 'x': 20 + 4 * 380, 'plan': 'AQ1-v1', 'prod': ['p:AQ1-v1']}, o
+    assert o['agg2'] == {'gone': True, 'label': '無自有鍵', 'keys': []}, o['agg2']
+    # k1（主要）→ SQ1-v1 R2：逐鍵節點消失、目標子分析的聚合節點 meta.keys 增加（回到可見、1 鍵 → label 即鍵名）
+    assert set(o['m3']) == {'r:k1', 'r:SQ1-v1#R2#secondary'} and o['k1']['gone'] is True, o
+    assert o['agg3'] == {'gone': False, 'label': 'k1', 'keys': ['k1'], 'parent': 'p:SQ1-v1#R2', 'band': 'main', 'x': 20 + 4 * 380 + 24, 'subtype': 'secondary_group'}, o['agg3']   # v0.18.0：次要結果跟 plan 的帶（SQ1 → main）
     assert o['k2_follow'] == {'parent': 'r:k1', 'band': 'main'}, o['k2_follow']   # 支撐結果跟主結果（同帶）
     assert o['m4'] == ['q:SQ2'] and o['sq2']['band'] == 'supp' and o['sq2']['to'] == 'AQ3' and o['sq2']['plan'] == 'supp' and o['sq2']['m1'] == 'supp' and all(b == 'supp' for b in o['sq2']['v']), o['sq2']
     assert o['m5'] == ['f:F_a'] and o['fa'] == {'band': 'ext', 'role': 'extended'}
@@ -408,7 +414,7 @@ def test_headless_batch(tmp: Path) -> bool:
         assert 'staged' in s1['cls'].split() and s1['sup'] == 1 and json.loads(s1['ls'])[0]['kind'] == 'nest_result', s1
         assert len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']) == n_items, '加入暫存不得呼叫 server'
         # 第二次拖放：r:r2 → p:AQ1-v1
-        d2 = json.loads(ws.eval(T3._drop_js('r:r2', 'p:AQ1-v1')))
+        d2 = json.loads(ws.eval(T3._drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1')))   # 0.19.0：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵，走單筆流程）
         assert d2['formHidden'] is False and d2['title'] == '搬結果：r2 → AQ1-v1', d2
         ws.eval("document.getElementById('act-reason').value='暫存二';document.getElementById('act-stage').click();'ok'")
         s2 = json.loads(ws.eval(node_js))

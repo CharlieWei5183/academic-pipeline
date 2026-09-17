@@ -101,7 +101,8 @@ def test_new_item_same_plan(tmp: Path) -> None:
     checkers(root)
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
     n = {x['id']: x for x in ir['graph']['nodes']}
-    assert n['r:k2']['band'] == 'main' and n['r:k2']['parent'] == 'p:SQ1-v2#R3' and n['r:k2']['subtype'] == 'secondary', n['r:k2']   # v0.18.0：次要結果跟 plan（SQ1 → main）
+    agg = n['r:SQ1-v2#R3#secondary']   # 0.19.0 宣告粒度：k2 進 SQ1-v2#R3 的聚合節點（1 鍵 → label 即鍵名）；逐鍵節點 r:k2 不再建
+    assert 'r:k2' not in n and agg['band'] == 'main' and agg['parent'] == 'p:SQ1-v2#R3' and agg['subtype'] == 'secondary_group' and agg['label'] == 'k2', agg
     assert n['p:SQ1-v2#R3']['meta']['change'] == DEFAULT_K2 and n['p:SQ1-v2#R3']['meta']['expected_keys'] == ['k2']
     # 已在新 R 之下再 --new-item 一次：合法（再新增 R4；鍵由 R3 移到 R4）——只驗 dry-run 前置條件過
     out = run(MR, root, '--key', 'k2', '--to-plan', 'SQ1-v2', '--new-item', '再一次', '--dry-run')
@@ -133,7 +134,8 @@ def test_new_item_cross_plan(tmp: Path) -> None:
     checkers(root)
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
     n = {x['id']: x for x in ir['graph']['nodes']}
-    assert n['r:k2']['band'] == 'supp' and n['r:k2']['parent'] == 'p:AQ1-v2#R2', n['r:k2']
+    agg = n['r:AQ1-v2#R2#secondary']   # 0.19.0 聚合節點
+    assert 'r:k2' not in n and agg['band'] == 'supp' and agg['parent'] == 'p:AQ1-v2#R2' and [k['key'] for k in agg['meta']['keys']] == ['k2'], agg
 
 
 # ---------- payload／server ----------
@@ -204,9 +206,9 @@ def test_drag_band_candidates(tmp: Path) -> None:
     assert proc.returncode == 0, proc.stderr[-1500:]
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',
-                                               'activePlanOf', 'listOrder', 'dragCandidate'))
+                                               'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys'))   # 0.19.0：聚合節點輔助函式
     # 假 bandAtY：y ≥ 340 supp、≥ 300 ext、其餘 main；x=10 不在任何節點上（問題欄從 x=400 起、q:main 只在 main 帶）
-    cases = [('r:k2', 10, 357), ('r:r2', 10, 10), ('r:a1', 10, 357), ('r:a1', 10, 10), ('r:k2', 10, 310), ('r:r2', 10, 357), ('r:k2', 10, 10)]
+    cases = [('r:k2', 10, 357), ('r:SQ1-v1#R2#secondary', 10, 10), ('r:a1', 10, 357), ('r:a1', 10, 10), ('r:k2', 10, 310), ('r:SQ1-v1#R2#secondary', 10, 357), ('r:k2', 10, 10)]   # 0.19.0：次要結果＝聚合節點
     harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var outE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);});'
                'var W=260,H=36,boxDec={checked:false},boxOld={checked:false},expanded={},currentOf={};var BAND_ROLE={main:"main",ext:"extended",supp:"supplementary"};'
                'function bandAtY(gy){return gy>=340?"supp":(gy>=300?"ext":"main");}\n%s\n'
@@ -222,10 +224,10 @@ def test_drag_band_candidates(tmp: Path) -> None:
     assert g['payload'] == {'key': 'k2', 'to_plan': 'SQ1-v1', 'new_item': DEFAULT_K2} and g['options'][0] == {'label': '新增一個敏感性子分析（補充結果）', 'payload': g['payload']}
     assert [o['label'] for o in g['options']] == ['新增一個敏感性子分析（補充結果）', 'R1：替代實作', 'R2：第二種替代實作', 'AQ1-v1 的 outputs'], g['options']
     assert g['options'][1]['payload'] == {'key': 'k2', 'to_plan': 'SQ1-v1', 'to_item': 'R1'} and g['options'][3]['payload'] == {'key': 'k2', 'to_plan': 'AQ1-v1', 'to_item': ''}
-    # (2) 次要結果（SQ1-v1 R2 之下）Supplementary → Main 帶：首項升回本 plan outputs、再 SQ2-v1
+    # (2) 0.19.0 聚合節點（SQ1-v1 R2 之下、1 鍵 r2）拖到 Main 帶：所屬 plan 在 Main → 1 筆 move_result 升回本 plan outputs（items，不開下拉）
     g = got[1]
-    assert g['ok'] is True and g['band'] == 'main' and g['label'] == '放到 Main 帶、升為主要結果（放開後選落點）' and g['payload'] == {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''}, g
-    assert [o['label'] for o in g['options']] == ['升回本 plan 的 outputs（SQ1-v1）', 'SQ2-v1 的 outputs'] and g['options'][1]['payload'] == {'key': 'r2', 'to_plan': 'SQ2-v1', 'to_item': ''}
+    assert g['ok'] is True and g['band'] == 'main' and g['label'] == '放到 Main 帶、1 鍵升回本 plan SQ1-v1 的 outputs' and g['payload'] == {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''}, g
+    assert g['items'] == [{'kind': 'move_result', 'payload': {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''}}] and 'options' not in g, g
     # (3) 附錄問題 plan 的主要結果拖到 Supplementary（本來就在）：不算候選、toast
     assert got[2] == {'kind': 'move_result', 'ok': False, 'band': 'supp', 'reason': 'a1 已在 Supplementary（附錄問題 AQ1 的主要結果）'}, got[2]
     # (4) 附錄問題 plan 的結果拖到 Main：只列各主問題 active plan 的 outputs

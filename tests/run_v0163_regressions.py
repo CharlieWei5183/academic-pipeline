@@ -352,7 +352,7 @@ def test_headless_drop_preview(tmp: Path) -> bool:
         after = tree_hashes(root)
         assert {k for k in set(before) | set(after) if before.get(k) != after.get(k)} <= {'PROGRESS.inbox.yaml', 'PROGRESS.ir.json', 'PROGRESS.html', 'DECISIONS-TIMELINE.md'}
         # (b) r:r2 拖到 p:AQ1-v1#R1（B 型）→ 摘要 → 外面改 SSOT → 套用 409 → 自動重跑預覽 → 再套用 → done
-        d = json.loads(ws.eval(_drop_js('r:r2', 'p:AQ1-v1#R1')))
+        d = json.loads(ws.eval(_drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1#R1')))   # 0.19.0：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵，走單筆流程）
         assert not d.get('missing') and d['formHidden'] is False and d['title'] == '搬結果：r2 → AQ1-v1 R1' and 'B 型' in d['item'], d
         ws.eval("document.getElementById('act-form-inner').requestSubmit();'ok'")
         st = json.loads(_wait(ws, _STATE_JS, lambda s: json.loads(s)['sum'] and not json.loads(s)['sum'].startswith('預覽中')))

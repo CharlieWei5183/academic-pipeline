@@ -237,7 +237,7 @@ def test_headless_noform(tmp: Path) -> bool:
         # (3) 再拖兩次 → 面板 2 列（理由都空）
         d = json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))
         assert d['formHidden'] is True
-        d2 = json.loads(ws.eval(T3._drop_js('r:r2', 'p:AQ1-v1')))
+        d2 = json.loads(ws.eval(T3._drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1')))   # 0.19.0：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵，單筆流程）
         assert d2['formHidden'] is True and d2['label'].endswith('（放開即暫存）'), d2
         s3 = state()
         assert s3['n'] == '2' and s3['rows'] == 2 and s3['edits'] == 2 and [x['kind'] for x in s3['staged']] == ['nest_result', 'move_result'] and [x['reason'] for x in s3['staged']] == ['', ''], s3['staged']
