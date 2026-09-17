@@ -206,7 +206,10 @@ def test_drag_band_candidates(tmp: Path) -> None:
     assert proc.returncode == 0, proc.stderr[-1500:]
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',
-                                               'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys'))   # 0.19.0：聚合節點輔助函式
+                                               'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys',
+                                               'bandSource', 'edInherited', 'qBand', 'resultOwnerOf', 'derivedBandOf', 'derivedBand', 'tierCand'))   # 0.19.0：聚合節點輔助函式；0.20.0：ED 歸屬
+    bz = js[js.index('var BAND_ZH='):]
+    parts = bz[:bz.index('\n')] + '\n' + parts
     # 假 bandAtY：y ≥ 340 supp、≥ 300 ext、其餘 main；x=10 不在任何節點上（問題欄從 x=400 起、q:main 只在 main 帶）
     cases = [('r:k2', 10, 357), ('r:SQ1-v1#R2#secondary', 10, 10), ('r:a1', 10, 357), ('r:a1', 10, 10), ('r:k2', 10, 310), ('r:SQ1-v1#R2#secondary', 10, 357), ('r:k2', 10, 10)]   # 0.19.0：次要結果＝聚合節點
     harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var outE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);});'
@@ -233,8 +236,8 @@ def test_drag_band_candidates(tmp: Path) -> None:
     # (4) 附錄問題 plan 的結果拖到 Main：只列各主問題 active plan 的 outputs
     g = got[3]
     assert g['ok'] is True and g['band'] == 'main' and [o['label'] for o in g['options']] == ['SQ1-v1 的 outputs', 'SQ2-v1 的 outputs'] and g['payload'] == {'key': 'a1', 'to_plan': 'SQ1-v1', 'to_item': ''}, g
-    # (5) Extended Data 帶：不合法；(6) 次要結果在自己的帶：無候選；(7) 主要結果在自己的帶：無候選
-    assert got[4]['ok'] is False and got[4]['band'] == 'ext' and got[4]['reason'].startswith('結果只能在 Main 帶與 Supplementary 帶之間搬'), got[4]
+    # (5) Extended Data 帶：0.20.0 起主要結果可放 ED → set_tier{tier:'extended'}（0.19.0 以前是紅線「只放圖表」）；(6) 次要結果在自己的帶：無候選；(7) 主要結果在自己的帶：無候選
+    assert got[4]['kind'] == 'set_tier' and got[4]['ok'] is True and got[4]['band'] == 'ext' and got[4]['payload'] == {'node': 'r:k2', 'tier': 'extended'}, got[4]
     assert got[5] is None and got[6] is None, (got[5], got[6])
     # (8) 沒有主問題 active plan 可放：不算候選、reason 說明
     assert got[7] == {'kind': 'move_result', 'ok': False, 'band': 'main', 'reason': '沒有主問題的 active plan 可以收 a1（Main 帶沒有可放的 outputs）'}, got[7]

@@ -551,15 +551,15 @@ def test_html_and_chrome_parity() -> None:
         assert bands["_class"] == "bands" and [b for b in bands if b != "_class"] == ["main", "ext", "supp"]
         assert bands["main"][0] == "band-divider off" and bands["main"][2] == "band-title" and bands["ext"][0] == "band-divider" and bands["ext"][2] == "band-title"
         assert bands["supp"][0] == "band-divider" and bands["supp"][2] == "band-title"
-        assert [bands[b][4] for b in ("main", "ext", "supp")] == ["Main ｜ 主結果", "Extended Data ｜ 延伸資料圖表", "Supplementary ｜ 補充：附錄問題與補充圖表"]
+        assert [bands[b][4] for b in ("main", "ext", "supp")] == ["Main ｜ 主結果", "Extended Data ｜ 延伸資料", "Supplementary ｜ 補充：附錄問題與補充圖表"]   # 0.20.0：ED 不只放圖表
         vis_main = [n for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision"]
         via_main = [y for e in g["edges"] for (_c, y), _o in zip(e["via"], e["via_order"]) if nodes[e["to"]]["band"] == "main"]
         main_bottom = max([n["y"] for n in vis_main] + via_main) + rp.NODE_H
         assert bands["ext"][1] == str(main_bottom + rp.BAND_GAP // 2) and bands["ext"][3] == str(main_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
         ext_bottom = max(n["y"] for n in g["nodes"] if n["band"] == "ext") + rp.NODE_H
         assert bands["supp"][1] == str(ext_bottom + rp.BAND_GAP // 2) and bands["supp"][3] == str(ext_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
-        for token in ("var BANDS=['main','ext','supp'];", "三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）",
-                      "已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過", "'<dt>所屬分析</dt>", "Extended Data（延伸資料圖表）",
+        for token in ("var BANDS=['main','ext','supp'];", "三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料：圖表依 manifest role，方法／結果／驗證依 analysis/extended-data.yaml；問題不能放）",
+                      "已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過", "'<dt>所屬分析</dt>", "Extended Data（延伸資料）",   # 0.20.0：ED 措辭
                       'id="arrow-method"', ".arrow-method{fill:var(--t-method)}", "function assignLanes(",
                       "function laneX(", "dummyActive(", "預設檢視線段交叉 0、穿過節點 0", "區帶 main ", "延伸", "主表"):
             assert token in html_text, f"HTML 缺 {token}"

@@ -642,6 +642,8 @@ def test_drag_preview_anchors(tmp: Path) -> None:
            {'kind': 'set_role', 'ok': True, 'band': 'ext', 'payload': {'figure': 'F_a', 'role': 'extended'}},
            None, None]
     for c, g, e in zip(cases, got, exp):
+        if e == {'kind': 'reassign', 'ok': False, 'band': 'ext', 'reason': '主問題只能降到 Supplementary 帶、附錄問題只能升到 Main 帶'}:   # 0.20.0：問題拖到 Extended Data 帶的紅線改句
+            e = {'kind': 'set_tier', 'ok': False, 'band': 'ext', 'reason': '問題（SQ／AQ）不能放 Extended Data'}
         assert g == e, (c, g, e)
 
 

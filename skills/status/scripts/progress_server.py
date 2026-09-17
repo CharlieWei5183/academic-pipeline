@@ -13,11 +13,13 @@
     reorder（問題清單調順序，{list, order}）、move_result（結果鍵搬到別的 plan 的 outputs 或某個敏感性子分析的 expected_keys，
     {key, to_plan, to_item?, new_item?}；0.16.4 的 new_item＝在 to_plan 新增一個 R<n+1> 收該鍵、與 to_item 互斥）、nest_result（0.16.5；結果鍵宣告為同 plan
     另一個結果鍵的支撐結果或拉回頂層，{key, under}；under 空＝頂層）、demote_plan（0.18.0；一份附錄問題的 active plan 整份降為另一份 active plan 的
-    敏感性子分析，{plan, to_plan}；來源 outputs 成為目標新版 robustness 的 R<n+1>、來源自己的子分析接在後面、來源問題無 active plan）、batch（0.17.0；前端暫存的整串動作，{actions: [{kind, payload}, …]}，
+    敏感性子分析，{plan, to_plan}；來源 outputs 成為目標新版 robustness 的 R<n+1>、來源自己的子分析接在後面、來源問題無 active plan）、set_tier（0.20.0；方法／
+    敏感性子分析／主要或未宣告結果／驗證放入或移出 Extended Data 區帶，{node, tier}；node 為 p:<pid>／p:<pid>#R<k>／r:<key>／v:<id>、tier 為 extended 或空字串＝移出；
+    SSOT 是 analysis/extended-data.yaml，只有問題節點不能放）、batch（0.17.0；前端暫存的整串動作，{actions: [{kind, payload}, …]}，
     target 空、title「批次 n 項」、body 每行一項；由 run_batch.py 依序執行、版本接力、每步各記 D#、最後只重畫一次；resolved_by 寫 D# 範圍）
     的項目，title／body 由本程式生成；kind → 腳本的 dispatch 表在 ssot_actions_common.ACTIONS
     （reassign_question.py／promote_question.py／set_figure_role.py／move_plan.py／move_sensitivity.py／reorder_questions.py／
-    move_result.py／nest_result.py／demote_plan.py／run_batch.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用；batch 的 timeout 乘以項數）：
+    move_result.py／nest_result.py／demote_plan.py／set_tier.py／run_batch.py），本程式只負責代跑 --dry-run（預覽）與 --apply（套用；batch 的 timeout 乘以項數）：
     瀏覽器「預覽變更」─POST /api/actions/dry-run {id}─► 子程序 <腳本> --dry-run ─► {summary, token}
     瀏覽器「套用」    ─POST /api/actions/apply {id, token, reason?}─► token 不符 409；相符才跑 <腳本> --apply --expect-token
                      （0.17.3：batch 項目可帶 reason＝進度頁面「理由（整批，可空）」現值 → run_batch.py --reason 蓋過 payload 頂層 reason；
@@ -50,9 +52,9 @@
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
                      核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
-                     十種結構化 kind（0.18.0 加 demote_plan） 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略（batch 一律空）
+                     十一種結構化 kind（0.18.0 加 demote_plan、0.20.0 加 set_tier） 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略（batch 一律空）
                      （reassign／promote 取 q:<from>、set_role 取 f:<figure>、move_plan 取 p:<plan>、move_sensitivity 取
-                     p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 與 nest_result 取 r:<key>、demote_plan 取 p:<plan>）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
+                     p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 與 nest_result 取 r:<key>、demote_plan 取 p:<plan>、set_tier 取 node）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
                      清單、to 未使用或省略、figure 存在於 manifest、role 合法、plan 為 active、目標問題沒有 active plan、
                      robustness 項目存在、order 的 id 集合相同）
 - POST /api/inbox/dismiss  {id, note?} → {"ok": true, "id": "IN-002", "status": "dismissed"}；代跑 check_inbox.py --dismiss <id> --note <note>
@@ -93,7 +95,7 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；batch（0.17.0）＝run_batch.py
+ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）＝set_tier.py；batch（0.17.0）＝run_batch.py
 KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
@@ -683,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
     shown = '127.0.0.1' if host in ('127.0.0.1', '::1') else host
     print(f'http://{shown}:{port}/', file=sys.stderr)
     print(f'{now_iso()} 專案根: {root.resolve()}；只寫 {INBOX_NAME}'
-          + ('；--allow-apply 已開（actions 端點代跑十種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
+          + ('；--allow-apply 已開（actions 端點代跑十一種 kind 的腳本（ssot_actions_common.ACTIONS），追記 ' + ACTIONS_LOG_NAME + '）' if args.allow_apply else '；actions 端點關閉（要用加 --allow-apply）')
           + '；Ctrl+C 結束', file=sys.stderr)
     try:
         server.serve_forever()
