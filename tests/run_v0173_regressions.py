@@ -286,7 +286,7 @@ def test_headless(tmp: Path) -> bool:
         n0 = n_items(root)
         # (1) 拖兩次 → 全部預覽 → IN-002、套用啟用、鈕旁沒有原因、紀錄存進 localStorage
         assert json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))['formHidden'] is True
-        assert json.loads(ws.eval(T3._drop_js('r:r2', 'p:AQ1-v1')))['formHidden'] is True
+        assert json.loads(ws.eval(T3._drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1')))['formHidden'] is True   # 0.19.0：r2 在聚合節點裡
         s = state()
         assert s['n'] == '2' and s['ap'] is True and s['why'] == '先全部預覽' and s['title'] == '先全部預覽' and s['batch']['id'] == '' and s['oldHidden'] is True, s
         ws.eval("document.getElementById('staged-preview').click();'ok'")

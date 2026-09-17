@@ -257,7 +257,15 @@ def ir_node_ids(root: Path) -> set[str] | None:
         return None
     try:
         ir = json.loads(path.read_text(encoding='utf-8'))
-        return {n['id'] for n in ir.get('graph', {}).get('nodes', []) if isinstance(n, dict) and isinstance(n.get('id'), str)}
+        nodes = [n for n in ir.get('graph', {}).get('nodes', []) if isinstance(n, dict) and isinstance(n.get('id'), str)]
+        ids = {n['id'] for n in nodes}
+        # 0.19.0 宣告粒度：次要鍵不再是逐鍵節點，收在子分析的聚合節點 meta.keys 裡；收件匣 target 仍寫 r:<key>，視同存在
+        for n in nodes:
+            if n.get('type') == 'result' and n.get('subtype') == 'secondary_group' and isinstance(n.get('meta'), dict):
+                for k in n['meta'].get('keys') or []:
+                    if isinstance(k, dict) and isinstance(k.get('key'), str):
+                        ids.add(f'r:{k["key"]}')
+        return ids
     except Exception:
         return None
 

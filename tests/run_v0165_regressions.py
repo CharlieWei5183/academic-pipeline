@@ -342,8 +342,9 @@ def test_drag_candidates(tmp: Path) -> None:
         return (n['x'] + 5, n['y'] + 5)
 
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'isL', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',
-                                               'activePlanOf', 'listOrder', 'dragCandidate'))
-    cases = [('r:k2',) + at('r:k1'), ('r:m1',) + at('r:k1'), ('r:k1',) + at('r:k2'), ('r:k2', 10, 10), ('r:k2', 10, 357), ('r:r2',) + at('r:k1'),
+                                               'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys'))   # 0.19.0：聚合節點輔助函式
+    AG2 = next(n['id'] for n in g['nodes'] if n.get('subtype') == 'secondary_group' and any(k['key'] == 'r2' for k in n['meta']['keys']))   # 0.19.0：r2 在聚合節點裡
+    cases = [('r:k2',) + at('r:k1'), ('r:m1',) + at('r:k1'), ('r:k1',) + at('r:k2'), ('r:k2', 10, 10), ('r:k2', 10, 357), (AG2,) + at('r:k1'),
              ('r:k1',) + at('r:m1'), ('r:k2',) + at('r:m1'), ('r:k1', 10, 10), ('r:a1',) + at('r:m1')]
     harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var outE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);});'
                'var W=260,H=36,boxDec={checked:false},boxOld={checked:false},expanded={},currentOf={},nestHidden={};var BAND_ROLE={main:"main",ext:"extended",supp:"supplementary"};'
@@ -364,7 +365,7 @@ def test_drag_candidates(tmp: Path) -> None:
     assert got[3] == {'kind': 'nest_result', 'ok': True, 'band': 'main', 'label': '拉回頂層：k2 不再是 k1 的支撐結果', 'payload': {'key': 'k2', 'under': ''}}, got[3]
     assert got[4] == {'kind': 'move_result', 'ok': False, 'band': 'supp', 'reason': 'k2 是 k1 的支撐結果：換帶前請先拉回頂層（拖到目前所在帶的空白處）'}, got[4]
     # (6) 次要結果拖到結果節點上：紅
-    assert got[5]['ok'] is False and got[5]['kind'] == 'nest_result' and got[5]['reason'].startswith('r2 是次要結果：只有 outputs 的主要結果能掛到主結果下'), got[5]
+    assert got[5]['ok'] is False and got[5]['kind'] == 'nest_result' and got[5]['reason'].startswith('r2 是次要結果聚合節點：只有 outputs 的主要結果能掛到主結果下') and '請先升為主要結果' in got[5]['reason'], got[5]   # 0.19.0 聚合節點的紅線提示
     # (7)(8) 頂層／支撐結果拖到別 plan 的結果上：紅
     assert got[6]['ok'] is False and got[6]['reason'].startswith('m1 屬 SQ2-v1、k1 屬 SQ1-v2') and got[7]['ok'] is False and got[7]['reason'].startswith('m1 屬 SQ2-v1、k2 屬 SQ1-v2')
     # (9) 頂層主要結果在自己的帶空白處：無候選（0.16.4 規則不變）；(10) 附錄 plan 的結果拖到 m1：紅（跨 plan）

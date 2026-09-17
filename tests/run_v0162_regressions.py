@@ -290,7 +290,9 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
     assert '待套用動作 3 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果' in html   # 0.16.5 起清單尾端再加「掛到主結果下」
     for iid in ('IN-001', 'IN-002', 'IN-003'):
         assert f'<tr data-act-id="{iid}">' in html, iid
-    assert '收件 1' in html   # r:k2／r:r2 節點掛徽章
+    assert '收件 1' in html   # r:k2 節點與 r2 所屬的聚合節點掛徽章（0.19.0：target r:r2 對到聚合節點）
+    n_ir = {n['id']: n for n in ir['graph']['nodes']}
+    assert n_ir['r:SQ1-v1#R2#secondary']['meta'].get('inbox') == ['IN-003'] and '收件 1' in n_ir['r:SQ1-v1#R2#secondary']['badge'], n_ir['r:SQ1-v1#R2#secondary']
 
 
 def test_server_dispatch(tmp: Path) -> None:
@@ -358,25 +360,27 @@ def test_drag_result_nodes(tmp: Path) -> None:
     proc = subprocess.run([node, '--check', str(js_path)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',
-                                               'activePlanOf', 'listOrder', 'dragCandidate'))
+                                               'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys'))   # 0.19.0：聚合節點輔助函式
     pos = {n['id']: n for n in ir['graph']['nodes']}
-    assert pos['r:r2']['subtype'] == 'secondary' and pos['r:r2']['meta']['declared_by'] == ['p:SQ1-v1#R2'] and pos['r:k2']['meta']['declared_by'] == ['p:SQ1-v1']
-    cases = [('r:k2', 'p:SQ2-v1'), ('r:k2', 'p:SQ1-v1'), ('r:k2', 'p:SQ1-v1#R1'), ('r:r2', 'p:SQ1-v1#R2'), ('r:r2', 'p:SQ1-v1'), ('r:a1', 'p:AQ1-v1#R1'),
+    AG2 = 'r:SQ1-v1#R2#secondary'   # 0.19.0 宣告粒度：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵）
+    assert pos[AG2]['subtype'] == 'secondary_group' and pos[AG2]['meta']['keys'][0]['declared_by'] == ['p:SQ1-v1#R2'] and pos['r:k2']['meta']['declared_by'] == ['p:SQ1-v1']
+    cases = [('r:k2', 'p:SQ2-v1'), ('r:k2', 'p:SQ1-v1'), ('r:k2', 'p:SQ1-v1#R1'), (AG2, 'p:SQ1-v1#R2'), (AG2, 'p:SQ1-v1'), ('r:a1', 'p:AQ1-v1#R1'),
              ('r:m1', 'p:SQ1-v1#R2'), ('r:k1', (10, 10)), ('r:k1', 'q:SQ2'), ('r:k1', 'p:SQ1-v1#S')]
     js_cases = [{'id': i, 'x': (pos[at]['x'] + 5 if isinstance(at, str) else at[0]), 'y': (pos[at]['y'] + 5 if isinstance(at, str) else at[1])} for i, at in cases]
     harness = ('var G=%s;var nodes={};G.nodes.forEach(function(n){nodes[n.id]=n;});var outE={};G.edges.forEach(function(e,i){(outE[e.from]=outE[e.from]||[]).push(i);});'
                'var W=260,H=36,boxDec={checked:false},boxOld={checked:false},expanded={},currentOf={};var BAND_ROLE={main:"main",ext:"extended",supp:"supplementary"};'
                'function bandAtY(gy){return gy>=340?"supp":(gy>=300?"ext":"main");}\n%s\n'
                'console.log(JSON.stringify([%s.map(function(c){return dragCandidate(c.id,c.x,c.y);}),%s.map(draggable)]));'
-               % (json.dumps(ir['graph']), parts, json.dumps(js_cases), json.dumps(['v:V1', 'r:k1', 'r:r2', 'q:main', 'p:SQ1-v1#S', 'f:F_a'])))
+               % (json.dumps(ir['graph']), parts, json.dumps(js_cases), json.dumps(['v:V1', 'r:k1', AG2, 'q:main', 'p:SQ1-v1#S', 'f:F_a'])))
     proc = subprocess.run([node, '-e', harness], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     got, drag = json.loads(proc.stdout)
     exp = [{'kind': 'move_result', 'ok': True, 'target': 'p:SQ2-v1', 'label': '成為 SQ2-v1 的主要結果', 'payload': {'key': 'k2', 'to_plan': 'SQ2-v1', 'to_item': ''}},
            {'kind': 'move_result', 'ok': False, 'target': 'p:SQ1-v1', 'reason': 'SQ1-v1 ｜ M1 的 outputs 已含 k2，無事可做'},
            {'kind': 'move_result', 'ok': True, 'target': 'p:SQ1-v1#R1', 'label': '成為 SQ1-v1 R1 的次要結果', 'payload': {'key': 'k2', 'to_plan': 'SQ1-v1', 'to_item': 'R1'}},
-           {'kind': 'move_result', 'ok': False, 'target': 'p:SQ1-v1#R2', 'reason': 'R2：第二種替代實作 的 expected_keys 已含 r2'},
-           {'kind': 'move_result', 'ok': True, 'target': 'p:SQ1-v1', 'label': '成為 SQ1-v1 的主要結果（同一份 plan 出一版）', 'payload': {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''}},
+           None,   # 0.19.0：聚合節點放回自己的子分析上：無事可做、滑回原位
+           {'kind': 'move_result', 'ok': True, 'target': 'p:SQ1-v1', 'label': '1 鍵成為 SQ1-v1 的主要結果（升回本 plan outputs）', 'payload': {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''},
+            'items': [{'kind': 'move_result', 'payload': {'key': 'r2', 'to_plan': 'SQ1-v1', 'to_item': ''}}]},
            {'kind': 'move_result', 'ok': False, 'target': 'p:AQ1-v1#R1', 'reason': 'R1：替代實作 的 expected_keys 已含 a1'},
            {'kind': 'move_result', 'ok': True, 'target': 'p:SQ1-v1#R2', 'label': '成為 SQ1-v1 R2 的次要結果', 'payload': {'key': 'm1', 'to_plan': 'SQ1-v1', 'to_item': 'R2'}},
            None, None, None]

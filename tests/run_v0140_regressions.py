@@ -247,7 +247,7 @@ def test_band_assignment_groups_and_edges() -> None:
         nodes = {n["id"]: n for n in g["nodes"]}
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         assert [t["id"] for t in g["edge_types"]] == ["decomposes", "plans", "supersedes", "sensitivity", "supplements", "validated_by",
-                                                       "primary", "robustness", "produces", "depicts", "cites", "refers", "supports"]   # v0.16.5 加 supports
+                                                       "primary", "robustness", "produces", "depicts", "cites", "refers", "supports", "embedded_in"]   # v0.16.5 加 supports；0.19.0 加 embedded_in
         assert {t["id"]: t["label"] for t in g["edge_types"]}["supplements"] == "敏感性對照"
         # 區帶指派（全部規則）
         expect = {
@@ -256,7 +256,9 @@ def test_band_assignment_groups_and_edges() -> None:
             # v0.18.0（使用者 2026-09-16 裁定，取代 2026-09-15 D-051 的「群放 Supplementary」畫法）：群、子分析、次要結果跟所屬 plan 的區帶
             "p:SQ1-v1#S": "main", "p:SQ1-v2#S": "main", "p:SQ3-v1#S": "main", "p:AQ1-v1#S": "supp",
             "p:SQ1-v1#R1": "main", "p:SQ1-v2#R1": "main", "p:SQ1-v2#R2": "main", "p:SQ3-v1#R1": "main", "p:AQ1-v1#R1": "supp",
-            "r:k1": "main", "r:k2": "main", "r:k3": "main", "r:k5": "main", "r:k4": "main", "r:z1": "main", "r:a1": "supp", "r:a2": "supp",
+            # 0.19.0 宣告粒度：次要鍵 k4／z1／a2 不再逐鍵建節點，改進所屬子分析的聚合節點；沒自有鍵的子分析（R1 → k1／k2 都是主要）也各一個；report 節點 main
+            "r:k1": "main", "r:k2": "main", "r:k3": "main", "r:k5": "main", "r:SQ1-v2#R2#secondary": "main", "r:SQ3-v1#R1#secondary": "main", "r:a1": "supp", "r:AQ1-v1#R1#secondary": "supp",
+            "r:SQ1-v1#R1#secondary": "main", "r:SQ1-v2#R1#secondary": "main", "o:report": "main",
             "v:V1": "main", "v:V2": "supp", "f:F1": "main", "f:F2": "supp", "d:D-001": "main",
         }
         for nid, band in expect.items():
@@ -281,7 +283,8 @@ def test_band_assignment_groups_and_edges() -> None:
         for sid in ("p:SQ1-v1#R1", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ3-v1#R1", "p:AQ1-v1#R1"):
             assert nodes[sid]["subtype"] == "sensitivity" and nodes[sid]["parent"] == sid.split("#")[0] + "#S", (sid, nodes[sid]["parent"])
             assert nodes[sid]["x"] == nodes[sid.split("#")[0] + "#S"]["x"] + 24 == nodes[sid.split("#")[0]]["x"] + 48
-        assert nodes["r:k4"]["parent"] == "p:SQ1-v2#R2" and nodes["r:a2"]["parent"] == "p:AQ1-v1#R1" and nodes["r:z1"]["parent"] == "p:SQ3-v1#R1"
+        assert nodes["r:SQ1-v2#R2#secondary"]["parent"] == "p:SQ1-v2#R2" and nodes["r:AQ1-v1#R1#secondary"]["parent"] == "p:AQ1-v1#R1" and nodes["r:SQ3-v1#R1#secondary"]["parent"] == "p:SQ3-v1#R1"
+        assert nodes["r:SQ1-v2#R2#secondary"]["label"] == "k4" and nodes["r:SQ3-v1#R1#secondary"]["label"] == "z1" and nodes["r:SQ1-v2#R1#secondary"]["label"] == "無自有鍵"   # 0.19.0：1 鍵顯示鍵名
 
         def ev(key, visible, style, label):
             assert key in edges, f"缺邊 {key}"
@@ -297,9 +300,9 @@ def test_band_assignment_groups_and_edges() -> None:
         assert not any(t == "sensitivity" and "#" not in a and "#S" not in b for a, b, t in edges), "sensitivity 邊只剩 plan→群、群→子分析"
         # 子分析 → 主要結果 隱藏；子分析 → 次要結果 可見
         ev(("p:SQ1-v2#R1", "r:k2", "produces"), False, "solid", "")
-        ev(("p:SQ1-v2#R2", "r:k4", "produces"), True, "solid", "")
-        ev(("p:AQ1-v1#R1", "r:a2", "produces"), True, "solid", "")
-        ev(("p:SQ3-v1#R1", "r:z1", "produces"), True, "solid", "")
+        ev(("p:SQ1-v2#R2", "r:SQ1-v2#R2#secondary", "produces"), True, "solid", "")   # 0.19.0：子分析 → 聚合節點
+        ev(("p:AQ1-v1#R1", "r:AQ1-v1#R1#secondary", "produces"), True, "solid", "")
+        ev(("p:SQ3-v1#R1", "r:SQ3-v1#R1#secondary", "produces"), True, "solid", "")
         # v0.18.0：不再有 supplements 敏感性對照邊；每個 active 群恰一條可見的 plan → 群 sensitivity 邊
         assert not [e for e in g["edges"] if e["type"] == "supplements"]
         for gid, pid, vis in (("p:SQ1-v2#S", "p:SQ1-v2", True), ("p:SQ1-v1#S", "p:SQ1-v1", False), ("p:SQ3-v1#S", "p:SQ3-v1", True), ("p:AQ1-v1#S", "p:AQ1-v1", True)):
@@ -309,12 +312,12 @@ def test_band_assignment_groups_and_edges() -> None:
             if nodes[a]["band"] != nodes[b]["band"] and t not in ("decomposes", "depicts"):
                 assert e["default_visible"] is False, (a, b, t)
         ev(("q:main", "q:AQ1", "decomposes"), True, "solid", "")
-        ev(("v:V1", "r:k4", "robustness"), True, "thin", "驗證（穩健性）")   # v0.18.0：k4 跟 plan 回 main，與 V1 同區帶 → 可見
+        ev(("v:V1", "r:SQ1-v2#R2#secondary", "robustness"), True, "thin", "驗證（穩健性）1 鍵")   # v0.18.0：k4 跟 plan 回 main，與 V1 同區帶 → 可見；0.19.0 指聚合節點、label 記鍵數
         ev(("v:V1", "r:k1", "primary"), True, "solid", "驗證（主要）")
         ev(("v:V2", "r:a1", "primary"), True, "solid", "驗證（主要）")
         ev(("q:AQ1", "p:AQ1-v1", "plans"), True, "solid", "")
         ev(("r:k1", "f:F1", "depicts"), True, "solid", "呈現於")
-        ev(("r:k4", "f:F2", "depicts"), True, "solid", "呈現於")
+        ev(("r:SQ1-v2#R2#secondary", "f:F2", "depicts"), True, "solid", "1 鍵")   # 0.19.0：聚合節點 → 圖表一條、label「n 鍵」
         # v0.18.0：plan → 群、群 → 子分析都是 L 形線，不進 route_edges
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
         drawn = [(i, e) for i, e in enumerate(g["edges"]) if e["default_visible"] and e["from"] in shown and e["to"] in shown]
@@ -454,7 +457,7 @@ def test_html_bands_and_panel() -> None:
         px, py = nodes["p:SQ1-v2"]["x"], nodes["p:SQ1-v2"]["y"]
         assert m4 and m4.group(1).startswith(f"M{px + 12},{py + 36} L{px + 12},") and m4.group(1).endswith(f" L{px + 24},{int(m.group(2)) + 18}"), m4.group(1) if m4 else None
         assert re.search(r'class="edge e-produces st-solid off" data-idx="\d+" data-from="p:SQ1-v2#R1" data-to="r:k2"', html_text)
-        assert re.search(r'class="edge e-robustness st-thin" data-idx="\d+" data-from="v:V1" data-to="r:k4"', html_text)   # v0.18.0：同區帶 → 畫出
+        assert re.search(r'class="edge e-robustness st-thin" data-idx="\d+" data-from="v:V1" data-to="r:SQ1-v2#R2#secondary"', html_text)   # v0.18.0：同區帶 → 畫出；0.19.0 聚合節點
         # 自含、tag 平衡
         for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text
@@ -533,7 +536,8 @@ def test_validate_ir_band_rules() -> None:
             return rp.validate_ir(bad)
 
         errs = mutate(lambda bad, by, ed: by["r:k1"].update(band="weird"))
-        assert [e for e in errs if e.endswith(".band")] == ["IR-12 graph.nodes[10].band"] and all(e.endswith(".band") or "跨區帶" in e or "無此帶" in e for e in errs), errs   # v0.18.1：band 錯連帶找不到問題帶
+        k1_i = [n["id"] for n in good["graph"]["nodes"]].index("r:k1")   # 0.19.0：結果節點改在全部方法節點之後建，索引不再寫死
+        assert [e for e in errs if e.endswith(".band")] == [f"IR-12 graph.nodes[{k1_i}].band"] and all(e.endswith(".band") or "跨區帶" in e or "無此帶" in e for e in errs), errs   # v0.18.1：band 錯連帶找不到問題帶
         errs = mutate(lambda bad, by, ed: by["q:SQ1"].update(subtype="sensitivity_group"))
         assert "IR-12 graph.nodes[1].subtype" in errs and "IR-13 graph.nodes[q:SQ1].sensitivity（plan → 群）" in errs and len(errs) == 2, errs   # 冒充的群連帶缺 plan → 群邊
         errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#R1"].update(parent="p:SQ1-v2"))
@@ -549,7 +553,7 @@ def test_validate_ir_band_rules() -> None:
         assert any("敏感性分析群須與所屬 plan" in e for e in errs), errs   # v0.18.0：群的區帶須跟 plan
         errs = mutate(lambda bad, by, ed: by["p:SQ1-v2#R1"].update(band="supp"))
         assert any("子分析須與群" in e for e in errs), errs
-        errs = mutate(lambda bad, by, ed: by["r:k4"].update(band="supp"))
+        errs = mutate(lambda bad, by, ed: by["r:SQ1-v2#R2#secondary"].update(band="supp"))
         assert any("次要結果須與子分析" in e for e in errs), errs
         errs = mutate(lambda bad, by, ed: ed[("q:AQ1", "p:AQ1-v1", "plans")].update({"to": "p:SQ1-v2"}))
         assert errs and any("跨區帶" in e for e in errs), errs

@@ -277,8 +277,8 @@ def test_bands_roles_and_badges() -> None:
         # 非圖表節點 band 規則不變；ext 帶只有圖表
         # v0.18.0：群、子分析、次要結果跟所屬 plan 的區帶（SQ 的在 main、AQ 的在 supp）
         assert all(nodes[i]["band"] == "main" for i in ("q:main", "q:SQ1", "q:SQ2", "p:SQ1-v1", "p:SQ1-v2", "p:SQ2-v1", "v:V1", "r:k1", "r:k2", "r:k3", "r:m1", "d:D-001",
-                                                        "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ2-v1#S", "p:SQ2-v1#R1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "r:s1"))
-        assert all(nodes[i]["band"] == "supp" for i in ("q:AQ1", "p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1", "r:a1", "r:a2", "v:V2"))
+                                                        "p:SQ1-v2#S", "p:SQ1-v2#R1", "p:SQ1-v2#R2", "p:SQ2-v1#S", "p:SQ2-v1#R1", "p:SQ1-v1#S", "p:SQ1-v1#R1", "r:SQ1-v2#R2#secondary"))   # 0.19.0：s1 在 SQ1-v2#R2 的聚合節點
+        assert all(nodes[i]["band"] == "supp" for i in ("q:AQ1", "p:AQ1-v1", "p:AQ1-v1#S", "p:AQ1-v1#R1", "r:a1", "r:AQ1-v1#R1#secondary", "v:V2"))   # 0.19.0：a2 在 AQ1-v1#R1 的聚合節點
         assert all(n["type"] == "figure" for n in g["nodes"] if n["band"] == "ext") and sum(1 for n in g["nodes"] if n["band"] == "ext") == 2
         st = g["stats"]
         assert st["band_main_nodes"] + st["band_ext_nodes"] + st["band_supp_nodes"] == st["nodes"] and st["band_ext_nodes"] == 2, st
@@ -330,8 +330,8 @@ def test_supplements_spine_and_hiding_rules() -> None:
         # p#R → 主要結果隱藏（不分 band：AQ 也一樣）、→ 次要結果可見
         ev(("p:SQ1-v2#R1", "r:k2", "produces"), False)
         ev(("p:SQ2-v1#R1", "r:m1", "produces"), False)    # 同在 main→main 也隱藏（v0.14.0 只隱藏跨帶）
-        ev(("p:SQ1-v2#R2", "r:s1", "produces"), True)
-        ev(("p:AQ1-v1#R1", "r:a2", "produces"), True)
+        ev(("p:SQ1-v2#R2", "r:SQ1-v2#R2#secondary", "produces"), True)   # 0.19.0：子分析 → 聚合節點一條
+        ev(("p:AQ1-v1#R1", "r:AQ1-v1#R1#secondary", "produces"), True)
         # 遞移隱藏：p → k1（V1 primary）、p → k2（V1 robustness）隱藏並記 meta.via_validation；k3 未驗證維持可見；AQ 的 a1 同樣隱藏
         ev(("p:SQ1-v2", "v:V1", "validated_by"), True)
         ev(("v:V1", "r:k1", "primary"), True)
@@ -360,7 +360,7 @@ def test_dummy_rows_and_via() -> None:
         edges = {(e["from"], e["to"], e["type"]): e for e in g["edges"]}
         # 跳欄的可見邊都有 via（中間欄 3、目標的 band）與等長的 via_order；非跳欄／隱藏邊 via 為 []
         jump = {("p:SQ1-v2", "r:k3", "produces"): "main", ("p:SQ2-v1", "r:m1", "produces"): "main",
-                ("p:SQ1-v2#R2", "r:s1", "produces"): "main", ("p:AQ1-v1#R1", "r:a2", "produces"): "supp"}   # v0.18.0：s1 跟 SQ1-v2 回 main
+                ("p:SQ1-v2#R2", "r:SQ1-v2#R2#secondary", "produces"): "main", ("p:AQ1-v1#R1", "r:AQ1-v1#R1#secondary", "produces"): "supp"}   # v0.18.0：s1 跟 SQ1-v2 回 main；0.19.0 聚合節點（沒自有鍵的 R1 聚合節點產出邊預設不畫、無 via）
         for key, band in jump.items():
             e = edges[key]
             assert len(e["via"]) == 1 and e["via"][0][0] == 3 and len(e["via_order"]) == 1, (key, e["via"], e["via_order"])
@@ -692,7 +692,7 @@ def test_validate_ir_rules() -> None:
         assert errs == ["IR-14 graph.stats"], errs
         errs = mutate(lambda bad, by, ed: bad["graph"]["stats"].update(band_ext_nodes=bad["graph"]["stats"]["band_ext_nodes"] + 1))
         assert errs == ["IR-14 graph.stats.band_main_nodes／band_ext_nodes／band_supp_nodes"], errs
-        errs = mutate(lambda bad, by, ed: ed[("p:AQ1-v1#R1", "r:a2", "produces")].update({"to": "r:k2"}))   # v0.18.0：R1 → k2 已同區帶，改用 AQ 的邊跨帶
+        errs = mutate(lambda bad, by, ed: ed[("p:AQ1-v1#R1", "r:AQ1-v1#R1#secondary", "produces")].update({"to": "r:k2"}))   # v0.18.0：R1 → k2 已同區帶，改用 AQ 的邊跨帶；0.19.0 聚合節點
         assert errs and all("跨區帶" in e for e in errs), errs
 
 

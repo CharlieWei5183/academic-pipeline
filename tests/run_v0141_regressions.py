@@ -215,7 +215,8 @@ def test_alias_graph() -> None:
         assert ("p:AQ2-v1", "v:V1", "validated_by") in edges and ("v:V1", "r:k1", "primary") in edges
         assert nodes["v:V2"]["meta"]["sq"] == "SQ2" and "sq_original" not in nodes["v:V2"]["meta"] and nodes["v:V2"]["band"] == "main"
         # 結果：k1 主要、掛 AQ2 → band supp；次要 k4 supp；k3 main
-        assert nodes["r:k1"]["band"] == "supp" and nodes["r:k4"]["band"] == "supp" and nodes["r:k3"]["band"] == "main"
+        agg = next(n for n in g["nodes"] if n.get("subtype") == "secondary_group" and any(k["key"] == "k4" for k in n["meta"]["keys"]))   # 0.19.0：k4 在聚合節點
+        assert nodes["r:k1"]["band"] == "supp" and agg["band"] == "supp" and agg["parent"].startswith("p:AQ2-v") and nodes["r:k3"]["band"] == "main"
         # 里程分頁：無 SQ1 泳道；AQ2 泳道 study-design done 且 history 兩筆舊版；validate-results 用 alias 算進 V1；決策註記掛 AQ2
         assert [ln["id"] for ln in ir["lanes"]] == ["project", "SQ2", "AQ2"]
         lane = {ln["id"]: ln for ln in ir["lanes"]}["AQ2"]

@@ -184,7 +184,7 @@ def test_figure_nodes_and_depicts() -> None:
         write_fixture(root)
         g, err = graph_of(root)
         nodes = {n["id"]: n for n in g["nodes"]}
-        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision"]
+        assert [t["id"] for t in g["node_types"]] == ["question", "method", "validation", "result", "figure", "decision", "report"]   # 0.19.0 加 report
         assert [t["label"] for t in g["node_types"] if t["id"] == "figure"] == ["圖表"]
         assert "depicts" in [t["id"] for t in g["edge_types"]]
         assert [t["label"] for t in g["edge_types"] if t["id"] == "depicts"] == ["呈現於"]
@@ -229,7 +229,7 @@ def test_figure_nodes_and_depicts() -> None:
         # stdout 摘要
         rc, out, err2 = run(root)
         assert rc == 0, out + err2
-        assert "圖表 2 張（未審 2）；區帶 main " in out and "WARNING analysis/figures/manifest.json#figures[fig_b]" in out, out
+        assert "圖表 2 張（未審 2；report.md 引用 0）；區帶 main " in out and "WARNING analysis/figures/manifest.json#figures[fig_b]" in out, out
         assert (root / "PROGRESS.html").is_file() and (root / "PROGRESS.ir.json").is_file()
 
 
@@ -309,7 +309,7 @@ def test_html_panels_and_self_contained() -> None:
         html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
         for token in ('id="lightbox"', 'class="tsw figure"', "呈現於（depicts）", 'data-node-id="f:fig_a"', 'data-node-id="f:fig_b"',
                       'class="gnode t-figure s-pending"', 'class="gnode t-figure s-unknown"', 'class="edge e-depicts st-solid" data-idx=',
-                      "圖表 2 張（未審 2）", "--t-figure:", "loading=\"lazy\"", "找不到檔案：", "共 '+t.n_rows+' 列", "table class=\"rt\"",
+                      "圖表 2 張（未審 2；report.md 引用 0）", "--t-figure:", "loading=\"lazy\"", "找不到檔案：", "共 '+t.n_rows+' 列", "table class=\"rt\"",
                       "圖表 '+Object.keys(figs).length+' 張（未審 '+fu+'）"):
             assert token in html_text, f"HTML 缺 {token}"
         for token in ("http://", "https://", "<link ", 'src="http'):
