@@ -34,7 +34,9 @@ subtype supporting、parent＝r:<under>、縮排在主結果之下、同一區�
 面板可暫時收合；主結果 → 支撐結果一條 supports 型 L 形線（結果色）、plan → 支撐結果的 produces 預設不畫；stats.supporting_result_keys。
 拖放：頂層主要結果拖到同 plan 的另一個頂層主要結果上 → nest_result {key, under}（跨 plan、次要、已是支撐結果的目標 → 紅）；支撐結果拖到所在帶
 的空白處 → nest_result {key, under: ''}（拉回頂層）、拖到別的結果上 → 換主結果、拖到別帶 → 紅（先拉回頂層）。
-圖表拖到別的帶或在面板改 role → set_role。拖曳中依游標位置即時判定候選並在
+圖表拖到別的帶或在面板改 role → set_role。0.20.0：方法（active plan）、敏感性子分析、主要／未宣告結果、驗證拖到 Extended Data 帶 → set_tier
+{node, tier: 'extended'}（寫進 analysis/extended-data.yaml，跟著走的節點一起換帶）；已是 explicit 的節點拖回推導區帶 → set_tier {node, tier: ''}；
+問題、群 #S、次要結果聚合節點、支撐結果、inherited 的節點 → 紅（各有提示句）。拖曳中依游標位置即時判定候選並在
 SVG 的 <g id="drag-preview">（Python 只出空骨架）畫虛線與打亮，非法落點改紅、放開不送出；放開後開表單（父節點欄位唯讀帶入、只填理由）
 → 按「送出並預覽」POST /api/inbox 建一筆，成功後不重載，同一個對話框立刻 POST /api/actions/dry-run 把變更摘要顯示出來（0.16.3），
 摘要下三個鈕：「套用」（/api/actions/apply 帶 token；409 顯示「SSOT 已變，重新預覽」並自動再跑一次 dry-run）、「先留在收件匣」（關對話框重載，
@@ -74,7 +76,10 @@ r:<pid>#R<k>#secondary（subtype secondary_group、parent＝子分析、鍵全�
 子分析沒有這個宣告單位，不建節點也不建邊；徽章「未登錄 a／未驗證 b」；圖表／驗證／決策指到次要鍵的邊都改指聚合節點並記鍵數），未宣告鍵仍逐鍵虛線；另有 report.md 節點 o:report
 （type report、圖表欄最後一列、main 區帶孤兒帶；圖表 → report 的 embedded_in 邊預設不畫；role=main 未被 report.md 引用的圖表徽章「報告未引用」）。
 區帶（每個節點的 band 欄位，main｜ext｜supp）：Main＝主問題、SQ、其計畫（含敏感性分析群、子分析、次要結果）／驗證／結果、只呈現 main
-結果的圖表、決策；Extended Data＝依 manifest role 的圖表；Supplementary＝附錄問題及其一切（計畫、群、子分析、驗證、結果）、補充圖表
+結果的圖表、決策；Extended Data＝依 manifest role 的圖表，0.20.0 起也放 analysis/extended-data.yaml 列出的方法／子分析／主要或未宣告結果／
+驗證與跟著它們走的節點（群與子分析跟 plan、次要結果跟子分析、支撐結果跟主結果、主要結果跟 owner plan、驗證跟 plan_id 的 plan、缺 role 的圖表
+跟呈現的結果；每個非問題節點 meta.band_source ∈ explicit／inherited:<來源>／derived；只有問題節點不能放——使用者 2026-09-17 裁定；缺檔＝
+與 0.19.0 畫法相同）；Supplementary＝附錄問題及其一切（計畫、群、子分析、驗證、結果）、補充圖表
 （0.18.0 起；0.15.0–0.17.3 的「Supplementary＝敏感性分析群與子分析、次要結果」規則作廢）。同來源往同欄的邊由 route_edges 併成一條幹線＋分支；
 任何跨區帶的邊（decomposes 主問題→AQ、depicts 結果→圖表除外）預設不畫，IR 仍保留。版面：main 區帶標題列在 y = GRAPH_PAD、節點從
 GRAPH_PAD + BAND_TITLE_H 起，main_bottom＝可見 main 節點（不計決策）最低下緣，分隔線 main_bottom + BAND_GAP/2、supp 標題列
@@ -213,6 +218,7 @@ REL = {
     'data_audit': 'analysis/data-audit.yaml',
     'evidence_synthesis': 'literature/evidence-synthesis.yaml',
     'manifest': 'analysis/figures/manifest.json',
+    'extended_data': 'analysis/extended-data.yaml',   # 0.20.0：哪些方法／結果／驗證放 Extended Data 區帶（opt-in；不在 fingerprint 雜湊範圍）
     'ledger': 'reviews/issue-ledger.yaml',
     'inbox': 'PROGRESS.inbox.yaml',
 }
@@ -1076,9 +1082,13 @@ REPORT_UNCITED_BADGE = '報告未引用'      # role=main 且 report.md 存在�
 INDENTED_SUBTYPES = tuple(SUB_INDENT_OF)
 L_EDGE_TYPES = ('sensitivity', 'supports')   # 父 → 子的 L 形線（共用垂直段）：plan → 群、群 → 子分析、主結果 → 支撐結果；JS 端 isL() 同義
 # 區帶（由上而下）：main＝主結果鏈（主問題、SQ 及其計畫／驗證／結果／主圖、決策；SQ 的敏感性分析群、子分析與次要結果跟 plan 走）；
-# ext＝Extended Data（只有圖表節點，依 manifest role）；supp＝補充（附錄問題及其一切、補充圖表）。0.18.0 起群不再固定在 supp
+# ext＝Extended Data（圖表依 manifest role；0.20.0 起方法／結果／驗證也能放——由 analysis/extended-data.yaml opt-in，只有問題節點不能放，
+# 使用者 2026-09-17 裁定）；supp＝補充（附錄問題及其一切、補充圖表）。0.18.0 起群不再固定在 supp
 BANDS = ('main', 'ext', 'supp')
-BAND_TITLE = {'main': 'Main ｜ 主結果', 'ext': 'Extended Data ｜ 延伸資料圖表', 'supp': 'Supplementary ｜ 補充：附錄問題與補充圖表'}
+BAND_TITLE = {'main': 'Main ｜ 主結果', 'ext': 'Extended Data ｜ 延伸資料', 'supp': 'Supplementary ｜ 補充：附錄問題與補充圖表'}
+# 0.20.0 extended-data.yaml 的三個清單 → 節點 id 前綴；每個非問題節點 meta.band_source ∈ {explicit, inherited:<來源節點 id>, derived}
+ED_LISTS = (('plans', 'p:'), ('results', 'r:'), ('validation', 'v:'))
+BAND_SOURCE_EXPLICIT, BAND_SOURCE_DERIVED, BAND_SOURCE_INHERITED = 'explicit', 'derived', 'inherited:'
 CROSS_BAND_VISIBLE = ('decomposes', 'depicts')   # 可以跨區帶預設畫出的邊：主問題→AQ、結果→圖表（0.18.0 起沒有 supplements 邊）
 SENSITIVITY_BADGE = '敏感性'   # 有敏感性分析群的 plan 節點徽章「敏感性 n」（與舊版數並列時「v2（1 舊版）｜敏感性 n」）
 # manifest role → 圖表節點的區帶與徽章（小寫、去空白後比對）；缺或不認得 → 沿用推導規則（呈現的結果全在 supp 才 supp，否則 main）
@@ -1108,8 +1118,8 @@ IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
 INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見', 'reassign': '降階', 'promote': '升回主問題',
                'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果',
-               'nest_result': '掛到主結果下', 'demote_plan': '降為敏感性子分析', 'batch': '批次'}
-INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；demote_plan（0.18.0）、batch（0.17.0）
+               'nest_result': '掛到主結果下', 'demote_plan': '降為敏感性子分析', 'set_tier': 'Extended Data 歸屬', 'batch': '批次'}
+INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）、demote_plan（0.18.0）、batch（0.17.0）
 INBOX_STATUSES = ('pending', 'done', 'dismissed')
 INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')
@@ -1175,6 +1185,61 @@ def _plan_doc_meta(doc: dict | None) -> dict:
         text = '：'.join(x for x in (_text(pm.get('id')), _text(pm.get('method'))) if x)
         if text:
             out['primary_model'] = _clip(text, META_MAX)
+    return out
+
+
+def _extended_data_sets(src: Sources, g: 'Graph', agg_of_key: dict[str, str]) -> dict[str, set[str]]:
+    """讀 analysis/extended-data.yaml（0.20.0；缺檔＝三個清單都空），回 {'p:': {...}, 'r:': {...}, 'v:': {...}} 的節點 id 集合。
+
+    只收「放 ED 的」（opt-in）：plans＝plan id 或敏感性子分析 id（p:<pid>／p:<pid>#R<k>）、results＝主要或未宣告結果鍵、validation＝item id。
+    不合規的一筆（清單不是 list、項目不是字串、id 不存在、寫了問題／圖表／群 #S／次要鍵／支撐結果鍵）→ src.warnings 一句、略過那一筆，不 hard fail；
+    頂層不是 mapping 由 Sources 記「無法解析」並視同缺檔。"""
+    out: dict[str, set[str]] = {prefix: set() for _name, prefix in ED_LISTS}
+    if src.status('extended_data') != 'ok':
+        return out
+    doc = src.data('extended_data')
+    rel = REL['extended_data']
+    for name, prefix in ED_LISTS:
+        raw = doc.get(name)
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            src.warnings.append(f'{rel}#{name} 須為清單（實際 {type(raw).__name__}），整個清單略過')
+            continue
+        for i, item in enumerate(raw):
+            if not isinstance(item, str) or not item.strip():
+                src.warnings.append(f'{rel}#{name}[{i}] 不是非空字串，略過')
+                continue
+            sid = item.strip()
+            nid = prefix + sid
+            n = g.nodes.get(nid)
+            why = ''
+            if sid.startswith('q:') or f'q:{sid}' in g.nodes:
+                why = '問題（SQ／AQ）不能放 Extended Data'
+            elif sid.startswith('f:') or (prefix == 'r:' and n is None and f'f:{sid}' in g.nodes):
+                why = '圖表的區帶由 analysis/figures/manifest.json 的 role 決定，不寫這裡'
+            elif sid[:2] in NODE_PREFIX.values() and g.nodes.get(sid) is not None:
+                why = f'清單裡寫 id 不寫前綴（{sid!r} 應寫成 {sid[2:]!r}）'
+            elif n is None:
+                if prefix == 'r:' and sid in agg_of_key:
+                    why = f'{sid} 是次要鍵（只在 robustness expected_keys）：次要結果跟子分析走，請改列子分析 id'
+                else:
+                    why = {'p:': f'index.yaml／plan yaml 無 plan 或子分析 {sid}', 'r:': f'results.json 與各 plan 宣告都沒有結果鍵 {sid}',
+                           'v:': f'validation.yaml 無 item {sid}'}[prefix]
+            elif prefix == 'p:' and n.get('subtype') == 'sensitivity_group':
+                why = '敏感性分析群跟 plan 走，不能單獨列（請列 plan 或個別子分析）'
+            elif prefix == 'p:' and n.get('subtype') not in ('primary', 'sensitivity', ''):
+                why = f'{sid} 不是 plan 或敏感性子分析'
+            elif prefix == 'r:' and n.get('subtype') == 'supporting':
+                why = f'{sid} 是 {_text(n["meta"].get("supports"))} 的支撐結果：支撐結果跟主結果走，請改列主結果'
+            elif prefix == 'r:' and n.get('subtype') == 'secondary_group':
+                why = '次要結果跟子分析走，請改列子分析 id'
+            elif prefix == 'r:' and n.get('subtype') not in ('primary', 'undeclared'):
+                why = f'{sid} 不是主要或未宣告結果'
+            if why:
+                src.warnings.append(f'{rel}#{name}[{i}]（{sid}）：{why}，略過')
+                continue
+            out[prefix].add(nid)
     return out
 
 
@@ -1971,55 +2036,91 @@ def build_graph(src: Sources, lanes: list[dict], embed_figures: bool = False) ->
         if hits == 0:
             g.add_edge(me, 'q:main', 'refers', f'{base}（無對應節點，掛主問題）', visible=False)
 
-    # 區帶指派（main／ext／supp）：問題依來源清單；plan 跟問題；敏感性分析群與子分析跟所屬 plan（0.18.0；之前一律 supp）；次要結果跟宣告它的
-    # 子分析（即跟 plan）、其餘結果跟 owner plan 的問題（沒有 plan 只被 goals 引用 → 第一個引用它的問題）；驗證依 item 的 sq；圖表只有在它呈現的
-    # 結果全在 supp 時才 supp；決策 main
+    # 區帶指派（main／ext／supp）：問題依來源清單（永遠不是 ext）；plan 跟問題；敏感性分析群與子分析跟所屬 plan（0.18.0；之前一律 supp）；
+    # 次要結果跟宣告它的子分析（即跟 plan）、其餘結果跟 owner plan 的問題（沒有 plan 只被 goals 引用 → 第一個引用它的問題）；驗證依 item 的 sq；
+    # 圖表只有在它呈現的結果全在同一區帶時才跟去那一帶；決策 main。
+    # 0.20.0 Extended Data opt-in（analysis/extended-data.yaml；使用者 2026-09-17 裁定「方法、結果、驗證也要能放 ED，只有 SQ／AQ 不行」）：
+    # plans 清單的 plan／子分析、results 清單的主要／未宣告結果、validation 清單的 item → ext（band_source explicit）；跟著走的（群跟 plan、子分析跟 plan、
+    # 次要結果跟子分析、支撐結果跟主結果、主要結果跟 owner plan、驗證跟 plan_id 的 plan）→ ext（band_source inherited:<explicit 的來源節點>）；
+    # 其餘照原規則（band_source derived）。只有 opt-in、沒有負向覆寫；缺檔＝沒有任何節點放 ED，畫法與 0.19.0 相同。
+    ed_sets = _extended_data_sets(src, g, agg_of_key)
+    ed_root: dict[str, str] = {}   # 節點 → 讓它落在 ext 的 explicit 來源節點（自己在檔裡就是自己）
+
     def plan_band(pid: str) -> str:
         return q_band.get(f'q:{plan_sq.get(pid, "")}', 'main')
 
-    for nid, n in g.nodes.items():
+    def set_band(n: dict, band: str, source: str) -> None:
+        n['band'] = band
+        n['meta']['band_source'] = source
+
+    def follow(n: dict, src_id: str, fallback_band: str) -> None:
+        """跟著來源節點：來源在 ext → ext（inherited:<其 explicit 根>）；否則 fallback（derived）。"""
+        sn = g.nodes.get(src_id)
+        if sn is not None and sn['band'] == 'ext' and src_id in ed_root:
+            ed_root[n['id']] = ed_root[src_id]
+            set_band(n, 'ext', BAND_SOURCE_INHERITED + ed_root[src_id])
+        else:
+            set_band(n, fallback_band, BAND_SOURCE_DERIVED)
+
+    def explicit(n: dict) -> None:
+        ed_root[n['id']] = n['id']
+        set_band(n, 'ext', BAND_SOURCE_EXPLICIT)
+
+    for nid, n in g.nodes.items():   # 第一輪：問題、頂層 plan（explicit 或跟問題）
         t = n['type']
         if t == 'question':
             n['band'] = q_band.get(nid, 'main')
-        elif t == 'method':
-            n['band'] = plan_band(nid[2:].split('#')[0])   # 群 p:<pid>#S 與子分析 p:<pid>#R<n> 跟 plan
-        elif t == 'result':
-            if n.get('subtype') in ('secondary', 'secondary_group'):
-                n['band'] = ''   # 下面依宣告它的子分析補（沒有父就依 owner plan）
-            elif n.get('subtype') == 'supporting':
-                n['band'] = ''   # 下面依主結果補
+        elif t == 'method' and '#' not in nid:
+            if nid in ed_sets['p:']:
+                explicit(n)
             else:
-                owner = _text(n['meta'].get('plan_id'))
-                if not (owner and f'p:{owner}' in g.nodes):
-                    decl = n['meta'].get('declared_by') or []
-                    decl = sorted(decl, key=lambda d: 0 if plan_active.get(d[2:].split('#')[0]) else 1)   # 0.18.0：宣告以現行 plan 優先
-                    owner = decl[0][2:].split('#')[0] if decl else ''
-                if owner:
-                    n['band'] = plan_band(owner)
-                elif nid in cite_rank:
-                    n['band'] = q_band.get(question_order[cite_rank[nid][0]], 'main')
-                else:
-                    n['band'] = 'main'
+                set_band(n, plan_band(nid[2:]), BAND_SOURCE_DERIVED)
+        elif t == 'figure':
+            pass                 # 圖表：manifest role 已在建節點時指派；缺或不認得的最後由呈現的結果推導
+        elif t in ('decision', 'report'):
+            set_band(n, 'main', BAND_SOURCE_DERIVED)   # decision／report 一律 main（版面上不參與區帶計算）
+    for nid, n in g.nodes.items():   # 第二輪：群、子分析跟 plan（子分析可自己 explicit）；驗證與頂層結果
+        t = n['type']
+        if t == 'method' and '#' in nid:
+            pid = nid[2:].split('#')[0]
+            if nid in ed_sets['p:'] and not nid.endswith(GROUP_SUFFIX):
+                explicit(n)
+            else:
+                follow(n, f'p:{pid}', plan_band(pid))
+        elif t == 'result' and n.get('subtype') not in ('secondary', 'secondary_group', 'supporting'):
+            if nid in ed_sets['r:']:
+                explicit(n)
+                continue
+            owner = _text(n['meta'].get('plan_id'))
+            if not (owner and f'p:{owner}' in g.nodes):
+                decl = n['meta'].get('declared_by') or []
+                decl = sorted(decl, key=lambda d: 0 if plan_active.get(d[2:].split('#')[0]) else 1)   # 0.18.0：宣告以現行 plan 優先
+                owner = decl[0][2:].split('#')[0] if decl else ''
+            if owner:
+                follow(n, f'p:{owner}', plan_band(owner))
+            elif nid in cite_rank:
+                set_band(n, q_band.get(question_order[cite_rank[nid][0]], 'main'), BAND_SOURCE_DERIVED)
+            else:
+                set_band(n, 'main', BAND_SOURCE_DERIVED)
         elif t == 'validation':
             sq = _text(n['meta'].get('sq')) or plan_sq.get(_text(n['meta'].get('plan_id')), '')
-            n['band'] = q_band.get(f'q:{sq}', 'main')
-        elif t == 'figure':
-            pass                 # 圖表：manifest role 已在建節點時指派；缺或不認得的下面由呈現的結果推導
-        else:
-            n['band'] = 'main'   # decision 一律 main（版面上不參與區帶計算）
-    for nid, n in g.nodes.items():
+            if nid in ed_sets['v:']:
+                explicit(n)
+            else:
+                follow(n, f'p:{_text(n["meta"].get("plan_id"))}', q_band.get(f'q:{sq}', 'main'))
+    for nid, n in g.nodes.items():   # 第三輪：支撐結果跟主結果、次要結果（聚合節點）跟宣告它的子分析（即跟 plan）
         if n['type'] == 'result' and n.get('subtype') == 'supporting':
-            n['band'] = g.nodes[n['parent']]['band']   # 支撐結果與主結果同一區帶
+            follow(n, n['parent'], g.nodes[n['parent']]['band'])
         elif n['type'] == 'result' and n.get('subtype') in ('secondary', 'secondary_group'):
             if n.get('parent') and n['parent'] in g.nodes:
-                n['band'] = g.nodes[n['parent']]['band']   # 次要結果（0.19.0 起為聚合節點）跟宣告它的子分析（即跟 plan）
+                follow(n, n['parent'], g.nodes[n['parent']]['band'])
             else:
                 owner = _text(n['meta'].get('plan_id')) or ((n['meta'].get('declared_by') or ['p:'])[0][2:].split('#')[0])
-                n['band'] = plan_band(owner) if owner else 'main'
-    for nid, n in g.nodes.items():
+                follow(n, f'p:{owner}', plan_band(owner) if owner else 'main')
+    for nid, n in g.nodes.items():   # 圖表（缺 role）：呈現的結果全在同一區帶 → 那一帶（含 ext）；否則 main
         if n['type'] == 'figure' and n['meta'].get('role_source') == 'derived':
             srcs = [g.nodes[e['from']]['band'] for e in g.edges if e['type'] == 'depicts' and e['to'] == nid]
-            n['band'] = 'supp' if srcs and all(b == 'supp' for b in srcs) else 'main'
+            n['band'] = srcs[0] if srcs and all(b == srcs[0] for b in srcs) else 'main'
     # 0.18.1 問題帶（strip）：每個非決策節點追溯到所屬問題——問題＝自己（q:main 也是自己，但不成帶）；plan／群／子分析＝plan 的 sq；
     # 驗證＝item 的 sq（缺才用 plan_id 的 sq）；結果＝owner plan 的 sq（沒有 plan 只被 goals 引用 → goals 順序最前的引用問題）；
     # 次要／支撐結果跟父；圖表＝呈現的結果的問題中 goals 順序最前者；找不到問題的節點（孤兒）strip 為空字串（ORPHAN_STRIP）。
@@ -2681,12 +2782,30 @@ def validate_graph(graph) -> list[str]:
             errors.append(f'IR-12 {sub}.parent')
         if n.get('band') not in BANDS:
             errors.append(f'IR-12 {sub}.band')
+        elif n.get('type') == 'question' and n.get('band') == 'ext':
+            errors.append(f'IR-12 {sub}.band（問題節點不能在 Extended Data 區帶）')   # 0.20.0：只有 SQ／AQ 不能放 ED
+        if n.get('type') not in ('question', 'figure') and isinstance(meta, dict):   # 0.20.0：非問題非圖表節點都有 band_source（圖表沿用 role_source）
+            bs = meta.get('band_source')
+            if not (bs in (BAND_SOURCE_EXPLICIT, BAND_SOURCE_DERIVED) or (isinstance(bs, str) and bs.startswith(BAND_SOURCE_INHERITED) and len(bs) > len(BAND_SOURCE_INHERITED))):
+                errors.append(f'IR-12 {sub}.meta.band_source')
+            elif n.get('band') == 'ext' and bs == BAND_SOURCE_DERIVED:
+                errors.append(f'IR-12 {sub}.meta.band_source（在 Extended Data 的節點須是 explicit 或 inherited:<來源>）')
+            elif n.get('band') != 'ext' and bs != BAND_SOURCE_DERIVED:
+                errors.append(f'IR-12 {sub}.meta.band_source（不在 Extended Data 的節點須是 derived）')
         if n.get('type') != 'decision':   # 0.18.1 問題帶：非決策節點都有 strip（問題節點是自己；孤兒空字串）；決策不帶
             if not isinstance(n.get('strip'), str):
                 errors.append(f'IR-12 {sub}.strip')
             elif n.get('type') == 'question' and n.get('strip') != nid:
                 errors.append(f'IR-12 {sub}.strip（問題節點的 strip 須是自己）')
     by_id_v = {n.get('id'): n for n in graph['nodes'] if isinstance(n, dict)} if isinstance(graph['nodes'], list) else {}
+    for i, n in enumerate(graph['nodes'] if isinstance(graph['nodes'], list) else []):   # 0.20.0：inherited:<id> 的來源節點須存在、在 ext、且自己是 explicit
+        meta = n.get('meta') if isinstance(n, dict) and isinstance(n.get('meta'), dict) else {}
+        bs = meta.get('band_source')
+        if isinstance(bs, str) and bs.startswith(BAND_SOURCE_INHERITED):
+            srcn = by_id_v.get(bs[len(BAND_SOURCE_INHERITED):])
+            smeta = srcn.get('meta') if isinstance(srcn, dict) and isinstance(srcn.get('meta'), dict) else {}
+            if srcn is None or srcn.get('band') != 'ext' or smeta.get('band_source') != BAND_SOURCE_EXPLICIT:
+                errors.append(f'IR-12 graph.nodes[{i}].meta.band_source（inherited 的來源節點須存在、在 Extended Data 且為 explicit）')
     # 0.18.1 graph.strips：[{band, question, y0, y1}]，依 BANDS 順序分組、同帶內 y 範圍遞增不重疊；每個非決策節點（q:main 除外）的
     # (band, strip) 都要有對應的帶、未收合者的 y 落在帶的範圍內、問題節點在帶的第一列
     strip_keys: dict[tuple[str, str], dict] = {}
@@ -2754,9 +2873,10 @@ def validate_graph(graph) -> list[str]:
         elif n.get('subtype') == 'sensitivity_group' and not (n.get('parent') == nid[:-len(GROUP_SUFFIX)] and nid.endswith(GROUP_SUFFIX)
                                                               and par.get('type') == 'method' and not par.get('parent')):
             errors.append(f'IR-12 graph.nodes[{i}].parent')   # 群的 parent 必須是所屬的頂層 plan
-        elif n.get('band') != par.get('band'):
-            # 0.18.0：群與子分析的區帶跟所屬 plan、次要結果跟宣告它的子分析（三者都是「跟父」）
-            errors.append(f'IR-12 graph.nodes[{i}].band（{"敏感性分析群須與所屬 plan" if n.get("subtype") == "sensitivity_group" else "子分析須與群" if n.get("subtype") == "sensitivity" else "次要結果須與子分析"}同一區帶）')
+        elif n.get('band') != par.get('band') and not (n.get('subtype') == 'sensitivity' and n.get('band') == 'ext'
+                                                        and (n.get('meta') or {}).get('band_source') == BAND_SOURCE_EXPLICIT):
+            # 0.18.0：群與子分析的區帶跟所屬 plan、次要結果跟宣告它的子分析（三者都是「跟父」）；0.20.0：子分析自己列在 extended-data.yaml（explicit）時可獨自在 ext
+            errors.append(f'IR-12 graph.nodes[{i}].band（{"敏感性分析群須與所屬 plan" if n.get("subtype") == "sensitivity_group" else "子分析須與群（自己列在 extended-data.yaml 者除外）" if n.get("subtype") == "sensitivity" else "次要結果須與子分析"}同一區帶）')
     # 0.19.0 宣告粒度：每個敏感性子分析至多一個 secondary_group 聚合節點，有則 meta.n_keys ≥ 1（沒自有次要鍵的子分析不該有）；
     # meta.keys 為 [{key, registered, validated, …}]、n_keys 一致、鍵不得重複、已登錄鍵數加總 == stats.secondary_result_keys；report 節點至多一個
     agg_of_sub: dict[str, list[str]] = {}
@@ -3406,6 +3526,31 @@ GRAPH_JS = """
   function isActivePlan(id){var n=nodes[id];return !!(n&&n.type==='method'&&!n.parent&&!n.collapsed&&/^p:[^#]+$/.test(id));}
   function isSensItem(id){var n=nodes[id];return !!(n&&n.type==='method'&&n.subtype==='sensitivity'&&!n.collapsed&&/^p:[^#]+#R\d+$/.test(id));}
   function isL(e){return e.type==='sensitivity'||e.type==='supports';}   // 父 → 子的 L 形線（與 Python L_EDGE_TYPES 同義）
+  // ---- 0.20.0 Extended Data 歸屬（analysis/extended-data.yaml；使用者 2026-09-17 裁定：方法／結果／驗證也能放 ED，只有 SQ／AQ 不行）----
+  // meta.band_source：explicit＝自己列在檔裡、inherited:<來源 id>＝跟 plan／跟父進 ED（來源是那個 explicit 節點）、derived＝原規則；圖表沿用 role_source
+  function bandSource(id){var n=nodes[id];return n?String((n.meta||{}).band_source||''):'';}
+  function edInherited(id){var s=bandSource(id);return s.indexOf('inherited:')===0?s.slice(10):'';}
+  function bandSourceZh(id){var s=bandSource(id);if(!s)return '';if(s==='explicit')return '（列在 analysis/extended-data.yaml）';if(s==='derived')return '（依原規則推導）';return '（跟 '+esc(edInherited(id))+' 進 Extended Data）';}
+  function qBand(sq){var q=nodes['q:'+sq];return q?q.band:'main';}
+  // 結果的 owner plan（與 Python 同：results.json 的 plan_id 在圖裡就用它，否則宣告以現行 plan 優先）
+  function resultOwnerOf(n){var m=n.meta||{},o=String(m.plan_id||'');if(o&&nodes['p:'+o])return o;var decl=(m.declared_by||[]).slice().sort(function(a,b){var pa=nodes[a.split('#')[0]],pb=nodes[b.split('#')[0]];return ((pa&&!pa.collapsed)?0:1)-((pb&&!pb.collapsed)?0:1);});return decl.length?decl[0].slice(2).split('#')[0]:'';}
+  // 推導區帶＝從檔裡拿掉後會落到的帶，與它的來源：plan → 問題的帶；群／子分析 → plan 現在的帶；次要（聚合）／支撐結果 → 父現在的帶；主要／未宣告結果 → owner plan 現在的帶（沒有 plan 依問題帶）；驗證 → plan_id 的 plan 現在的帶（沒有依 sq）
+  function derivedBandOf(id){var n=nodes[id];if(!n)return {band:'main',from:''};var m=n.meta||{};
+    if(n.type==='method'){if(id.indexOf('#')<0)return {band:qBand(String(m.sq||'')),from:'q:'+String(m.sq||'')};var pp='p:'+id.slice(2).split('#')[0];return nodes[pp]?{band:nodes[pp].band,from:pp}:{band:'main',from:''};}
+    if(n.type==='result'){if(n.parent&&nodes[n.parent])return {band:nodes[n.parent].band,from:n.parent};var o=resultOwnerOf(n);if(o&&nodes['p:'+o])return {band:nodes['p:'+o].band,from:'p:'+o};var st=n.strip;return {band:(st&&nodes[st])?nodes[st].band:'main',from:st||''};}
+    if(n.type==='validation'){var pv='p:'+String(m.plan_id||'');if(nodes[pv])return {band:nodes[pv].band,from:pv};return {band:qBand(String(m.sq||'')),from:'q:'+String(m.sq||'')};}
+    return {band:n.band,from:''};}
+  function derivedBand(id){return derivedBandOf(id).band;}
+  var BAND_ZH={main:'Main',ext:'Extended Data',supp:'Supplementary'};
+  // 拖到 Extended Data 帶（進 ED）或從 ED 拖回推導區帶（出 ED）的候選；回 undefined＝不是 ED 情境（走該型別原本的規則：move_result／原有紅線）
+  function tierCand(id,b){var n=nodes[id];if(!n)return null;
+    if(b==='ext'){if(n.band==='ext')return null;return {kind:'set_tier',ok:true,band:'ext',label:n.label+' 放入 Extended Data',payload:{node:id,tier:'extended'}};}
+    if(n.band!=='ext')return undefined;
+    var inh=edInherited(id);if(inh)return {kind:'set_tier',ok:false,band:b,reason:'這個節點的 ED 歸屬來自 '+inh+'，請拖那個節點'};
+    var d=derivedBandOf(id);
+    if(d.band==='ext')return {kind:'set_tier',ok:false,band:b,reason:n.label+' 從 extended-data.yaml 拿掉後仍跟 '+d.from+' 留在 Extended Data，請拖那個節點'};
+    if(b===d.band)return {kind:'set_tier',ok:true,band:b,label:n.label+' 移出 Extended Data（回 '+BAND_ZH[b]+' 帶）',payload:{node:id,tier:''}};
+    return undefined;}
   var nestHidden={};   // 0.16.5 結果主從：主結果 id → true＝暫時收合它的支撐結果（只在本頁面，不寫任何檔）
   // 0.16.1：問題（SQ／AQ）、方法（active plan）、敏感性子分析、圖表都可拖；0.16.2：結果節點（主要／次要／未宣告，來源 plan 由 results.json plan_id 判、須為 active plan）也可拖；落點由 dragCandidate 依游標位置即時判定
   function resultOwner(id){var n=nodes[id];if(!n||n.type!=='result')return '';var pid=String((n.meta||{}).plan_id||'');return (pid&&isActivePlan('p:'+pid))?pid:'';}
@@ -3418,8 +3563,8 @@ GRAPH_JS = """
   function aggLabel(n){var ks=(n.meta.keys||[]);n.meta.n_keys=ks.length;n.label=ks.length===1?ks[0].key:'次要結果 '+ks.length+' 鍵';var ur=0,uv=0;ks.forEach(function(k){if(!k.registered)ur++;else if(!k.validated)uv++;});n.meta.n_unregistered=ur;n.meta.n_unvalidated=uv;
     var badge=[ur?'未登錄 '+ur:'',uv?'未驗證 '+uv:''].filter(Boolean).join('／');n.badge=badge;var el=(typeof nodeEls!=='undefined')?nodeEls[n.id]:null;
     if(el&&el.querySelector){var b=el.querySelector('text.badge');if(b)b.textContent=badge;else if(badge&&typeof setBadge==='function'&&typeof document!=='undefined')setBadge(n.id,badge);var t=el.querySelector('text.lbl');if(t)t.textContent=n.label.length>26?n.label.slice(0,25)+'…':n.label;}}
-  function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)));}
-  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下',demote_plan:'降為敏感性子分析',batch:'批次'};
+  function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)||n.type==='validation'));}   // 0.20.0：驗證節點可拖（只為 Extended Data 歸屬）
+  var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下',demote_plan:'降為敏感性子分析',set_tier:'Extended Data 歸屬',batch:'批次'};
   // ---- 分頁 ----
   var tabs={milestones:document.getElementById('tab-milestones'),relations:document.getElementById('tab-relations')};
   var cur='milestones';
@@ -3634,16 +3779,20 @@ GRAPH_JS = """
   function listOrder(band){return G.nodes.filter(function(n){return n.type==='question'&&n.band===band&&questionKind(n.id);}).sort(function(a,b){return a.order-b.order;}).map(function(n){return n.id.slice(2);});}
   // 回 {kind, ok, payload, target?, band?, reason?, label?}；null＝沒有候選（放開後滑回原位、不開表單）
   function dragCandidate(id,gx,gy){var n=nodes[id];if(!n)return null;
+    // 0.20.0 的三個輔助函式在舊的 node 測試樁裡不一定有：缺就退回 0.19.0 的行為（沒有 ED 情境）
+    var TC=(typeof tierCand==='function')?tierCand:function(){return undefined;},EI=(typeof edInherited==='function')?edInherited:function(){return '';},DB=(typeof derivedBand==='function')?derivedBand:function(k){return nodes[k].band;};
     if(n.type==='question'&&questionKind(id)){
       var q=hitNode(gx,gy,function(k,m){return k!==id&&m.type==='question'&&questionKind(k)&&m.band===n.band;});
       if(q){var order=listOrder(n.band).filter(function(x){return x!==id.slice(2);});order.splice(order.indexOf(q.slice(2))+1,0,id.slice(2));
         return {kind:'reorder',ok:true,target:q,label:'排在 '+nodes[q].label+' 之後',payload:{list:n.band==='main'?'sub_questions':'appendix_questions',order:order}};}
       var band=bandAtY(gy);if(band===n.band)return null;
+      if(band==='ext')return {kind:'set_tier',ok:false,band:band,reason:'問題（SQ／AQ）不能放 Extended Data'};   // 0.20.0
       if(n.band==='main'&&band==='supp')return {kind:'reassign',ok:true,band:band,payload:{from:id.slice(2)}};
       if(n.band==='supp'&&band==='main')return {kind:'promote',ok:true,band:band,payload:{from:id.slice(2)}};
       return {kind:n.band==='main'?'reassign':'promote',ok:false,band:band,reason:'主問題只能降到 Supplementary 帶、附錄問題只能升到 Main 帶'};}
     if(isSensItem(id)){var m=/^p:(.+)#(R\d+)$/.exec(id);
-      var p=hitNode(gx,gy,function(k,x){return isActivePlan(k)&&k!=='p:'+m[1];});if(!p)return null;
+      var p=hitNode(gx,gy,function(k,x){return isActivePlan(k)&&k!=='p:'+m[1];});
+      if(!p){var tcs=TC(id,bandAtY(gy));return tcs===undefined?null:tcs;}   // 0.20.0：拖到 Extended Data 帶＝單獨放入 ED；從 ED 拖回推導區帶＝移出
       return {kind:'move_sensitivity',ok:true,target:p,payload:{plan:m[1],item:m[2],to_plan:p.slice(2)}};}
     if(isActivePlan(id)){var sq=String(n.meta.sq||'');
       // 0.18.0：active plan 拖到另一個頂層 plan 上 → demote_plan（來源降為目標的敏感性子分析）；來源是主問題的 plan、目標同問題、目標非 active → 紅線
@@ -3653,12 +3802,14 @@ GRAPH_JS = """
         if(!/^AQ\d+$/.test(sq))return {kind:'demote_plan',ok:false,target:tp,reason:'主問題 '+sq+' 的 active plan 不能降為敏感性子分析（主問題缺 active plan 是 check_plan BLOCKER），請先把 '+sq+' 降為附錄問題'};
         if(tsq===sq)return {kind:'demote_plan',ok:false,target:tp,reason:nodes[tp].label+' 與來源同屬 '+sq+'：同一問題的兩份 plan 不能互降，那是版本取代'};
         return {kind:'demote_plan',ok:true,target:tp,label:'降為 '+nodes[tp].label+' 的敏感性子分析',payload:{plan:id.slice(2),to_plan:tp.slice(2)}};}
-      var q2=hitNode(gx,gy,function(k,x){return x.type==='question'&&questionKind(k)&&k!=='q:'+sq;});if(!q2)return null;
+      var q2=hitNode(gx,gy,function(k,x){return x.type==='question'&&questionKind(k)&&k!=='q:'+sq;});
+      if(!q2){var tcp=TC(id,bandAtY(gy));return tcp===undefined?null:tcp;}   // 0.20.0：plan 放入／移出 Extended Data（群、子分析、結果、驗證跟著走）
       var ap=activePlanOf(q2);
       if(ap)return {kind:'move_plan',ok:false,target:q2,reason:nodes[q2].label+' 已有 active plan '+nodes[ap].label+'：那是合併兩份分析計畫，不是搬移，須另行設計'};
       if(!/^AQ\d+$/.test(sq))return {kind:'move_plan',ok:false,target:q2,reason:'主問題 '+sq+' 的 active plan 不能搬走（主問題缺 active plan 是 check_plan BLOCKER），請先降階'};
       return {kind:'move_plan',ok:true,target:q2,payload:{plan:id.slice(2),to_question:q2.slice(2)}};}
     if(n.type==='figure'){var b=bandAtY(gy);if(b===n.band)return null;return {kind:'set_role',ok:true,band:b,payload:{figure:id.slice(2),role:BAND_ROLE[b]||''}};}
+    if(n.type==='validation'){var bv=bandAtY(gy);if(bv===n.band)return null;var tcv=TC(id,bv);return tcv===undefined?null:tcv;}   // 0.20.0：驗證只有 ED 歸屬這一種拖法
     if(typeof isAgg==='function'&&isAgg(id)&&isDragResult(id)){var keysA=aggKeys(id),ownerA=resultOwner(id),nA=keysA.length,mk=function(pl,item){return keysA.map(function(k){return {kind:'move_result',payload:{key:k,to_plan:pl,to_item:item||''}};});};
       // 0.19.0 聚合節點（裡面全部鍵一起搬，順序照 meta.keys）：拖到另一個 active plan 上 → n 筆 move_result{key,to_plan}（A 型，全部升為目標的主要結果）；
       // 拖到別的子分析上 → n 筆 move_result{key,to_plan,to_item}；拖到 Main 帶（所屬 plan 在 Main）→ n 筆 move_result{key,to_plan:<本 plan>}（升回本 plan outputs）；
@@ -3666,7 +3817,8 @@ GRAPH_JS = """
       var rtA=hitNode(gx,gy,function(k,x){return k!==id&&x.type==='result';});
       if(rtA)return {kind:'nest_result',ok:false,target:rtA,reason:n.label+' 是次要結果聚合節點：只有 outputs 的主要結果能掛到主結果下（請先升為主要結果——拖聚合節點到方法上，或在面板逐鍵升級）'};
       var tA=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
-      if(!tA){var bA=bandAtY(gy);if(bA==='ext')return {kind:'move_result',ok:false,band:bA,reason:'結果只能在 Main 帶與 Supplementary 帶之間搬（Extended Data 帶只放圖表）'};
+      if(!tA){var bA=bandAtY(gy);if(bA==='ext'&&n.band!=='ext')return {kind:'set_tier',ok:false,band:bA,reason:'次要結果跟子分析走，請拖子分析節點'};   // 0.20.0
+        if(n.band==='ext'&&bA!=='ext'&&EI(id))return {kind:'set_tier',ok:false,band:bA,reason:'這個節點的 ED 歸屬來自 '+EI(id)+'，請拖那個節點'};
         if(bA==='main'){var oq=String((nodes['p:'+ownerA]||{meta:{}}).meta.sq||'');if(!/^SQ\d+$/.test(oq))return {kind:'move_result',ok:false,band:bA,reason:'所屬 plan '+ownerA+'（'+oq+'）不在 Main 帶：要升為主問題的主要結果請拖到目標方法節點上'};
           if(!nA)return {kind:'move_result',ok:false,band:bA,reason:n.label+'：這個子分析沒有自有的次要鍵可搬'};
           return {kind:'move_result',ok:true,band:bA,label:'放到 Main 帶、'+nA+' 鍵升回本 plan '+ownerA+' 的 outputs',payload:{key:keysA[0],to_plan:ownerA,to_item:''},items:mk(ownerA,'')};}
@@ -3691,20 +3843,23 @@ GRAPH_JS = """
         return {kind:'nest_result',ok:true,target:rt,label:(isSupporting(id)?'換主結果：成為 ':'成為 ')+rt.slice(2)+' 的支撐結果（同 plan、同一區帶）',payload:{key:key,under:rt.slice(2)}};}
       if(isSupporting(id)){// 支撐結果：拖到自己所在帶的空白處＝拉回頂層；拖到別帶 → 先拉回頂層（紅）；拖到方法／子分析上照舊走 move_result
         var t0=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
-        if(!t0){var b0=bandAtY(gy);if(b0===n.band)return {kind:'nest_result',ok:true,band:b0,label:'拉回頂層：'+key+' 不再是 '+String(n.meta.supports||'')+' 的支撐結果',payload:{key:key,under:''}};
+        if(!t0){var b0=bandAtY(gy);if(b0==='ext'&&n.band!=='ext')return {kind:'set_tier',ok:false,band:b0,reason:key+' 是 '+String(n.meta.supports||'')+' 的支撐結果：支撐結果跟主結果走，請拖主結果'};   // 0.20.0
+          if(n.band==='ext'&&b0!=='ext'&&EI(id))return {kind:'set_tier',ok:false,band:b0,reason:'這個節點的 ED 歸屬來自 '+EI(id)+'，請拖那個節點'};
+          if(b0===n.band)return {kind:'nest_result',ok:true,band:b0,label:'拉回頂層：'+key+' 不再是 '+String(n.meta.supports||'')+' 的支撐結果',payload:{key:key,under:''}};
           return {kind:'move_result',ok:false,band:b0,reason:key+' 是 '+String(n.meta.supports||'')+' 的支撐結果：換帶前請先拉回頂層（拖到目前所在帶的空白處）'};}}
       var t=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
       if(!t){// 0.16.4 區帶落點（節點落點優先）：主要結果 Main → Supplementary、次要（或附錄問題的主要）結果 Supplementary → Main；放開後表單以下拉選確切落點
-        var b2=bandAtY(gy);if(b2==='ext')return {kind:'move_result',ok:false,band:b2,reason:'結果只能在 Main 帶與 Supplementary 帶之間搬（Extended Data 帶只放圖表）'};
+        var b2=bandAtY(gy);var tcr=TC(id,b2);if(tcr!==undefined)return tcr;   // 0.20.0：進 ED／出 ED；其餘（拖到既非 ext 也非推導區帶的帶）走原本規則，n.band 以推導區帶代入
+        var nb=(n.band==='ext')?DB(id):n.band;
         var ownerSq=String((nodes['p:'+owner]||{meta:{}}).meta.sq||''),ownerMain=/^SQ\d+$/.test(ownerSq);
         function planOpts(pred,tag){var o=[];G.nodes.forEach(function(x){if(!isActivePlan(x.id)||decl.indexOf(x.id)>=0||!pred(String((x.meta||{}).sq||''),x.id))return;o.push({label:x.id.slice(2)+' 的 outputs'+(tag||''),payload:{key:key,to_plan:x.id.slice(2),to_item:''}});});return o;}
-        if(rk==='primary'&&n.band==='main'&&b2==='supp'){var opts=[{label:'新增一個敏感性子分析（補充結果）',payload:{key:key,to_plan:owner,new_item:'補充結果：'+key+' 由主要結果降為次要結果'}}];  // 預設描述與 ssot_actions_common.NEW_ITEM_DEFAULT 同一句
+        if(rk==='primary'&&nb==='main'&&b2==='supp'){var opts=[{label:'新增一個敏感性子分析（補充結果）',payload:{key:key,to_plan:owner,new_item:'補充結果：'+key+' 由主要結果降為次要結果'}}];  // 預設描述與 ssot_actions_common.NEW_ITEM_DEFAULT 同一句
           G.nodes.filter(function(x){return isSensItem(x.id)&&x.id.indexOf('p:'+owner+'#')===0&&decl.indexOf(x.id)<0;}).sort(function(a,b){return (+/#R(\d+)$/.exec(a.id)[1])-(+/#R(\d+)$/.exec(b.id)[1]);})
             .forEach(function(x){var rid=x.id.split('#')[1];opts.push({label:rid+'：'+String((x.meta||{}).change||'').slice(0,40),payload:{key:key,to_plan:owner,to_item:rid}});});
           opts=opts.concat(planOpts(function(sq){return /^AQ\d+$/.test(sq);}));
           return {kind:'move_result',ok:true,band:b2,label:'放到 Supplementary 帶、降為次要結果（放開後選落點）',payload:opts[0].payload,options:opts};}
-        if(rk==='primary'&&n.band==='supp'&&b2==='supp')return {kind:'move_result',ok:false,band:b2,reason:key+' 已在 Supplementary（附錄問題 '+ownerSq+' 的主要結果）'};
-        if((rk==='secondary'||(rk==='primary'&&n.band==='supp'))&&b2==='main'){var opts2=[];
+        if(rk==='primary'&&nb==='supp'&&b2==='supp')return {kind:'move_result',ok:false,band:b2,reason:key+' 已在 Supplementary（附錄問題 '+ownerSq+' 的主要結果）'};
+        if((rk==='secondary'||(rk==='primary'&&nb==='supp'))&&b2==='main'){var opts2=[];
           if(ownerMain&&rk==='secondary'&&decl.indexOf('p:'+owner)<0)opts2.push({label:'升回本 plan 的 outputs（'+owner+'）',payload:{key:key,to_plan:owner,to_item:''}});
           opts2=opts2.concat(planOpts(function(sq,pid){return /^SQ\d+$/.test(sq)&&pid!=='p:'+owner;}));
           if(!opts2.length)return {kind:'move_result',ok:false,band:b2,reason:'沒有主問題的 active plan 可以收 '+key+'（Main 帶沒有可放的 outputs）'};
@@ -3789,7 +3944,7 @@ GRAPH_JS = """
   function openLightbox(src,cap){lbImg.src=src;lbImg.alt=cap||'';lbCap.textContent=cap||'';lb.hidden=false;}
   function closeLightbox(){lb.hidden=true;lbImg.removeAttribute('src');}
   lb.addEventListener('click',closeLightbox);
-  function metaRows(m,skip){var keys=Object.keys(m||{}).filter(function(k){return skip.indexOf(k)<0&&k!=='inbox';});if(!keys.length)return '—';var h='<ul>';keys.forEach(function(k){var v=m[k];if(Array.isArray(v))v=v.join('、');if(typeof v==='boolean')v=v?'true':'false';h+='<li><b>'+esc(k)+'</b>：'+esc(v)+'</li>';});return h+'</ul>';}
+  function metaRows(m,skip){var keys=Object.keys(m||{}).filter(function(k){return skip.indexOf(k)<0&&k!=='inbox'&&k!=='band_source';});if(!keys.length)return '—';var h='<ul>';keys.forEach(function(k){var v=m[k];if(Array.isArray(v))v=v.join('、');if(typeof v==='boolean')v=v?'true':'false';h+='<li><b>'+esc(k)+'</b>：'+esc(v)+'</li>';});return h+'</ul>';}
   function edgeList(list,dir){if(!list||!list.length)return '—';var h='<ul>';list.forEach(function(ei){var e=G.edges[ei];var other=dir>0?e.to:e.from;h+='<li>'+esc(edgeLabel[e.type]||e.type)+(e.label?'（'+esc(e.label)+'）':'')+' '+(dir>0?'→':'←')+' <span class="goto" data-goto="'+esc(other)+'">'+esc(nodes[other].label)+'</span>'+(nodeVisible(other)?'':'（目前隱藏）')+(e.default_visible?'':' <span class="src">預設不畫</span>')+'<br><span class="src">'+esc(e.source)+'</span></li>';});return h+'</ul>';}
   // 0.19.0 聚合節點面板的鍵清單：> AGG_PAGE 筆分頁＋搜尋框；每鍵旁「升為主要結果」（連上 server 才可按）
   var AGG_PAGE=200,aggUi={q:'',page:0};
@@ -3809,8 +3964,8 @@ GRAPH_JS = """
     h+='<dt>state</dt><dd>'+esc(stateZh[n.state]||n.state)+'</dd>';
     h+='<dt>source</dt><dd><span class="src">'+esc(n.source)+'</span></dd>';
     var skip=[];
-    var bandZh={main:'Main（主結果鏈）',ext:'Extended Data（延伸資料圖表）',supp:'Supplementary（補充：附錄問題與補充圖表）'};
-    h+='<dt>區帶</dt><dd>'+esc(bandZh[n.band]||n.band)+(n.type==='figure'?'（依 '+(n.meta.role_source==='manifest'?'manifest role '+esc(n.meta.role||'—'):'呈現的結果推導')+'）':'')+'</dd>';
+    var bandZh={main:'Main（主結果鏈）',ext:'Extended Data（延伸資料）',supp:'Supplementary（補充：附錄問題與補充圖表）'};
+    h+='<dt>區帶</dt><dd>'+esc(bandZh[n.band]||n.band)+(n.type==='figure'?'（依 '+(n.meta.role_source==='manifest'?'manifest role '+esc(n.meta.role||'—'):'呈現的結果推導')+'）':bandSourceZh(id))+'</dd>';
     if(n.type==='method'&&n.subtype==='sensitivity_group'){skip=['plan_id','sensitivity_ids','supplements'];
       h+='<dt>所屬分析</dt><dd><span class="goto" data-goto="'+esc(n.parent)+'">'+esc(nodes[n.parent]?nodes[n.parent].label:n.parent)+'</span>（0.18.0 起群縮排在所屬 plan 之下、區帶跟 plan；plan → 群為 L 形父子線）</dd>';
       var gids=n.meta.sensitivity_ids||[];h+='<dt>子分析（'+gids.length+'）</dt><dd>'+(gids.length?'<ul>'+gids.map(function(sid){var sn=nodes[sid];return '<li><span class="goto" data-goto="'+esc(sid)+'">'+esc(sn?sn.label:sid)+'</span>'+(sn?'：'+esc(stateZh[sn.state]||sn.state)+(sn.badge?'（'+esc(sn.badge)+'）':''):'')+'</li>';}).join('')+'</ul>':'無')+'</dd>';
@@ -3952,7 +4107,7 @@ GRAPH_JS = """
   else{actionsWhy='file:// 開啟無法呼叫伺服器';var hint0=document.getElementById('actions-hint');if(hint0)hint0.textContent='file:// 開啟的頁面無法呼叫伺服器：預覽與套用請用 progress_server.py --allow-apply 開啟，或由 status skill 跑腳本。';}
   // ---- 結構化動作表單（九種單動作 kind；0.16.5 加 nest_result、0.18.0 加 demote_plan）：送收件匣後同一個對話框立刻預覽（0.16.3）----
   var actForm=document.getElementById('act-form'),actKind='',actPayload=null,actErr=document.getElementById('act-err');
-  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result','nest-result','demote-plan'];
+  var ACT_GROUPS=['reassign','promote','role','move-plan','move-sens','reorder','move-result','nest-result','demote-plan','set-tier'];
   function showActGroup(name){ACT_GROUPS.forEach(function(g){var el=document.getElementById('act-'+g+'-fields');if(el)el.hidden=(g!==name);});}
   function $v(id,val){document.getElementById(id).value=val;}
   function planLabel(pid){var n=nodes['p:'+pid];return n?n.label:pid;}
@@ -3986,6 +4141,8 @@ GRAPH_JS = """
     else if(kind==='move_sensitivity'){document.getElementById('act-form-title').textContent='搬敏感性子分析：'+payload.plan+' '+payload.item+' → '+payload.to_plan;showActGroup('move-sens');$v('act-ms-plan',planLabel(payload.plan));$v('act-ms-item',(nodes['p:'+payload.plan+'#'+payload.item]||{label:payload.item}).label);$v('act-ms-to',planLabel(payload.to_plan));}
     else if(kind==='demote_plan'){document.getElementById('act-form-title').textContent='降為敏感性子分析：'+payload.plan+' → '+payload.to_plan;showActGroup('demote-plan');$v('act-dp-plan',planLabel(payload.plan));$v('act-dp-to',planLabel(payload.to_plan));}
     else if(kind==='reorder'){document.getElementById('act-form-title').textContent='調順序：goals.'+payload.list;showActGroup('reorder');$v('act-ro-list',payload.list);$v('act-ro-order',payload.order.join(' → '));}
+    else if(kind==='set_tier'){var stn=nodes[payload.node]||{label:payload.node};document.getElementById('act-form-title').textContent=(payload.tier==='extended'?'放入 Extended Data：':'移出 Extended Data：')+payload.node;showActGroup('set-tier');
+      $v('act-st-node',stn.label+'（'+payload.node+'）');$v('act-st-tier',payload.tier==='extended'?'extended（放入 Extended Data；跟著走：'+(edFollowers(payload.node).filter(function(k){return nodes[k].band!=='ext';}).join('、')||'無')+'）':'（空：從 analysis/extended-data.yaml 移除，回推導區帶 '+(BAND_ZH[derivedBand(payload.node)]||'')+'）');}
     else if(kind==='nest_result'){var kn=nodes['r:'+payload.key]||{label:payload.key,meta:{}},kown=String((kn.meta||{}).plan_id||''),cur=String((kn.meta||{}).supports||'');
       document.getElementById('act-form-title').textContent=payload.under?('掛到主結果下：'+payload.key+' → '+payload.under):('拉回頂層：'+payload.key);showActGroup('nest-result');
       $v('act-nr-key',kn.label+(kown?'（'+kown+' 的主要結果'+(cur?'，現為 '+cur+' 的支撐結果':'，現為頂層')+'）':''));
@@ -4014,7 +4171,7 @@ GRAPH_JS = """
       return {kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
     if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return null;}
       return {kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
-    if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'||actKind==='nest_result'||actKind==='demote_plan'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return null;}return {kind:actKind,payload:actPayload,reason:reason};}
+    if(actKind==='move_plan'||actKind==='move_sensitivity'||actKind==='reorder'||actKind==='move_result'||actKind==='nest_result'||actKind==='demote_plan'||actKind==='set_tier'){if(!actPayload){actErr.textContent='沒有拖放帶入的內容';return null;}return {kind:actKind,payload:actPayload,reason:reason};}
     actErr.textContent='未知的動作';return null;}
   document.getElementById('act-form-inner').addEventListener('submit',function(e){e.preventDefault();var payload=actFormPayload();if(!payload)return;
     var sb=document.getElementById('act-submit');sb.disabled=true;
@@ -4139,7 +4296,24 @@ GRAPH_JS = """
       var sw=24;try{if(st&&st.getBBox)sw=st.getBBox().width;}catch(e){}b.setAttribute('x',String((st?+st.getAttribute('x'):nodeW(nodes[id])-8)-sw-6));if(el.insertBefore)el.insertBefore(b,st||null);}b.textContent=text;}
   function setBand(id,band){var n=nodes[id];if(!n)return;n.band=band;G.nodes.forEach(function(m){if(m.parent===id)setBand(m.id,band);});}
   function subtree(id){var seen={},stack=[id];while(stack.length){var k=stack.pop();if(seen[k])continue;seen[k]=true;(outE[k]||[]).forEach(function(ei){var e=G.edges[ei];if(DOWN_TYPES.indexOf(e.type)>=0&&!seen[e.to])stack.push(e.to);});G.nodes.forEach(function(m){if(m.parent===k&&!seen[m.id])stack.push(m.id);});}return Object.keys(seen);}
-  function bandFollows(m){if(m.type==='decision')return false;if(m.type==='figure')return String((m.meta||{}).role_source||'')==='derived';return true;}   // 0.18.0：群、子分析、次要結果都跟 plan 換帶
+  function bandFollows(m){if(m.type==='decision')return false;if(m.type==='figure')return String((m.meta||{}).role_source||'')==='derived';var bs=String((m.meta||{}).band_source||'');return bs==='derived'||!bs;}   // 0.18.0：群、子分析、次要結果都跟 plan 換帶；0.20.0：列在 extended-data.yaml（explicit）或跟著它進 ED（inherited）的節點留在 Extended Data
+  // 0.20.0 樂觀更新 set_tier：跟著 explicit 節點走的節點——plan → 群、子分析、聚合次要結果、owner 為它的主要／未宣告結果與其支撐結果、plan_id 為它的驗證；子分析 → 聚合次要結果；主結果 → 支撐結果；驗證 → 無
+  function edFollowers(id){var n=nodes[id],out=[],seen={};if(!n)return out;function add(k){if(!seen[k]&&k!==id){seen[k]=true;out.push(k);}}
+    if(n.type==='method'&&id.indexOf('#')<0){var pid=id.slice(2);G.nodes.forEach(function(x){var xm=x.meta||{};
+      if(x.type==='method'&&x.id.indexOf('p:'+pid+'#')===0)add(x.id);
+      else if(x.type==='result'&&!x.parent&&x.subtype!=='secondary_group'&&resultOwnerOf(x)===pid)add(x.id);
+      else if(x.type==='validation'&&String(xm.plan_id||'')===pid)add(x.id);});}
+    for(var pass=0;pass<2;pass++)G.nodes.forEach(function(x){if(x.parent&&(x.parent===id||seen[x.parent]))add(x.id);});
+    return out;}
+  function edSetExplicit(id,marks){var n=nodes[id];n.band='ext';n.meta.band_source='explicit';marks.push(id);
+    edFollowers(id).forEach(function(k){var x=nodes[k];if(x.band==='ext')return;x.band='ext';x.meta.band_source='inherited:'+id;marks.push(k);});}
+  function edClear(id,marks){var n=nodes[id];n.meta.band_source='derived';n.band=derivedBand(id);marks.push(id);
+    var inh=G.nodes.filter(function(x){return String((x.meta||{}).band_source||'')==='inherited:'+id;});inh.forEach(function(x){x.meta.band_source='derived';});
+    for(var it=0;it<3;it++)inh.forEach(function(x){x.band=derivedBand(x.id);});   // 跟父的（聚合次要／支撐）要等父先落定，多算幾輪即收斂
+    inh.forEach(function(x){marks.push(x.id);});}
+  // 缺 role 的圖表：呈現的結果全在同一區帶 → 那一帶（含 ext），否則 main（與 Python 同）
+  function edRederiveFigures(marks){G.nodes.forEach(function(f){if(f.type!=='figure'||String((f.meta||{}).role_source||'')!=='derived')return;var bs=[];(inE[f.id]||[]).forEach(function(ei){var e=G.edges[ei];if(e.type==='depicts'&&nodes[e.from])bs.push(nodes[e.from].band);});
+    var nb=(bs.length&&bs.every(function(b){return b===bs[0];}))?bs[0]:'main';if(nb!==f.band){f.band=nb;marks.push(f.id);}});}
   function labelOf(id){var el=nodeEls[id];return el?el.querySelector('text.lbl'):null;}
   // 0.17.2 暫存後重排：relayout() 只照 order 排，applyOptimistic 改了 parent／band 後節點會留在原列，這裡對每個 (band, col) 格子重算 order。
   // anchor＝節點的歸屬：parent；頂層 plan 用 plans 邊的來源問題、頂層結果用 produces 邊的來源（plan 或子分析）、驗證用 validated_by 的來源 plan、
@@ -4226,6 +4400,7 @@ GRAPH_JS = """
       var sg=sp+'#S';if(nodes[sg]){nodes[sg].staged_gone=true;G.nodes.forEach(function(m){if(m.parent===sg){m.parent=dg;setBand(m.id,nodes[dp].band);marks.push(m.id);}});G.edges.forEach(function(e){if(e.type==='sensitivity'&&e.from===sg)e.from=dg;if(e.type==='sensitivity'&&e.to===sg)e.default_visible=false;});}
       G.edges.forEach(function(e){if(e.type==='plans'&&e.to===sp)e.default_visible=false;});addEdge(dg,sp,'sensitivity');
       var gk=nodes[dg].meta.sensitivity_ids;if(gk)gk.push(sp);if(nodes[sq0]){if(typeof setBadge==='function')setBadge(sq0,'無 active plan');else nodes[sq0].badge='無 active plan';marks.push(sq0);}marks.push(sp);}
+    else if(kind==='set_tier'){if(!nodes[p.node])return marks;if(p.tier==='extended')edSetExplicit(p.node,marks);else edClear(p.node,marks);edRederiveFigures(marks);}   // 0.20.0
     else if(kind==='set_role'){var figs={};if(p.figures)Object.keys(p.figures).forEach(function(f){figs[f]=p.figures[f];});if(p.figure)figs[p.figure]=p.role;
       Object.keys(figs).forEach(function(f){var fn=nodes['f:'+f];if(!fn)return;var b=ROLE_BAND[String(figs[f]||'').toLowerCase()];if(b){fn.band=b;fn.meta.role=figs[f];}marks.push('f:'+f);});}
     else if(kind==='reorder'){var qs=(p.order||[]).map(function(x){return 'q:'+x;}).filter(function(k){return !!nodes[k];});var ords=qs.map(function(k){var n=nodes[k];return n.order0!==undefined?n.order0:n.order;}).sort(function(a,b){return a-b;});qs.forEach(function(k,i){var n=nodes[k];n.order=ords[i];if(n.order0!==undefined)n.order0=ords[i];n.moved0=true;});marks=qs;}
@@ -4241,8 +4416,9 @@ GRAPH_JS = """
     if(k==='reorder')return '調順序：'+p.list+' → '+(p.order||[]).join('、');
     if(k==='move_result')return '搬結果：'+p.key+' → '+p.to_plan+(p.to_item?' '+p.to_item:(p.new_item?' 新增子分析':''));
     if(k==='nest_result')return p.under?('掛到主結果下：'+p.key+' → '+p.under):('拉回頂層：'+p.key);
+    if(k==='set_tier')return (p.tier==='extended'?'放入 Extended Data：':'移出 Extended Data：')+p.node;
     return k;}
-  function stagedTarget(it){var p=it.payload||{},k=it.kind;if(k==='reassign'||k==='promote')return 'q:'+p.from;if(k==='set_role')return 'f:'+(p.figure||Object.keys(p.figures||{})[0]||'');if(k==='move_plan'||k==='demote_plan')return 'p:'+p.plan;if(k==='move_sensitivity')return 'p:'+p.plan+'#'+p.item;if(k==='reorder')return 'q:'+((p.order||[])[0]||'');return nodes['r:'+p.key]?'r:'+p.key:(aggOfKey(p.key)||'r:'+p.key);}
+  function stagedTarget(it){var p=it.payload||{},k=it.kind;if(k==='set_tier')return String(p.node||'');if(k==='reassign'||k==='promote')return 'q:'+p.from;if(k==='set_role')return 'f:'+(p.figure||Object.keys(p.figures||{})[0]||'');if(k==='move_plan'||k==='demote_plan')return 'p:'+p.plan;if(k==='move_sensitivity')return 'p:'+p.plan+'#'+p.item;if(k==='reorder')return 'q:'+((p.order||[])[0]||'');return nodes['r:'+p.key]?'r:'+p.key:(aggOfKey(p.key)||'r:'+p.key);}
   function stagedUi(){return {pre:document.getElementById('staged-summary'),apply:document.getElementById('staged-apply'),lock:[document.getElementById('staged-preview'),document.getElementById('staged-clear')],confirm:false,
     extra:function(){return {reason:stagedReason()};},   // 0.17.3 套用時才帶整批理由（server 對 batch 蓋過 payload 頂層 reason、成功後同步收件匣那筆）
     onStale:function(){if(stagedBatchId)stagedDryRun(stagedBatchId);},
@@ -5075,7 +5251,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span>● 完成</span><span>◐ 過期</span><span>✖ 受阻</span><span>○ 未到</span><span>◌ 不明</span>',
         '<span>｜</span>',
         '<span><span class="esw"></span>主幹（規劃／產出／驗證）；同來源的線合併成幹線＋分支，滑過任一分支整束高亮</span>',
-        '<span>三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶——同一個問題延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊、帶與帶之間留一列空隙（淡色細線分隔）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走，其餘跨區的邊除主問題→附錄問題、結果→圖表外預設不畫，點選節點或「顯示全部邊」才顯示</span>',
+        '<span>三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料：圖表依 manifest role，方法／結果／驗證依 analysis/extended-data.yaml；問題不能放）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶——同一個問題延伸出來的方法／驗證／結果／圖表在各欄從帶的第一列起對齊、帶與帶之間留一列空隙（淡色細線分隔）；每組敏感性分析群縮排在所屬分析之下、區帶跟它走，其餘跨區的邊除主問題→附錄問題、結果→圖表外預設不畫，點選節點或「顯示全部邊」才顯示</span>',
         '<span>已由驗證鏈覆蓋的方法→結果產出線預設不畫；跳欄的線在中間欄留一列空位穿過，不與該欄節點交錯</span>',
         '<span>縮排子節點＝敏感性子分析與其次要結果、敏感性分析群（群縮一層、子分析再縮一層；方法欄 plan→群→子分析 L 形線；結果欄靠產出邊連結）；plan 徽章「敏感性 n」，點選 plan 可暫時收合群與子分析</span>',
         '<span>結果主從（outputs 的 supports）：支撐結果縮排在主結果之下、同一區帶，以一條結果色的 L 形線（支撐）連自主結果；主結果徽章「支撐 n」，點選主結果可暫時收合；plan→支撐結果的產出線預設不畫</span>',
@@ -5139,7 +5315,7 @@ def _inbox_block(ir: dict) -> list[str]:
 
 
 def _actions_panel(ir: dict, labels: dict) -> list[str]:
-    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種；0.16.5 起八種；0.18.0 起十種含 batch）：列 pending 的結構化項目，每筆「預覽變更」「套用」「撤回」（0.18.2；撤回只要連上 server，不需 --allow-apply）；伺服器未開 --allow-apply
+    """「待套用動作」面板（0.16.0；0.16.1 起六種 kind；0.16.2 起七種；0.16.5 起八種；0.18.0 起十種含 batch；0.20.0 起十一種）：列 pending 的結構化項目，每筆「預覽變更」「套用」「撤回」（0.18.2；撤回只要連上 server，不需 --allow-apply）；伺服器未開 --allow-apply
     或 file:// 開啟時按鈕停用並說明原因（JS 依 /api/ping 的 actions_enabled 啟用）。另附共用表單的骨架（每種 kind 一組欄位），0.16.3 起表單多一個
     預覽區 #act-preview-box（#act-summary 摘要、#act-dismiss 撤回／#act-keep 先留在收件匣／#act-apply 套用），送出後在同一個對話框顯示 dry-run 摘要。"""
     inbox = ir['inbox']
@@ -5172,7 +5348,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         lines.append('</tbody></table>')
     else:
         lines.append('<p class="src">沒有待套用的結構化項目。在關聯圖拖節點就會產生一筆：問題拖到另一個帶（降階／升回）或同帶另一個問題上（調順序）、'
-                     '方法拖到問題上（搬方法）、方法拖到別的方法上（降為敏感性子分析）、敏感性子分析拖到別的方法上（搬敏感性子分析）、結果拖到別的方法或敏感性子分析上（搬結果）、圖表拖到別的帶（改 role）；'
+                     '方法拖到問題上（搬方法）、方法拖到別的方法上（降為敏感性子分析）、敏感性子分析拖到別的方法上（搬敏感性子分析）、結果拖到別的方法或敏感性子分析上（搬結果）、圖表拖到別的帶（改 role）、'
+                     '方法／敏感性子分析／主要結果／驗證拖到 Extended Data 帶（放入 ED）或從 ED 帶拖回原帶（移出 ED；問題節點不能放）；'
                      '連續拖放多次可先「加入暫存」，最後在「暫存動作」面板一次預覽、一次套用（batch）。</p>')
     lines.append('</details>')
     lines += [
@@ -5190,6 +5367,8 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<label for="act-ms-to">to_plan（目標 plan；追加為 R&lt;n+1&gt;）</label><input id="act-ms-to" readonly></div>',
         '<div id="act-demote-plan-fields" hidden><label for="act-dp-plan">plan（要降階的附錄問題 active plan）</label><input id="act-dp-plan" readonly>',
         '<label for="act-dp-to">to_plan（目標 active plan；來源整份成為其 R&lt;n+1&gt;，來源自己的子分析接在後面）</label><input id="act-dp-to" readonly></div>',
+        '<div id="act-set-tier-fields" hidden><label for="act-st-node">node（方法／敏感性子分析／主要或未宣告結果／驗證的節點 id）</label><input id="act-st-node" readonly>',
+        '<label for="act-st-tier">tier（extended＝放入 Extended Data；空＝移出、回推導區帶）</label><input id="act-st-tier" readonly></div>',
         '<div id="act-move-result-fields" hidden><label for="act-mr-key">key（要搬的結果鍵）</label><input id="act-mr-key" readonly>',
         '<label for="act-mr-to">to_plan（目標 plan）</label><input id="act-mr-to" readonly>',
         '<div id="act-mr-dest-wrap" hidden><label for="act-mr-dest">放到哪裡（拖到區帶時選）</label><select id="act-mr-dest"></select></div>',

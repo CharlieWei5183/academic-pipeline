@@ -271,7 +271,7 @@ def test_band_assignment_groups_and_edges() -> None:
         assert grp["type"] == "method" and grp["subtype"] == "sensitivity_group" and grp["parent"] == "p:SQ1-v2" and grp["col"] == 2
         assert grp["label"] == "SQ1-v2 敏感性分析" and grp["badge"] == "2 項" and grp["collapsed"] is False and grp["state"] == "done"
         assert grp["title"] == "SQ1-v2 的 robustness 子分析共 2 項；縮排在所屬 plan 之下、區帶跟 plan 走"   # v0.18.0
-        assert grp["meta"] == {"plan_id": "SQ1-v2", "sensitivity_ids": ["p:SQ1-v2#R1", "p:SQ1-v2#R2"]}, grp["meta"]   # v0.18.0：不再有 supplements
+        assert grp["meta"] == {"plan_id": "SQ1-v2", "sensitivity_ids": ["p:SQ1-v2#R1", "p:SQ1-v2#R2"], "band_source": "derived"}, grp["meta"]   # v0.18.0：不再有 supplements；0.20.0：帶 band_source
         assert grp["source"] == "analysis/plans/SQ1-v2.yaml#robustness" and grp["x"] == nodes["p:SQ1-v2"]["x"] + 24, "v0.18.0：群縮排一層"
         old = nodes["p:SQ1-v1#S"]
         assert old["state"] == "expired" and old["collapsed"] is True and old["badge"] == "1 項" and "supplements" not in old["meta"]
@@ -432,12 +432,12 @@ def test_html_bands_and_panel() -> None:
         assert bands["_class"] == "bands" and set(bands) == {"_class", "main", "ext", "supp"}
         assert bands["main"][0] == "band-divider off" and bands["main"][2] == "band-title" and bands["main"][4] == "Main ｜ 主結果"
         assert bands["main"][3] == str(rp.GRAPH_PAD + rp.BAND_TITLE_DY)
-        assert bands["ext"][0] == "band-divider off" and bands["ext"][2] == "band-title off" and bands["ext"][4] == "Extended Data ｜ 延伸資料圖表"
+        assert bands["ext"][0] == "band-divider off" and bands["ext"][2] == "band-title off" and bands["ext"][4] == "Extended Data ｜ 延伸資料"   # 0.20.0：ED 不只放圖表
         assert bands["supp"][0] == "band-divider" and bands["supp"][2] == "band-title" and bands["supp"][4] == "Supplementary ｜ 補充：附錄問題與補充圖表"
         assert bands["supp"][1] == str(main_bottom + rp.BAND_GAP // 2) and bands["supp"][3] == str(main_bottom + rp.BAND_GAP + rp.BAND_TITLE_DY)
         assert bands["supp"][5] == str(width - 20)
         assert html_text.index('<g id="graph-bands"') < html_text.index('<g id="graph-trunks">'), "區帶在 graph-root 最前面"
-        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料圖表，依 manifest role）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶",   # v0.18.1：圖例句多問題帶
+        for token in ("三個區帶由上而下：Main（主結果鏈）、Extended Data（延伸資料：圖表依 manifest role，方法／結果／驗證依 analysis/extended-data.yaml；問題不能放）、Supplementary（附錄問題及其一切、補充圖表）；每個區帶內再依問題分成橫向的問題帶",   # v0.18.1：圖例句多問題帶；0.20.0：ED 措辭
                       "每組敏感性分析群縮排在所屬分析之下、區帶跟它走",
                       "'<dt>所屬分析</dt>", "子分析（'+gids.length+'）", "'<dt>父分析</dt>", "'<dt>區帶</dt>",
                       'data-node-id="p:SQ1-v2#S"', 'data-band="supp"', 'data-band="main"', "text.band-title", "line.band-divider", "#graph-bands.off",

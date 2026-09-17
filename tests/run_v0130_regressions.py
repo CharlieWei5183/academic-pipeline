@@ -182,7 +182,7 @@ def test_sensitivity_subnodes_and_result_kinds() -> None:
         assert r2["label"] == "R2：另一個分佈族"
         assert r1["title"] == "換 block 尺度看主要鍵是否穩定——與主要重疊" and r1["source"] == "analysis/plans/SQ1-v2.yaml#robustness[R1]"
         assert r1["meta"] == {"change": "換 block 尺度看主要鍵是否穩定——與主要重疊", "expected_keys": ["k2"], "registered_keys": ["k2"],
-                              "executed": True, "execution_note": "500 km 區塊"}, r1["meta"]
+                              "executed": True, "execution_note": "500 km 區塊", "band_source": "derived"}, r1["meta"]   # 0.20.0：非問題節點都帶 band_source
         assert r1["state"] == "done" and r1["badge"] == "" and r1["collapsed"] is False
         assert r2["state"] == "done" and r2["meta"]["expected_keys"] == ["k4"] and r2["meta"]["executed"] is None and r2["meta"]["execution_note"] == ""
         assert r3["state"] == "pending" and r3["badge"] == "部分" and r3["meta"]["registered_keys"] == ["k6"] and r3["meta"]["executed"] is False

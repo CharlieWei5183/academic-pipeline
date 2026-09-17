@@ -8,12 +8,12 @@
       [--expect-token <token>] [--date YYYY-MM-DD] (--dry-run | --apply)
 
 --batch 的內容：{"actions": [{"kind": "nest_result", "payload": {"key": "k2", "under": "k1"}}, …]}（或直接是清單）；
-kind 為 ssot_actions_common.ACTIONS 裡 batch 以外的八種。
+kind 為 ssot_actions_common.ACTIONS 裡 batch 以外的十種（0.18.0 加 demote_plan、0.20.0 加 set_tier）。
 
 執行方式：每一步以子程序跑該 kind 的腳本 `--apply`（同一套 dispatch 表 ACTIONS[kind]['argv']），並設環境變數
 SSOT_ACTIONS_BATCH_STEP=1——子步驟略過自己的工作區 dry-run、step_finish 不重畫；--daily-log 不傳給子步驟。每步之後讀 index.yaml 的
 active 差異（新版 plan 的 supersedes）得出「舊 plan id → 新 plan id」與「舊問題 id → 新問題 id」（reassign／promote），後續步驟 payload 裡
-引用舊 id 的欄位（plan／to_plan／from／to_question／order）自動改指新 id；對照表寫進 batch 的 run log。結果鍵不會改名，不接力。
+引用舊 id 的欄位（plan／to_plan／from／to_question／order；set_tier 的 node 前綴 p: 的 plan 部分）自動改指新 id；對照表寫進 batch 的 run log。結果鍵不會改名，不接力。
 
 --dry-run：在一個暫存工作區（ssot_actions_common.make_workspace）把整串依序真跑（每步的 apply 作用在工作區），印合併摘要（每步一段
 ≤ 8 行＋總結：最終各問題的 plan 版本、最終 fingerprint、預定 D# 範圍、版本接力對照）與 token；不寫任何專案檔。
@@ -136,6 +136,14 @@ def relay_payload(kind: str, payload: dict[str, Any], plan_map: dict[str, str], 
         if new_order != [str(x) for x in out['order']]:
             changes.append(f'order: {",".join(str(x) for x in out["order"])} → {",".join(new_order)}')
             out['order'] = new_order
+    if kind == 'set_tier':   # 0.20.0：node 為 p:<pid>／p:<pid>#R<k> 時 pid 部分接力；結果鍵與驗證 id 不改名
+        node = str(out.get('node') or '')
+        if node.startswith('p:'):
+            pid, sep, rest = node[2:].partition('#')
+            new_pid = resolve_id(pid, plan_map)
+            if new_pid != pid:
+                out['node'] = f'p:{new_pid}{sep}{rest}'
+                changes.append(f'node: {node} → {out["node"]}')
     return out, changes
 
 

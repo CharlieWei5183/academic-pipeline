@@ -411,6 +411,22 @@ v0.17.3 修進度頁面批次模式的流程：理由欄不再作廢已建的批
 - 登記錨點：CHANGELOG `## 0.17.3` 含 `--set-reason`、`BrokenPipeError`、「一鍵撤回」、「預覽後」、`run_v0171_regressions.py`（說明 0.17.1 的作廢規則改掉）、本檔名；README／`status` SKILL.md 含「預覽後」；`plugin.json` ≥ 0.17.3；相關檔不含 arm 的直譯字。
 - 舊測試：v0171 步驟 (5) 是先填理由再預覽，0.17.3 下仍成立，沒有改斷言；v0.7–v0.17.2 各支照跑。
 
+## run_v0200_regressions.py
+
+v0.20.0 關聯圖的 Extended Data 區帶除了圖表，也能放方法（plan／敏感性子分析）、結果、驗證；只有問題節點（SQ／AQ／q:main）不能放（使用者 2026-09-17 裁定：「方法，結果，驗証也要能放在 extended data。只有 SQ/AQ 不行」）。SSOT 是新檔 `analysis/extended-data.yaml`（opt-in、不在 fingerprint 雜湊範圍）；新動作 kind `set_tier`（`set_tier.py`）。fixture 沿用 v0.16.1 的 `build_fixture`，另以複本加 `extended-data.yaml`、SQ1-v1 的 k2 `supports: k1`、缺 role 的圖表 F_d（呈現 k1／k2）後重畫（不走 check_plan、content_hash 不重接）。執行：`python3 tests/run_v0200_regressions.py`（有 google-chrome／chromium 時多跑瀏覽器端到端，約 1–2 分鐘；沒有就印一行跳過）。
+
+- IR：`plans: [SQ1-v1]` → plan ext／`band_source` explicit，群、兩個子分析、兩個聚合節點、k1 與其支撐結果 k2、V1 全 ext／`inherited:p:SQ1-v1`，缺 role 的 F_d 跟去 ext、F_a（role main）不動、SQ2／AQ1 那邊不動；每個非問題非圖表節點都有 `meta.band_source`（缺檔時全 derived）、問題與圖表沒有；`stats.band_*` 加總＝節點數；跨帶的 plans／validated_by 邊預設不畫、depicts 仍畫；`validate_ir` 空；HTML 區帶標題「Extended Data ｜ 延伸資料」、不含「延伸資料圖表」「只放圖表」。單一子分析 `SQ1-v1#R2` → 只它與聚合節點 ext（plan／群／R1 留 main、validate 過）；單一主要結果 m1；單一驗證 V3；未宣告結果 u1 也可列。
+- 不合規的清單：問題 id（`SQ1`／`q:SQ2`）、群 `#S`、不存在的 id、寫了前綴的 id、圖表 id、次要鍵 r2、支撐鍵 k2、非字串、清單不是 list、頂層不是 mapping → 各一句 WARNING 並忽略那一筆，帶與缺檔時相同；沒有 `schema_version` 也照讀。
+- 缺檔＝0.19.0：以 git 取 `01fff63` 的 render_progress.py，plain 與 variant 兩個 fixture 的 IR 除 `meta.band_source` 外逐位元相同、`schema_version` 仍 1；四個 ED 配置的 crossings ≤ 缺檔時（0）且不穿過節點（`plans: [SQ1-v1]` 那個配置容許 k1（ext）→ F_a（main）與 m1（main）→ F_b（ext）一上一下的跨帶 depicts 交叉，斷言只有 depicts×depicts）。
+- `validate_ir`：問題 ext、ext 卻 derived、非 ext 卻 explicit、band_source 缺或亂值、inherited 來源不存在／不在 ext／非 explicit、子分析 inherited 卻與群不同帶、聚合節點與子分析不同帶；explicit 子分析獨自在 ext 合法；圖表不驗 band_source。
+- dragCandidate（node，抽 `tierCand`／`derivedBandOf` 等新函式）：問題拖到 ext 紅；plan／子分析／主要結果／驗證拖到 ext → `set_tier{tier:'extended'}`；explicit 節點拖回推導區帶 → `set_tier{tier:''}`；explicit 主要結果拖到 supp 走原本的 `move_result` 下拉；inherited 節點拖出 ext 紅（來源 id）；聚合次要結果拖到 ext 紅；支撐結果拖到 ext 紅；群不可拖、驗證可拖；已在 ext 再拖到 ext 無事；`derivedBandOf` 三型；plan explicit 複本裡子分析／驗證／主結果／支撐拖出 ext 都紅並指向 plan。
+- applyOptimistic（node）：plan 進 ED 連帶群、子分析、聚合、主結果＋支撐、驗證、缺 role 圖表（已 explicit 的子分析不改標）；plan 移出全部回 derived；子分析、結果、驗證各自進／出；`bandFollows` 對 explicit／inherited 回 false；不存在的節點回空 marks。
+- `set_tier.py`：dry-run 不寫檔、摘要列跟著走的節點與 token；apply 缺檔用模板建（只有 plans 那一行變區塊）、D-003（stage figure-design、question SQ1、decision 列跟著走的節點、links 含檔與節點）、daily log 段、run log 四步、重畫後帶正確；多節點增刪、移除到空回 `[]`、整輪回到與模板逐位元相同；前置條件 exit 2 十一種（不存在、問題、群、次要鍵、支撐鍵、圖表、未列、亂 tier、驗證不存在、R 不存在、token 不符）與已列／inherited 再列；唯讀 decisions.yaml → 工作區 dry-run 失敗 exit 1、新建檔刪除、root 不變。
+- server／batch：`ACTION_KINDS` 十一種同序（`set_tier` 在 `demote_plan` 之後、`batch` 之前）、`validate_payload` 各錯誤訊息、`/api/inbox` 201／400 → dry-run → apply（D-003、`PROGRESS.actions.log`、收件匣 done、daily log）、已列再送 400；batch：`nest_result` 出新版後 `set_tier` 對 `p:SQ1-v2#R1` 寬鬆驗證接受、run_batch 對 `node` 的 plan 部分接力（`p:SQ1-v2#R2` → `p:SQ1-v3#R2`）。
+- headless Chrome（有才跑）：拖 `v:V1` 到 Extended Data 帶空白處 → 帶打亮、標籤「Extended Data 歸屬：V1 放入 Extended Data（放開即暫存）」、暫存 1 筆、V1 帶 ext；問題拖到 ext 紅、不暫存；全部預覽（摘要含 `第 1／1 步（set_tier）：D-003`）→ 全部套用 → 檔案落地、D-003；複本（R2 explicit）拖 `p:SQ1-v1#R2` 回 Main 帶 → `set_tier{tier:''}`、聚合節點跟；清空還原。
+- 登記錨點：CHANGELOG `## 0.20.0`（第一段含使用者裁定）、README／`status` SKILL.md 含 `extended-data.yaml`／`set_tier`；本檔含 `run_v0200_regressions.py`；`plugin.json` ≥ 0.20.0；`set_tier.py VERSION = '0.20.0'`；相關檔不含 arm 的直譯字（U+81C2）與常見簡體字。
+- 舊測試的配合改動（逐項見 CHANGELOG 0.20.0 第 9 條）：`run_v0110`／`run_v0130`／`run_v0140`（exact meta 多 `band_source: derived`）、`run_v0140`／`run_v0150`（區帶標題與圖例句改「延伸資料」）、`run_v0161`（問題拖到 ext 的紅線句）、`run_v0162`（驗證節點可拖）、`run_v0164`（主要結果拖到 ext 改為 `set_tier`、harness 加新函式）、`run_v0170`／`run_v0180`（kind 清單多「Extended Data 歸屬」、`ACTION_KINDS` 改前綴斷言）；其餘照跑。
+
 ## run_v0190_regressions.py
 
 v0.19.0 三段：(0) renderer 效能 patch 的等價；(1) 關聯圖結果欄改「宣告粒度」（使用者 2026-09-17 裁定：有自有次要鍵的敏感性子分析底下一個次要結果聚合節點 `r:<pid>#R<k>#secondary`，不看鍵數多寡、不設門檻；沒宣告次要鍵的子分析不建）；(2) report.md 節點。

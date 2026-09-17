@@ -1306,7 +1306,7 @@ def test_graph_full_fixture() -> None:
         assert nodes["v:V1"]["state"] == "expired" and nodes["v:V1"]["meta"]["status"] == "pass" and nodes["v:V1"]["meta"]["primary_results"] == ["k1"]
         assert nodes["v:V1"]["meta"]["robustness_keys"] == ["k2"]
         assert nodes["d:D-002"]["meta"] == {"date": "2026-07-02", "stage": "analyze-data", "checkpoint": "c", "decision": "依 plan 跑分析",
-                                            "method": "GLMM", "exec_issue": "快取"} and nodes["d:D-002"]["state"] == ""
+                                            "method": "GLMM", "exec_issue": "快取", "band_source": "derived"} and nodes["d:D-002"]["state"] == ""   # 0.20.0：非問題節點都帶 band_source
         for n in g["nodes"]:
             assert n["source"], f"{n['id']} 無 source"
             assert isinstance(n["x"], (int, float)) and isinstance(n["y"], (int, float)) and not isinstance(n["x"], bool)

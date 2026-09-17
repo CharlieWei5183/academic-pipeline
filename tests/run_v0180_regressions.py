@@ -107,7 +107,7 @@ def test_ir_groups(tmp: Path) -> None:
     assert 'class="edge e-supplements' not in html and "'<dt>敏感性對照</dt>" not in html
     for token in ('Supplementary ｜ 補充：附錄問題與補充圖表', '每組敏感性分析群縮排在所屬分析之下、區帶跟它走', 'plan 徽章「敏感性 n」', '收合敏感性分析',
                   'active plan 拖到另一個問題的 active plan 上＝降為它的敏感性子分析', "demote_plan:'降為敏感性子分析'", 'act-demote-plan-fields',
-                  '掛到主結果下／降為敏感性子分析／批次'):
+                  '掛到主結果下／降為敏感性子分析／Extended Data 歸屬／批次'):   # 0.20.0 多 set_tier
         assert token in html, f'HTML 缺 {token}'
     # validate_ir 新規則
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
@@ -254,7 +254,7 @@ def test_failure_restores(tmp: Path) -> None:
 
 def test_payload_server_batch(tmp: Path) -> None:
     root = fixture(tmp, 'srv')
-    assert C.ACTION_KINDS == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'batch')
+    assert C.ACTION_KINDS[:9] == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan') and C.ACTION_KINDS[-1] == 'batch'   # 0.20.0 起 demote_plan 與 batch 之間多 set_tier
     assert ps.ACTION_KINDS == C.ACTION_KINDS and rp.INBOX_ACTION_KINDS == C.ACTION_KINDS and rp.INBOX_KINDS['demote_plan'] == '降為敏感性子分析'
     assert C.ACTIONS['demote_plan']['script'] == 'demote_plan.py' and C.ACTIONS['demote_plan']['stage'] == 'study-design' and C.ACTIONS['demote_plan']['label'] == '降為敏感性子分析'
     norm, err = C.validate_payload(root, 'demote_plan', {'plan': 'AQ1-v1', 'to_plan': 'SQ1-v1'})

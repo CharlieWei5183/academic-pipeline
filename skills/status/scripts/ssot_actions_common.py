@@ -40,7 +40,7 @@ SCRIPTS = {
 }
 # stale guard 與 server token 用的 SSOT 檔（相對 root）；缺檔以空字串計。
 TOKEN_FILES = ('project.yaml', 'decisions.yaml', 'analysis/results.json', 'analysis/validation.yaml',
-               'analysis/plans/index.yaml', 'analysis/figures/manifest.json', 'PROGRESS.inbox.yaml')
+               'analysis/plans/index.yaml', 'analysis/figures/manifest.json', 'analysis/extended-data.yaml', 'PROGRESS.inbox.yaml')   # 0.20.0 加 extended-data.yaml
 CJK_NUM = '零一二三四五六七八九十'
 # 批次模式（run_batch.py 0.17.0）：由 run_batch.py 對每個子步驟設這個環境變數＝'1'——子步驟 --apply 時跳過自己的工作區 dry-run（整串已在
 # run_batch 的同一個工作區跑過）、step_finish 不重畫（run_batch 最後重畫一次）；--daily-log 由 run_batch 不傳給子步驟、只在最後追記一段。
@@ -418,7 +418,7 @@ def append_daily_log(path: Path, block: str) -> None:
 # 檔案層級的 symlink，目錄 symlink 會被 rglob 走進去，因此雜湊值與原根相同；dry-run 結束整個工作區刪除）。
 COPY_FILES = ('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'PROGRESS.inbox.yaml', 'PROGRESS.ir.json',
               'PROGRESS.html', 'DECISIONS-TIMELINE.md', 'analysis/results.json', 'analysis/validation.yaml',
-              'analysis/figures/manifest.json', 'analysis/figures/figure-story.md')
+              'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml')   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
 COPY_DIRS = ('analysis/plans', 'evaluations', 'reviews')
 
 
@@ -617,6 +617,98 @@ def manifest_figure_ids(root: Path) -> list[str] | None:
     if not isinstance(doc, dict) or not isinstance(doc.get('figures'), list):
         return None
     return [str(f.get('id')) for f in doc['figures'] if isinstance(f, dict) and f.get('id')]
+
+
+# ---------- 0.20.0 Extended Data 歸屬（analysis/extended-data.yaml；set_tier）----------
+
+EXTENDED_DATA_REL = 'analysis/extended-data.yaml'
+TIERS = ('extended', '')
+TIER_NODE_RE = re.compile(r'^(p|r|v):(.+)$')
+ED_LIST_OF = {'p': 'plans', 'r': 'results', 'v': 'validation'}
+
+
+def extended_data_lists(root: Path) -> dict[str, list[str]] | None:
+    """讀 extended-data.yaml 的三個清單（缺檔＝三個空清單；無法解析或頂層不是 mapping 回 None）。清單不是 list 視為空。"""
+    path = root / EXTENDED_DATA_REL
+    if not path.is_file():
+        return {'plans': [], 'results': [], 'validation': []}
+    try:
+        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    if doc is None:
+        doc = {}
+    if not isinstance(doc, dict):
+        return None
+    out: dict[str, list[str]] = {}
+    for name in ('plans', 'results', 'validation'):
+        raw = doc.get(name)
+        out[name] = [str(x).strip() for x in raw if isinstance(x, str) and str(x).strip()] if isinstance(raw, list) else []
+    return out
+
+
+def tier_node_exists(root: Path, node: str) -> str:
+    """set_tier 的節點是否存在於 SSOT：p:<pid>（index.yaml）／p:<pid>#R<k>（plan yaml robustness）／r:<key>（results.json）／v:<id>（validation.yaml）。
+    回空字串＝存在；否則回原因。群 #S、問題、圖表一律拒收（細一層的「次要鍵／支撐結果」由 set_tier.py 依關聯圖判）。"""
+    m = TIER_NODE_RE.match(node)
+    if not m:
+        if node.startswith('q:'):
+            return '問題（SQ／AQ）不能放 Extended Data'
+        if node.startswith('f:'):
+            return '圖表的區帶由 manifest role 決定，請用 set_role'
+        return f'node 須為 p:<plan 或子分析 id>／r:<結果鍵>／v:<驗證 item id>（現值 {node!r}）'
+    kind, sid = m.group(1), m.group(2)
+    if kind == 'p':
+        if sid.endswith('#S'):
+            return '敏感性分析群跟 plan 走，不能單獨放；請指定 plan 或個別子分析'
+        pid, _, rid = sid.partition('#')
+        try:
+            index = plan_common.load_index(root)
+        except Exception:
+            return 'analysis/plans/index.yaml 不存在或無法解析'
+        entries = {str(e.get('plan_id')): e for e in (index.get('plans') or []) if isinstance(e, dict)}
+        if pid not in entries:
+            return f'index.yaml 無 plan {pid}'
+        if rid:
+            path = root / (str(entries[pid].get('path') or f'analysis/plans/{pid}.yaml'))
+            doc = load_yaml(path) if path.is_file() else None
+            ids = [str(it.get('id') or f'R{i + 1}') for i, it in enumerate((doc or {}).get('robustness') or []) if isinstance(it, dict)] if isinstance(doc, dict) else []
+            if rid not in ids:
+                return f'{pid} 的 robustness 無 {rid}'
+        return ''
+    if kind == 'r':
+        path = root / 'analysis/results.json'
+        try:
+            results = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        except Exception:
+            return 'analysis/results.json 無法解析'
+        return '' if isinstance(results, dict) and sid in results else f'results.json 無結果鍵 {sid}'
+    if not (root / 'analysis/validation.yaml').is_file():
+        return 'analysis/validation.yaml 不存在'
+    return '' if sid in validation_items_by(root) else f'validation.yaml 無 item {sid}'
+
+
+def _validate_set_tier(root: Path, payload) -> tuple[dict | None, str]:
+    if not isinstance(payload, dict):
+        return None, 'set_tier 需要 payload object'
+    node = str(payload.get('node') or '').strip()
+    tier = str(payload.get('tier') or '').strip().lower()
+    if not node:
+        return None, 'payload 須為 {node, tier}（tier 為 extended 或空字串）'
+    if tier not in TIERS:
+        return None, f'{node} 的 tier 須為 extended 或空字串（空＝移出 Extended Data）'
+    why = tier_node_exists(root, node)
+    if why:
+        return None, why
+    lists = extended_data_lists(root)
+    if lists is None:
+        return None, f'{EXTENDED_DATA_REL} 無法解析'
+    listed = node[2:] in lists[ED_LIST_OF[node[0]]]
+    if tier == 'extended' and listed:
+        return None, f'{node} 已列在 {EXTENDED_DATA_REL}，沒有要改的東西'
+    if tier == '' and not listed:
+        return None, f'{node} 不在 {EXTENDED_DATA_REL}（不是 explicit 的 Extended Data 節點），沒有要移除的東西'
+    return {'node': node, 'tier': tier}, ''
 
 
 def question_block(lines: list[str], list_name: str, qid: str) -> tuple[int, int]:
@@ -1948,6 +2040,15 @@ ACTIONS: dict[str, dict[str, Any]] = {
                             f'分析計畫 {p["plan"]} 整份降為 {p["to_plan"]} 的敏感性子分析（來源 outputs 成為目標新版 robustness 的 R<n+1>、其結果變次要、來源問題無 active plan）',
                             f'p:{p["plan"]}'),
     },
+    'set_tier': {   # 0.20.0：方法／子分析／主要或未宣告結果／驗證放入或移出 Extended Data 區帶（analysis/extended-data.yaml）
+        'script': 'set_tier.py', 'label': 'Extended Data 歸屬', 'stage': 'figure-design',
+        'validate': _validate_set_tier, 'argv': lambda p: ['--node', f'{p["node"]}={p.get("tier") or ""}'],
+        'extra': lambda p, iid: f'set_tier:{p.get("node") or ""}:{p.get("tier") or ""}:{iid}',
+        'title': lambda p: ((('放入 Extended Data：' if p.get('tier') == 'extended' else '移出 Extended Data：') + str(p.get('node') or '')),
+                            (f'{p.get("node")} 列進 {EXTENDED_DATA_REL}，關聯圖落 Extended Data 區帶（跟著走的節點一起換帶）' if p.get('tier') == 'extended' else
+                             f'{p.get("node")} 從 {EXTENDED_DATA_REL} 移除，回推導區帶（跟著它進 ED 的節點一起回去）'),
+                            str(p.get('node') or '')),
+    },
 }
 # ---------- 批次（0.17.0）：kind batch，payload {actions: [{kind, payload}, …]}，腳本 run_batch.py ----------
 
@@ -1964,6 +2065,7 @@ BATCH_SHAPE: dict[str, dict[str, tuple[str, ...]]] = {
     'move_result': {'key': ('key',), 'plan': ('to_plan',), 'opt': ('to_item', 'new_item')},
     'nest_result': {'key': ('key',), 'opt': ('under',)},
     'demote_plan': {'plan': ('plan', 'to_plan')},
+    'set_tier': {},   # 0.20.0：node 的 plan 部分可經版本接力（_validate_loose 另判）
 }
 
 
@@ -2085,6 +2187,13 @@ def _validate_loose(root: Path, kind: str, payload, pred: _Predicted) -> tuple[d
             out[fld] = str(payload[fld]).strip()
     if kind == 'set_role':
         return None, err   # 圖表 id 與 role 不受版本接力影響，一律嚴格
+    elif kind == 'set_tier':   # 0.20.0：只有 p:<pid>／p:<pid>#R<k> 的 pid 可能是前面步驟會封的新版；結果鍵與驗證 id 不接力
+        node = str(payload.get('node') or '').strip()
+        tier = str(payload.get('tier') or '').strip().lower()
+        m = TIER_NODE_RE.match(node)
+        if not m or m.group(1) != 'p' or tier not in TIERS or node.endswith('#S') or not pred.plan_ok(m.group(2).split('#')[0]):
+            return None, err
+        out = {'node': node, 'tier': tier}
     elif kind == 'reorder':
         lst, order = payload.get('list'), payload.get('order')
         if lst not in ('sub_questions', 'appendix_questions') or not isinstance(order, list) or not order or not all(pred.q_ok(str(x)) for x in order):

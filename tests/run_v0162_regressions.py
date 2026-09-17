@@ -389,7 +389,7 @@ def test_drag_result_nodes(tmp: Path) -> None:
             assert g is None or (g['kind'] == 'move_result' and g['ok'] and g.get('band') == 'supp' and g.get('options')), (c, g)
             continue
         assert g == e, (c, g, e)
-    assert drag == [False, True, True, False, False, True], drag   # 驗證節點與敏感性群節點不可拖；結果與圖表可拖
+    assert drag == [True, True, True, False, False, True], drag   # 敏感性群節點不可拖；結果與圖表可拖；0.20.0 起驗證節點可拖（只為 Extended Data 歸屬）
 
 
 def test_docs_registered() -> None:
