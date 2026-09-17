@@ -122,30 +122,30 @@ console.log(JSON.stringify(out));
     o = json.loads(proc.stdout.strip().splitlines()[-1])
     b = o['base']
     # v0.18.0：群、子分析、次要結果跟 plan 的帶（SQ 的在 main、AQ 的在 supp）
-    # 0.19.0 宣告粒度：r1／r2 各在所屬子分析的聚合節點裡；SQ2-v1#R1、AQ1-v1#R1 沒有自有鍵也各有一個聚合節點
-    assert b['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary'] and b['supp|4'] == ['r:a1', 'r:AQ1-v1#R1#secondary'] and b['supp|1'] == ['q:AQ1', 'q:AQ2'], b
+    # 0.19.0 宣告粒度：r1／r2 各在所屬子分析的聚合節點裡；SQ2-v1#R1、AQ1-v1#R1 沒有自有鍵 → 不建聚合節點（同日改，原本各建一個空的）
+    assert b['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1'] and b['supp|4'] == ['r:a1'] and b['supp|1'] == ['q:AQ1', 'q:AQ2'], b
     assert b['main|2'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'] and b['supp|2'] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'], b
-    assert o['nest'] == ['r:k1', 'r:m1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:SQ2-v1#R1#secondary'] and o['nestOrd'] == [0, 1, 2] and o['nestBad'] == [], o
-    assert o['nest2'] == ['r:k1', 'r:k2', 'r:m1', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:SQ2-v1#R1#secondary'], o['nest2']
-    assert o['unnest'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary'] and o['unnestParent'] == ['', ''], o
+    assert o['nest'] == ['r:k1', 'r:m1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'] and o['nestOrd'] == [0, 1, 2] and o['nestBad'] == [], o
+    assert o['nest2'] == ['r:k1', 'r:k2', 'r:m1', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'], o['nest2']
+    assert o['unnest'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1'] and o['unnestParent'] == ['', ''], o
     # (3) 0.19.0：k1 進 SQ1-v1#R2 的聚合節點（keys r2、k1）、逐鍵節點 k1 消失；掛在 k1 下的 k2 隨父隱藏（cell() 只列可見）
-    assert o['moveB'] == ['r:a1', 'r:AQ1-v1#R1#secondary'] and o['moveBmain'] == ['r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary'] and o['moveBagg'] == ['r2', 'k1'] and o['moveBgone'] == [True, False], o   # k2 仍在格內（沿 parent 鏈跟著消失的 k1 隱藏，nodeVisible 判）
+    assert o['moveB'] == ['r:a1'] and o['moveBmain'] == ['r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1'] and o['moveBagg'] == ['r2', 'k1'] and o['moveBgone'] == [True, False], o   # k2 仍在格內（沿 parent 鏈跟著消失的 k1 隱藏，nodeVisible 判）
     # (4) 0.19.0：r2 離開聚合節點（空了就消失）、目標處現做主要結果節點 r:r2，排在 a1 之後
-    assert o['moveA'] == ['r:a1', 'r:r2', 'r:AQ1-v1#R1#secondary'] and o['moveAparent'] == '', o
+    assert o['moveA'] == ['r:a1', 'r:r2'] and o['moveAparent'] == '', o
     assert o['moveS'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R2', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1#R1'] and o['moveSparent'] == 'p:SQ2-v1#S', o['moveS']
-    assert o['moveS4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary', 'r:SQ1-v1#R1#secondary'], o['moveS4']   # 0.19.0：R1 的聚合節點跟著子分析搬到 SQ2-v1 之後
+    assert o['moveS4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ1-v1#R1#secondary'], o['moveS4']   # 0.19.0：R1 的聚合節點跟著子分析搬到 SQ2-v1 之後
     re_ = o['re']
     assert re_['main|1'] == ['q:SQ1'] and re_['supp|1'] == ['q:AQ1', 'q:AQ2', 'q:SQ2'] and re_['main|2'] == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2'], re_
     assert re_['supp|2'] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'], re_['supp|2']   # v0.18.0：群跟 plan 一起換帶
-    assert re_['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'] and re_['supp|4'] == ['r:a1', 'r:AQ1-v1#R1#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary'] and re_['supp|3'] == ['v:V3', 'v:V2'] and re_['main|3'] == ['v:V1'], re_
+    assert re_['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'] and re_['supp|4'] == ['r:a1', 'r:m1'] and re_['supp|3'] == ['v:V3', 'v:V2'] and re_['main|3'] == ['v:V1'], re_
     assert o['reSame'] is True and o['reSame2'] is True, (o['reSame'], o['reSame2'])
     pr = o['pr']
-    assert pr['main|1'] == ['q:SQ1', 'q:SQ2', 'q:AQ1'] and pr['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and pr['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary', 'r:a1', 'r:AQ1-v1#R1#secondary'] and pr['main|3'] == ['v:V1', 'v:V2', 'v:V3'], pr
+    assert pr['main|1'] == ['q:SQ1', 'q:SQ2', 'q:AQ1'] and pr['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and pr['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:a1'] and pr['main|3'] == ['v:V1', 'v:V2', 'v:V3'], pr
     assert pr['supp|2'] == [] and pr['supp|4'] == [], pr   # v0.18.0：AQ1 的群跟著升到 main，supp 清空
     mp = o['mp']
-    assert mp['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and mp['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:SQ2-v1#R1#secondary', 'r:a1', 'r:AQ1-v1#R1#secondary'] and mp['main|3'] == ['v:V1', 'v:V2', 'v:V3'] and mp['supp|2'] == [], mp
+    assert mp['main|2'][-3:] == ['p:AQ1-v1', 'p:AQ1-v1#S', 'p:AQ1-v1#R1'] and mp['main|4'] == ['r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary', 'r:m1', 'r:a1'] and mp['main|3'] == ['v:V1', 'v:V2', 'v:V3'] and mp['supp|2'] == [], mp
     ro = o['ro']
-    assert ro['main|1'] == ['q:SQ2', 'q:SQ1'] and ro['main|2'] == ['p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2'] and ro['main|3'] == ['v:V2', 'v:V1'] and ro['main|4'] == ['r:m1', 'r:SQ2-v1#R1#secondary', 'r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'], ro
+    assert ro['main|1'] == ['q:SQ2', 'q:SQ1'] and ro['main|2'] == ['p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2'] and ro['main|3'] == ['v:V2', 'v:V1'] and ro['main|4'] == ['r:m1', 'r:k1', 'r:k2', 'r:SQ1-v1#R1#secondary', 'r:SQ1-v1#R2#secondary'], ro
     assert o['role']['main|5'] == ['f:F_c', 'o:report'] and 'f:F_a' in o['role']['ext|5'], o['role']   # 0.19.0：report 節點在圖表欄最後
     assert o['replaySame'] is True and o['replayBad'] == [], (o['replaySame'], o['replayBad'])
 

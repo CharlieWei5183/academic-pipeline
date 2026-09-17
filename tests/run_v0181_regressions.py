@@ -96,11 +96,12 @@ def test_ir_strip_assignment(tmp: Path) -> None:
         'p:AQ1-v1': 'q:AQ1', 'p:AQ1-v1#S': 'q:AQ1', 'p:AQ1-v1#R1': 'q:AQ1',
         'v:V1': 'q:SQ1', 'v:V2': 'q:SQ2', 'v:V3': 'q:AQ1',
         'r:k1': 'q:SQ1', 'r:k2': 'q:SQ1', 'r:SQ1-v1#R1#secondary': 'q:SQ1', 'r:SQ1-v1#R2#secondary': 'q:SQ1', 'r:m1': 'q:SQ2', 'r:a1': 'q:AQ1',
-        'r:SQ2-v1#R1#secondary': 'q:SQ2', 'r:AQ1-v1#R1#secondary': 'q:AQ1', 'o:report': '',   # 0.19.0：次要結果改為每個子分析一個聚合節點、report 節點在孤兒帶
+        'o:report': '',   # 0.19.0：次要結果改為有自有次要鍵的子分析一個聚合節點（SQ2-v1 R1／AQ1-v1 R1 沒自有鍵 → 不建）、report 節點在孤兒帶
         'f:F_a': 'q:SQ1', 'f:F_b': 'q:SQ2', 'f:F_c': '', 'f:F_shared': 'q:SQ1', 'f:F_aq': 'q:AQ1',
     }
     for nid, s in expect.items():
         assert by[nid]['strip'] == s, (nid, by[nid]['strip'], s)
+    assert 'r:SQ2-v1#R1#secondary' not in by and 'r:AQ1-v1#R1#secondary' not in by, '0.19.0：沒自有次要鍵的子分析不建聚合節點'
     assert by['r:SQ1-v1#R1#secondary']['subtype'] == 'secondary_group' and by['r:SQ1-v1#R1#secondary']['parent'] == 'p:SQ1-v1#R1'   # 次要結果（0.19.0 聚合節點）跟子分析
     assert by['f:F_b']['band'] == 'ext' and by['f:F_aq']['band'] == 'ext'                   # 問題節點在別帶：各成一條帶（ext 帶只有圖表）
     for nid, n in by.items():
