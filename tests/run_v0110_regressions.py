@@ -1164,7 +1164,7 @@ def test_progress_html_self_contained_and_escaped() -> None:
         html_text = raw.decode("utf-8")
         for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text, f"HTML 不得含 {token}"
-        assert html_text.count("<script") == 3, "只允許內嵌 IR、里程 JS、關聯 JS 三個 script"
+        assert html_text.count("<script") == 4, "只允許內嵌 IR、里程 JS、關聯 JS、文獻 JS 四個 script"
         assert '<script id="progress-ir" type="application/json">' in html_text
         assert "@media (prefers-color-scheme: dark)" in html_text and "font:" in html_text
         # 逸出：SQ1 question 含 <script>alert(1)</script>
@@ -1219,7 +1219,7 @@ def test_progress_ir_validation_gate() -> None:
         assert "IR-06 lanes[1].nodes[0].date" in errors and "IR-07 lanes[1].nodes[0].evidence[0]" in errors and "IR-02 stages" in errors, errors
         # 主程式：build_ir 被換成壞 IR → exit 2、不落檔
         before = _sha_tree(root)
-        module.build_ir = lambda root, src, generated_at, embed_figures=False: bad
+        module.build_ir = lambda *args, **kwargs: bad   # 簽章之後還會加參數，這裡不綁死
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1511,7 +1511,7 @@ def test_graph_validation_gate() -> None:
         del bad3["graph"]
         assert "IR-01 top-level.graph" in module.validate_ir(bad3)
         before = _sha_tree(root)
-        module.build_ir = lambda root, src, generated_at, embed_figures=False: bad
+        module.build_ir = lambda *args, **kwargs: bad   # 簽章之後還會加參數，這裡不綁死
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
