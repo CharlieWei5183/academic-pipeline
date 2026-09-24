@@ -411,6 +411,14 @@ v0.17.3 修進度頁面批次模式的流程：理由欄不再作廢已建的批
 - 登記錨點：CHANGELOG `## 0.17.3` 含 `--set-reason`、`BrokenPipeError`、「一鍵撤回」、「預覽後」、`run_v0171_regressions.py`（說明 0.17.1 的作廢規則改掉）、本檔名；README／`status` SKILL.md 含「預覽後」；`plugin.json` ≥ 0.17.3；相關檔不含 arm 的直譯字。
 - 舊測試：v0171 步驟 (5) 是先填理由再預覽，0.17.3 下仍成立，沒有改斷言；v0.7–v0.17.2 各支照跑。
 
+## run_literature3d_regressions.py
+
+`PROGRESS.html` 的第三個分頁「文獻」（文獻引用 3D 圖，排在「里程」「關聯」之後）。資料來源固定在 `<root>/literature/citation-graph.json`（`schema: academic-pipeline/citation-graph@1`），`--literature-graph PATH` 可改指別的檔案；版面座標由產生資料的腳本算好寫在 `layout`，renderer 只讀不重算。fixture 是 `tests/mini-project` 的複本（repo 裡那份不動），不需要 Chrome。執行：`python3 tests/run_literature3d_regressions.py`。
+
+- 測試一（缺檔＝空狀態）：IR `literature` ＝ `{source, present:false, demo:false, nodes:0, edges:{}, data:{nodes:[],edges:[]}}`、缺檔不記 WARNING、`validate_ir` 空；HTML 仍有「文獻」分頁鈕與 `#tab-literature`、內容是「尚無文獻引用資料（… 不存在）」、不畫 canvas、里程與關聯的骨架一個不少、內嵌 script 恰四個；`--literature-graph` 指到不存在的路徑同樣是空狀態且訊息換成那個路徑。
+- 測試二（有 demo 資料）：IR `literature` 各欄位正確（source／present／demo／點數／各類線數／資料本體），問題點的 `note` 取自 `project.yaml` 的 goals、書目欄位照抄、`year` 一律字串、座標照抄、邊改成索引並對到 lq／ll；HTML 有示範資料提示、canvas、統計行、兩套 `--t-lit` 色票與 `window.lit3dSelect`；壞資料（邊指向不存在的 id、自環、未知 edge kind、未知 node kind、重複 id、缺座標、問題 id 不在 goals）逐項 WARNING 並只略過那一筆；schema 不符記 WARNING 但照讀；檔案無法解析＝present true、0 點、WARNING、頁面顯示「沒有可畫的節點」；`validate_ir` 的 IR-16 十四條規則各報對應訊息、缺 `literature` 鍵報 IR-01。
+- 既有測試的配合改動：`run_v0110` 的「只允許內嵌三個 script」改為四個（多文獻 JS）、兩處 `build_ir` 的 monkeypatch lambda 改吃 `*args, **kwargs`（簽章多了 `literature_path`）；`run_v0200` 的 `_strip_band_source()` 一併拿掉 0.19.0 沒有的 top-level `literature` 鍵。其餘各支照跑、沒有改斷言。
+
 ## run_v0200_regressions.py
 
 v0.20.0 關聯圖的 Extended Data 區帶除了圖表，也能放方法（plan／敏感性子分析）、結果、驗證；只有問題節點（SQ／AQ／q:main）不能放（使用者 2026-09-17 裁定：「方法，結果，驗証也要能放在 extended data。只有 SQ/AQ 不行」）。SSOT 是新檔 `analysis/extended-data.yaml`（opt-in、不在 fingerprint 雜湊範圍）；新動作 kind `set_tier`（`set_tier.py`）。fixture 沿用 v0.16.1 的 `build_fixture`，另以複本加 `extended-data.yaml`、SQ1-v1 的 k2 `supports: k1`、缺 role 的圖表 F_d（呈現 k1／k2）後重畫（不走 check_plan、content_hash 不重接）。執行：`python3 tests/run_v0200_regressions.py`（有 google-chrome／chromium 時多跑瀏覽器端到端，約 1–2 分鐘；沒有就印一行跳過）。

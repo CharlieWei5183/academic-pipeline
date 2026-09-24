@@ -223,6 +223,13 @@ REL = {
     'inbox': 'PROGRESS.inbox.yaml',
 }
 
+# 文獻引用 3D 圖（0.21.0）：固定路徑，可用 --literature-graph 改指別的檔案（測試與預覽用）
+LIT_REL = 'literature/citation-graph.json'
+LIT_SCHEMA = 'academic-pipeline/citation-graph@1'
+LIT_NODE_KINDS = {'question': 1, 'literature': 0}       # kind → 節點是不是問題點
+LIT_EDGE_KINDS = {'cited_for': 'lq', 'cites': 'll'}     # kind → 畫線類別（文獻—問題／文獻引用文獻）
+LIT_STR_FIELDS = ('authors', 'title', 'journal', 'doi')
+
 
 # ---------- 讀檔（唯讀） ----------
 
@@ -3051,9 +3058,136 @@ def build_inbox(src: Sources, graph: dict) -> dict:
     return {'present': True, 'pending': pending, 'items': items}
 
 
+# ---------- 文獻引用 3D 圖（唯讀） ----------
+
+def _lit_empty(source: str, present: bool = False) -> dict:
+    return {'source': source, 'present': present, 'demo': False, 'nodes': 0, 'edges': {},
+            'data': {'nodes': [], 'edges': []}}
+
+
+def _lit_num(value) -> float | None:
+    """只收 int／float（bool 不算）；其餘回 None。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def build_literature(src: Sources, path: Path | None = None) -> dict:
+    """讀 literature/citation-graph.json（或 --literature-graph 指定的檔），整成前端可直接畫的資料。
+
+    版面座標由產生資料的那支腳本算好寫在 `layout.coords`，這裡只讀不算——進度頁面每次改檔都重畫，
+    600 篇規模的 3D 版面要十幾秒，不能放在渲染路徑上。問題點的說明文字一律取自 project.yaml 的
+    goals（sub_questions ∪ appendix_questions），那裡是單一事實來源。
+
+    回傳 {source, present, demo, nodes, edges:{kind: n}, data:{nodes, edges}}。
+    缺檔＝空狀態（present False，不記 WARNING）；檔在但有問題（無法解析、schema 不符、邊指向不存在
+    的 id、缺座標、問題 id 不在 goals）逐項記 WARNING 並略過那一筆，分頁照常出現。
+    """
+    p = (src.root / LIT_REL) if path is None else Path(path)
+    try:
+        rel = p.resolve().relative_to(src.root.resolve()).as_posix()
+    except Exception:
+        rel = str(p)
+    if not p.is_file():
+        return _lit_empty(rel)
+    try:
+        doc = json.loads(p.read_text(encoding='utf-8'))
+        if not isinstance(doc, dict):
+            raise ValueError(f'頂層不是 object（實際 {type(doc).__name__}）')
+    except Exception as exc:
+        src.warnings.append(f'{rel} 無法解析: {_one_line(exc)}')
+        return _lit_empty(rel, present=True)
+
+    schema = _text(doc.get('schema'))
+    if schema != LIT_SCHEMA:
+        src.warnings.append(f'{rel} schema 不是 {LIT_SCHEMA}（實際 "{schema}"）；仍照 v1 的欄位讀')
+
+    # 問題全文：project.yaml 的 goals 是單一事實來源
+    proj = src.data('project') if src.status('project') == 'ok' else {}
+    goals = _dict(proj.get('goals'))
+    qtext: dict[str, str] = {}
+    for name in ('sub_questions', 'appendix_questions'):
+        for q in _list(goals.get(name)):
+            qid = _text(_dict(q).get('id'))
+            if qid:
+                qtext[qid] = _text(_dict(q).get('question'))
+
+    coords = _dict(_dict(doc.get('layout')).get('coords'))
+    if not coords:
+        src.warnings.append(f'{rel} 缺 layout.coords；沒有座標的點不畫')
+
+    out_nodes: list[dict] = []
+    index: dict[str, int] = {}
+    for i, raw in enumerate(_list(doc.get('nodes'))):
+        if not isinstance(raw, dict):
+            src.warnings.append(f'{rel} nodes[{i}] 不是 object，略過')
+            continue
+        nid = _text(raw.get('id'))
+        kind = _text(raw.get('kind'))
+        if not nid:
+            src.warnings.append(f'{rel} nodes[{i}] 缺 id，略過')
+            continue
+        if nid in index:
+            src.warnings.append(f'{rel} 節點 id 重複: {nid}，略過後出現的那筆')
+            continue
+        if kind not in LIT_NODE_KINDS:
+            src.warnings.append(f'{rel} 節點 {nid} 的 kind "{kind}" 不是 question／literature，略過')
+            continue
+        xyz = coords.get(nid)
+        vals = [_lit_num(v) for v in xyz] if isinstance(xyz, (list, tuple)) and len(xyz) == 3 else []
+        if len(vals) != 3 or any(v is None for v in vals):
+            src.warnings.append(f'{rel} 節點 {nid} 在 layout.coords 沒有可用的座標，該點不畫')
+            continue
+        node = {'id': nid, 'q': LIT_NODE_KINDS[kind],
+                'x': round(vals[0], 4), 'y': round(vals[1], 4), 'z': round(vals[2], 4)}
+        if kind == 'question':
+            if nid in qtext:
+                node['note'] = qtext[nid]
+            else:
+                node['note'] = ''
+                src.warnings.append(f'{rel} 問題點 {nid} 不在 project.yaml 的 goals，只顯示 id')
+        else:
+            for f in LIT_STR_FIELDS:
+                node[f] = _text(raw.get(f))
+            year = raw.get('year')
+            node['year'] = _text(year) if year is not None else ''
+        index[nid] = len(out_nodes)
+        out_nodes.append(node)
+
+    out_edges: list[dict] = []
+    counts: dict[str, int] = {}
+    seen_edges: set[tuple[int, int, str]] = set()
+    for i, raw in enumerate(_list(doc.get('edges'))):
+        if not isinstance(raw, dict):
+            src.warnings.append(f'{rel} edges[{i}] 不是 object，略過')
+            continue
+        s, t, kind = _text(raw.get('source')), _text(raw.get('target')), _text(raw.get('kind'))
+        if kind not in LIT_EDGE_KINDS:
+            src.warnings.append(f'{rel} edges[{i}] 的 kind "{kind}" 不是 cited_for／cites，略過')
+            continue
+        if s not in index or t not in index:
+            miss = '、'.join(x for x in (s if s not in index else '', t if t not in index else '') if x)
+            src.warnings.append(f'{rel} edges[{i}] 指向不存在的節點 {miss}，略過')
+            continue
+        if s == t:
+            src.warnings.append(f'{rel} edges[{i}] 的兩端都是 {s}，略過')
+            continue
+        key = (index[s], index[t], LIT_EDGE_KINDS[kind])
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        out_edges.append({'s': key[0], 't': key[1], 'k': key[2]})
+        counts[kind] = counts.get(kind, 0) + 1
+
+    return {'source': rel, 'present': True, 'demo': bool(doc.get('demo')),
+            'nodes': len(out_nodes), 'edges': counts,
+            'data': {'nodes': out_nodes, 'edges': out_edges}}
+
+
 # ---------- IR ----------
 
-def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False) -> dict:
+def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False,
+             literature_path: Path | None = None) -> dict:
     proj = src.data('project') if src.status('project') == 'ok' else {}
     meta = _dict(proj.get('project'))
     title = _text(meta.get('title_zh')) or _text(meta.get('title_en')) or root.name or str(root)
@@ -3076,6 +3210,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
             by_state[n['state']] = by_state.get(n['state'], 0) + 1
     graph = build_graph(src, lanes, embed_figures)
     inbox = build_inbox(src, graph)
+    literature = build_literature(src, literature_path)
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': generated_at,
@@ -3087,6 +3222,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
                   'annotations': sum(len(lane['annotations']) for lane in lanes), 'inbox_pending': inbox['pending']},
         'graph': graph,
         'inbox': inbox,
+        'literature': literature,
     }
 
 
@@ -3095,7 +3231,7 @@ def validate_ir(ir) -> list[str]:
     errors: list[str] = []
     if not isinstance(ir, dict):
         return ['IR-01 top-level 不是 object']
-    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph', 'inbox'):
+    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph', 'inbox', 'literature'):
         if key not in ir:
             errors.append(f'IR-01 top-level.{key}')
     if ir.get('schema_version') != SCHEMA_VERSION:
@@ -3193,6 +3329,66 @@ def validate_ir(ir) -> list[str]:
             errors.append('IR-15 inbox.pending')
         if isinstance(stats, dict) and stats.get('inbox_pending') != inbox['pending']:
             errors.append('IR-15 stats.inbox_pending')
+    errors.extend(_validate_literature(ir.get('literature')))
+    return errors
+
+
+def _validate_literature(lit) -> list[str]:
+    """IR-16：文獻引用 3D 圖的資料。缺檔＝空狀態也要通過（present False、0 點 0 線）。"""
+    errors: list[str] = []
+    if not isinstance(lit, dict):
+        return ['IR-16 literature']
+    if not isinstance(lit.get('source'), str) or not lit['source']:
+        errors.append('IR-16 literature.source')
+    for key in ('present', 'demo'):
+        if not isinstance(lit.get(key), bool):
+            errors.append(f'IR-16 literature.{key}')
+    data = lit.get('data')
+    if not isinstance(data, dict) or not isinstance(data.get('nodes'), list) or not isinstance(data.get('edges'), list):
+        errors.append('IR-16 literature.data')
+        return errors
+    nodes, edges = data['nodes'], data['edges']
+    if lit.get('nodes') != len(nodes):
+        errors.append('IR-16 literature.nodes')
+    counts = lit.get('edges')
+    if not isinstance(counts, dict) or any(not isinstance(k, str) or not isinstance(v, int) or isinstance(v, bool)
+                                           for k, v in counts.items()):
+        errors.append('IR-16 literature.edges')
+    elif sum(counts.values()) != len(edges):
+        errors.append('IR-16 literature.edges 總數')
+    elif any(k not in LIT_EDGE_KINDS for k in counts):
+        errors.append('IR-16 literature.edges kind')
+    seen: set[str] = set()
+    for i, n in enumerate(nodes):
+        sub = f'literature.data.nodes[{i}]'
+        if not isinstance(n, dict) or not isinstance(n.get('id'), str) or not n['id']:
+            errors.append(f'IR-16 {sub}.id')
+            continue
+        if n['id'] in seen:
+            errors.append(f'IR-16 {sub}.id 重複')
+        seen.add(n['id'])
+        if n.get('q') not in (0, 1) or isinstance(n.get('q'), bool):
+            errors.append(f'IR-16 {sub}.q')
+        if any(_lit_num(n.get(k)) is None for k in ('x', 'y', 'z')):
+            errors.append(f'IR-16 {sub} 座標')
+        if n.get('q') == 1:
+            if not isinstance(n.get('note'), str):
+                errors.append(f'IR-16 {sub}.note')
+        else:
+            if any(not isinstance(n.get(k), str) for k in LIT_STR_FIELDS + ('year',)):
+                errors.append(f'IR-16 {sub} 書目欄位')
+    for i, e in enumerate(edges):
+        sub = f'literature.data.edges[{i}]'
+        if not isinstance(e, dict):
+            errors.append(f'IR-16 {sub}')
+            continue
+        if any(not isinstance(e.get(k), int) or isinstance(e.get(k), bool) or not (0 <= e[k] < len(nodes))
+               for k in ('s', 't')):
+            errors.append(f'IR-16 {sub} 端點')
+        elif e['s'] == e['t']:
+            errors.append(f'IR-16 {sub} 兩端相同')
+        if e.get('k') not in set(LIT_EDGE_KINDS.values()):
+            errors.append(f'IR-16 {sub}.k')
     return errors
 
 
@@ -3202,10 +3398,10 @@ CSS = """
 :root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
 --done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
 --badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;
---t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--t-report:#66ccee;--up:#d55e00;--down:#0072b2;--path:#aa3377;--edge:#9aa3ad;--edge-thin:#b9c0c7;--edge-faint:#d3d8dd;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
+--t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--t-report:#66ccee;--t-lit:#a8751b;--up:#d55e00;--down:#0072b2;--path:#aa3377;--edge:#9aa3ad;--edge-thin:#b9c0c7;--edge-faint:#d3d8dd;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
 @media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
 --done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;
---t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--t-report:#66ccee;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--edge:#6b7480;--edge-thin:#565e68;--edge-faint:#3e454d;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
+--t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--t-report:#66ccee;--t-lit:#ddaa33;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--edge:#6b7480;--edge-thin:#565e68;--edge-faint:#3e454d;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px}
@@ -3566,13 +3762,15 @@ GRAPH_JS = """
   function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)||n.type==='validation'));}   // 0.20.0：驗證節點可拖（只為 Extended Data 歸屬）
   var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下',demote_plan:'降為敏感性子分析',set_tier:'Extended Data 歸屬',batch:'批次'};
   // ---- 分頁 ----
-  var tabs={milestones:document.getElementById('tab-milestones'),relations:document.getElementById('tab-relations')};
+  var tabs={};['milestones','relations','literature'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
   var cur='milestones';
   function showTab(name,writeHash){
     if(!tabs[name])name='milestones';cur=name;
     Object.keys(tabs).forEach(function(k){tabs[k].hidden=(k!==name);var b=document.querySelector('.tabs button[data-tab="'+k+'"]');if(b)b.classList.toggle('active',k===name);});
     var d=document.getElementById('detail');if(d)d.hidden=true;panel.hidden=true;
     if(writeHash){try{if(location.hash!=='#'+name)location.hash='#'+name;}catch(e){}}
+    // 文獻分頁的 canvas 要在隱藏時停掉 requestAnimationFrame、顯示時重量尺寸，靠這個事件通知
+    try{document.dispatchEvent(new CustomEvent('progress:tab',{detail:{tab:name}}));}catch(e){}
   }
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){b.addEventListener('click',function(){showTab(b.getAttribute('data-tab'),true);});});
   window.addEventListener('hashchange',function(){showTab((location.hash||'').replace('#','')||'milestones',false);});
@@ -4521,6 +4719,452 @@ GRAPH_JS = """
 })();
 """
 
+# ---------- 文獻分頁（第三個分頁） ----------
+
+LIT_CSS = """
+.lit3d-wrap{margin:0}
+.lit3d-demo{margin:10px 0 8px;font-size:13px;color:var(--muted)}
+.lit3d-empty{margin:18px 0;color:var(--muted)}
+.lit3d-legend{display:flex;flex-wrap:wrap;gap:5px 16px;margin:10px 0 6px;padding:0;list-style:none;font-size:12.5px;color:var(--muted)}
+.lit3d-legend li{display:flex;align-items:center;gap:6px}
+.lit3d-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+.lit3d-dot.is-q{background:var(--t-question)}
+.lit3d-dot.is-l{width:7px;height:7px;background:var(--t-lit)}
+.lit3d-bar{width:20px;height:2px;border-radius:1px;flex:0 0 auto}
+.lit3d-bar.is-q{background:var(--t-question);opacity:.6}
+.lit3d-bar.is-c{background:var(--edge)}
+.lit3d-hint{margin:0 0 10px;font-size:12.5px;color:var(--muted)}
+.lit3d-stage{position:relative;width:100%;max-width:100%;border:1px solid var(--line);border-radius:10px;background:var(--card);overflow:hidden}
+.lit3d-canvas{display:block;width:100%;height:min(78vh,760px);touch-action:none;cursor:grab}
+.lit3d-canvas:active{cursor:grabbing}
+.lit3d-canvas:focus{outline:2px solid var(--current);outline-offset:-3px}
+.lit3d-canvas:focus:not(:focus-visible){outline:none}
+.lit3d-canvas:focus-visible{outline:2px solid var(--current);outline-offset:-3px}
+.lit3d-tip{position:absolute;left:0;top:0;z-index:5;pointer-events:none;max-width:min(320px,calc(100% - 20px));
+padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);
+box-shadow:0 6px 22px rgba(15,20,25,.18);font-size:12.5px;line-height:1.55}
+.lit3d-tip[hidden]{display:none}
+.lit3d-tip .lit3d-tip-id{font-size:13.5px;font-weight:650;color:var(--t-question)}
+.lit3d-tip .lit3d-tip-title{margin:3px 0;font-weight:600}
+.lit3d-tip .lit3d-tip-sub{color:var(--muted)}
+.lit3d-tip .lit3d-tip-meta{margin-top:4px;padding-top:4px;border-top:1px solid var(--line);color:var(--muted)}
+@media (max-width:520px){.lit3d-legend{gap:4px 12px}}
+"""
+
+# 互動與原型一致：自動慢轉、拖曳旋轉、滾輪／雙指縮放、hover 或點擊高亮加 tooltip、鍵盤、prefers-reduced-motion。
+# 與原型的差別：資料改讀頁面既有的 progress-ir；拿掉會和分頁 hash 打架的裸 token 深層連結，改開 window.lit3dSelect(id)；
+# 分頁隱藏時停掉 requestAnimationFrame（隱藏時 canvas 量到的尺寸是 0，切回來要先重量一次）。
+LIT_JS = """
+(function(){
+  "use strict";
+  var raw = document.getElementById("progress-ir");
+  var section = document.getElementById("tab-literature");
+  var canvas = document.getElementById("lit3d-canvas");
+  if (!raw || !section || !canvas) return;
+  var DATA = (JSON.parse(raw.textContent).literature || {}).data || {nodes:[], edges:[]};
+  var NODES = DATA.nodes || [], EDGES = DATA.edges || [], N = NODES.length;
+  if (!N) return;
+  var stage = document.getElementById("lit3d-stage");
+  var tip = document.getElementById("lit3d-tip");
+  var ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  var FONT = 'system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif';
+
+  /* ---- 相鄰關係 ---- */
+  var nbr = [], cites = [], cited = [], qOf = [], litCount = {};
+  for (var i = 0; i < N; i++){ nbr.push({}); cites.push(0); cited.push(0); qOf.push([]); }
+  for (var ei = 0; ei < EDGES.length; ei++){
+    var e = EDGES[ei], s = e.s, t = e.t;
+    nbr[s][t] = 1; nbr[t][s] = 1;
+    if (e.k === "ll"){ cites[s]++; cited[t]++; }
+    else { qOf[s].push(NODES[t].id); litCount[t] = (litCount[t] || 0) + 1; }
+  }
+
+  /* ---- 主題色：canvas 不繼承 CSS，需自己讀 token ---- */
+  var C = {};
+  function hex2rgb(h, fb){
+    h = (h || "").trim();
+    if (h.charAt(0) === "#"){
+      if (h.length === 4) h = "#" + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
+      if (h.length === 7){
+        return [parseInt(h.substr(1,2),16), parseInt(h.substr(3,2),16), parseInt(h.substr(5,2),16)];
+      }
+    }
+    return fb;
+  }
+  function rgba(c, a){ return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a.toFixed(3) + ")"; }
+  function readTheme(){
+    var cs = getComputedStyle(document.documentElement);
+    function g(k){ return cs.getPropertyValue(k); }
+    C.bg = hex2rgb(g("--bg"), [250,250,248]);
+    C.fg = hex2rgb(g("--fg"), [31,35,40]);
+    C.edge = hex2rgb(g("--edge"), [154,163,173]);
+    C.q = hex2rgb(g("--t-question"), [68,119,170]);
+    C.lit = hex2rgb(g("--t-lit"), [168,117,27]);
+    C.cur = hex2rgb(g("--current"), [0,114,178]);
+  }
+  readTheme();
+  var mqDark = window.matchMedia("(prefers-color-scheme: dark)");
+  if (mqDark.addEventListener) mqDark.addEventListener("change", readTheme);
+  else if (mqDark.addListener) mqDark.addListener(readTheme);
+
+  /* ---- 取景半徑：座標已歸一化到半徑 1，但少數離群點會讓整團縮太小，
+         改用第 95 百分位半徑取景，離群點超出邊界時由 stage 裁掉，縮小即可看全 ---- */
+  var FITR = (function(){
+    var rs = [];
+    for (var i = 0; i < N; i++){
+      var nd = NODES[i];
+      rs.push(Math.sqrt(nd.x * nd.x + nd.y * nd.y + nd.z * nd.z));
+    }
+    rs.sort(function(a, b){ return a - b; });
+    var r = rs[Math.min(rs.length - 1, Math.floor(rs.length * 0.95))] || 1;
+    return Math.min(1, Math.max(0.5, r));
+  })();
+
+  /* ---- 視角狀態 ---- */
+  var rotX = -0.30, rotY = 0.55, zoom = 1.0;
+  var ZMIN = 0.45, ZMAX = 4.0;
+  var CAM = 3.2;
+  var hoverIdx = -1, pinIdx = -1, tipAnchor = "cursor";
+  var dragging = false, moved = false, resumeAt = 0, lastX = 0, lastY = 0;
+  var W = 0, H = 0, dpr = 1;
+  var sx = new Float64Array(N), sy = new Float64Array(N);
+  var sd = new Float64Array(N), sr = new Float64Array(N);
+  var order = new Int32Array(N), eOrder = new Int32Array(EDGES.length);
+  var mqMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function resize(){
+    var r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return;   /* 分頁隱藏時量到 0，維持上次的尺寸 */
+    dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+  }
+  if (window.ResizeObserver) new ResizeObserver(function(){ if (running) resize(); }).observe(stage);
+  window.addEventListener("resize", function(){ if (running) resize(); });
+
+  function activeIdx(){ return pinIdx >= 0 ? pinIdx : hoverIdx; }
+
+  /* ---- 繪製 ---- */
+  var depthBuf = new Float64Array(EDGES.length);
+  function draw(){
+    if (!W || !H) { resize(); if (!W || !H) return; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    var cx = W / 2, cy = H / 2;
+    var base = Math.min(W, H) * 0.44 * zoom / FITR;
+    var cY = Math.cos(rotY), sY = Math.sin(rotY);
+    var cX = Math.cos(rotX), sX = Math.sin(rotX);
+    var act = activeIdx();
+    var hasAct = act >= 0;
+    var near = nbr[act] || {};
+
+    for (var i = 0; i < N; i++){
+      var nd = NODES[i];
+      var x1 = nd.x * cY + nd.z * sY;
+      var z1 = nd.z * cY - nd.x * sY;
+      var y2 = nd.y * cX - z1 * sX;
+      var z2 = nd.y * sX + z1 * cX;
+      var depth = CAM - z2;
+      if (depth < 0.25) depth = 0.25;
+      var kk = base * CAM / depth;
+      sx[i] = cx + x1 * kk;
+      sy[i] = cy - y2 * kk;
+      sd[i] = depth;
+      var ss = CAM / depth;
+      sr[i] = (nd.q ? 9 : 4.5) * ss;
+      order[i] = i;
+    }
+
+    /* 連線：由遠到近 */
+    var EL = EDGES.length;
+    for (var a = 0; a < EL; a++){
+      depthBuf[a] = (sd[EDGES[a].s] + sd[EDGES[a].t]) * 0.5;
+      eOrder[a] = a;
+    }
+    var eArr = Array.prototype.slice.call(eOrder);
+    eArr.sort(function(p, q){ return depthBuf[q] - depthBuf[p]; });
+    for (var m = 0; m < eArr.length; m++){
+      var idx = eArr[m], ed = EDGES[idx];
+      var fade = 1 - Math.min(1, Math.max(0, (depthBuf[idx] - (CAM - 1)) / 2));
+      var on = !hasAct || ed.s === act || ed.t === act;
+      var dim = on ? 1 : 0.15;
+      var al, col, lw;
+      if (ed.k === "lq"){
+        col = C.q; lw = 0.9; al = (0.14 + 0.24 * fade) * (on && hasAct ? 3.0 : 1) * dim;
+      } else {
+        col = C.edge; lw = 0.8; al = (0.12 + 0.20 * fade) * (on && hasAct ? 3.0 : 1) * dim;
+      }
+      if (al > 0.92) al = 0.92;
+      if (al < 0.012) continue;
+      ctx.strokeStyle = rgba(col, al);
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(sx[ed.s], sy[ed.s]);
+      ctx.lineTo(sx[ed.t], sy[ed.t]);
+      ctx.stroke();
+    }
+
+    /* 節點：由遠到近 */
+    var nArr = Array.prototype.slice.call(order);
+    nArr.sort(function(p, q){ return sd[q] - sd[p]; });
+    var labels = [];
+    for (var v = 0; v < nArr.length; v++){
+      var j = nArr[v];
+      var node = NODES[j];
+      var f2 = 1 - Math.min(1, Math.max(0, (sd[j] - (CAM - 1)) / 2));
+      var lit = !hasAct || j === act || near[j];
+      var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15);
+      var rr = sr[j];
+      if (j === act) rr *= 1.45;
+      ctx.fillStyle = rgba(node.q ? C.q : C.lit, alpha);
+      ctx.beginPath();
+      ctx.arc(sx[j], sy[j], rr, 0, 6.283185307179586);
+      ctx.fill();
+      if (j === act){
+        ctx.strokeStyle = rgba(C.cur, 0.95);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      if (node.q) labels.push([j, rr, alpha]);
+    }
+    for (var L = 0; L < labels.length; L++){
+      var li = labels[L][0], lr = labels[L][1], la = labels[L][2];
+      ctx.font = "600 12.5px " + FONT;
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = 3.4;
+      ctx.strokeStyle = rgba(C.bg, Math.min(0.92, la));
+      ctx.strokeText(NODES[li].id, sx[li] + lr + 5, sy[li]);
+      ctx.fillStyle = rgba(C.fg, la);
+      ctx.fillText(NODES[li].id, sx[li] + lr + 5, sy[li]);
+    }
+
+    if (!tip.hidden && tipAnchor === "node" && act >= 0) placeTip(sx[act], sy[act]);
+  }
+
+  /* ---- 動畫：只在本分頁顯示時跑 ---- */
+  var running = false, rafId = 0, prevTs = 0;
+  function frame(ts){
+    if (!running) return;
+    var dt = prevTs ? Math.min(0.05, (ts - prevTs) / 1000) : 0;
+    prevTs = ts;
+    var auto = !mqMotion.matches && !dragging && activeIdx() < 0 && ts >= resumeAt;
+    if (auto) rotY += 0.12 * dt;
+    draw();
+    rafId = requestAnimationFrame(frame);
+  }
+  function start(){
+    if (running) return;
+    running = true; prevTs = 0;
+    resize();          /* 分頁剛顯示，尺寸要重量一次 */
+    rafId = requestAnimationFrame(frame);
+  }
+  function stop(){
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  document.addEventListener("progress:tab", function(ev){
+    var name = (ev && ev.detail && ev.detail.tab) || "";
+    if (name === "literature") start(); else stop();
+  });
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden) stop(); else if (!section.hidden) start();
+  });
+  if (!section.hidden) start();   /* 一開頁 hash 就是 #literature 時，showTab 已經跑過 */
+
+  /* ---- tooltip ---- */
+  function esc(s){
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function tipHTML(i){
+    var nd = NODES[i];
+    if (nd.q){
+      var note = nd.note ? esc(nd.note) : "（project.yaml 的 goals 沒有這個 id）";
+      return '<div class="lit3d-tip-id">' + esc(nd.id) + '</div>' +
+             '<div class="lit3d-tip-sub">' + note + '</div>' +
+             '<div class="lit3d-tip-meta">連到 ' + (litCount[i] || 0) + ' 篇文獻</div>';
+    }
+    var qs = qOf[i].length ? qOf[i].join("、") : "（無）";
+    var head = [esc(nd.authors), nd.year ? "（" + esc(nd.year) + "）" : ""].join("");
+    return '<div class="lit3d-tip-sub">' + (head || esc(nd.id)) + '</div>' +
+           '<div class="lit3d-tip-title">' + esc(nd.title || nd.id) + '</div>' +
+           '<div class="lit3d-tip-sub">' + esc(nd.journal) + '　' + esc(nd.doi) + '</div>' +
+           '<div class="lit3d-tip-meta">連到問題：' + esc(qs) +
+           '<br>引用 ' + cites[i] + ' 篇・被引用 ' + cited[i] + ' 篇</div>';
+  }
+  function placeTip(px, py){
+    var sw = stage.clientWidth, sh = stage.clientHeight;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    var x = px + 14, y = py + 14;
+    if (x + tw > sw - 8) x = px - 14 - tw;
+    if (x < 8) x = Math.max(8, Math.min(sw - tw - 8, px - tw / 2));
+    if (y + th > sh - 8) y = py - 14 - th;
+    if (y < 8) y = 8;
+    tip.style.left = Math.round(x) + "px";
+    tip.style.top = Math.round(y) + "px";
+  }
+  function showTip(i, anchor, px, py){
+    tip.innerHTML = tipHTML(i);
+    tip.hidden = false;
+    tipAnchor = anchor;
+    placeTip(px, py);
+  }
+  function hideTip(){ tip.hidden = true; }
+
+  /* ---- 命中判定：投影後 (半徑 + 6px) 內，重疊時取最近 ---- */
+  function pick(px, py){
+    var best = -1, bestDepth = Infinity;
+    for (var i = 0; i < N; i++){
+      var dx = px - sx[i], dy = py - sy[i];
+      var lim = sr[i] + 6;
+      if (dx * dx + dy * dy <= lim * lim && sd[i] < bestDepth){
+        best = i; bestDepth = sd[i];
+      }
+    }
+    return best;
+  }
+  function localPt(ev){
+    var r = canvas.getBoundingClientRect();
+    return [ev.clientX - r.left, ev.clientY - r.top];
+  }
+
+  /* ---- 指標互動 ---- */
+  var pointers = {}, pinchDist = 0, pinchZoom = 1;
+  canvas.addEventListener("pointerdown", function(ev){
+    pointers[ev.pointerId] = ev;
+    if (Object.keys(pointers).length === 2){
+      var ps = [];
+      for (var k in pointers) ps.push(pointers[k]);
+      pinchDist = Math.hypot(ps[0].clientX - ps[1].clientX, ps[0].clientY - ps[1].clientY);
+      pinchZoom = zoom;
+      dragging = false;
+      return;
+    }
+    dragging = true; moved = false;
+    lastX = ev.clientX; lastY = ev.clientY;
+    if (canvas.setPointerCapture) { try { canvas.setPointerCapture(ev.pointerId); } catch (x) {} }
+    canvas.focus({ preventScroll:true });
+  });
+  canvas.addEventListener("pointermove", function(ev){
+    if (pointers[ev.pointerId]) pointers[ev.pointerId] = ev;
+    var ids = Object.keys(pointers);
+    if (ids.length === 2 && pinchDist > 0){
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      var d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      zoom = Math.min(ZMAX, Math.max(ZMIN, pinchZoom * (d / pinchDist)));
+      resumeAt = performance.now() + 3000;
+      return;
+    }
+    if (dragging){
+      var dx = ev.clientX - lastX, dy = ev.clientY - lastY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      lastX = ev.clientX; lastY = ev.clientY;
+      rotY += dx * 0.0072;
+      rotX = Math.min(1.45, Math.max(-1.45, rotX + dy * 0.0072));
+      return;
+    }
+    if (ev.pointerType === "mouse"){
+      var p = localPt(ev);
+      var hit = pick(p[0], p[1]);
+      if (hit !== hoverIdx){
+        hoverIdx = hit;
+        if (hit >= 0 && pinIdx < 0) showTip(hit, "cursor", p[0], p[1]);
+        else if (pinIdx < 0) hideTip();
+      } else if (hit >= 0 && pinIdx < 0 && tipAnchor === "cursor"){
+        placeTip(p[0], p[1]);
+      }
+    }
+  });
+  function endPointer(ev){
+    delete pointers[ev.pointerId];
+    if (Object.keys(pointers).length < 2) pinchDist = 0;
+    if (!dragging) return;
+    dragging = false;
+    resumeAt = performance.now() + 3000;
+    if (!moved && ev.pointerType !== "mouse"){
+      var p = localPt(ev);
+      var hit = pick(p[0], p[1]);
+      if (hit >= 0){ pinIdx = hit; showTip(hit, "node", sx[hit], sy[hit]); }
+      else { pinIdx = -1; hideTip(); }
+    }
+  }
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("pointerleave", function(ev){
+    if (ev.pointerType === "mouse" && pinIdx < 0){ hoverIdx = -1; hideTip(); }
+  });
+  canvas.addEventListener("wheel", function(ev){
+    ev.preventDefault();
+    zoom = Math.min(ZMAX, Math.max(ZMIN, zoom * Math.exp(-ev.deltaY * 0.0016)));
+  }, { passive:false });
+
+  /* ---- 鍵盤 ---- */
+  canvas.addEventListener("keydown", function(ev){
+    var k = ev.key, used = true;
+    if (k === "ArrowLeft") rotY -= 0.12;
+    else if (k === "ArrowRight") rotY += 0.12;
+    else if (k === "ArrowUp") rotX = Math.max(-1.45, rotX - 0.12);
+    else if (k === "ArrowDown") rotX = Math.min(1.45, rotX + 0.12);
+    else if (k === "+" || k === "=") zoom = Math.min(ZMAX, zoom * 1.12);
+    else if (k === "-" || k === "_") zoom = Math.max(ZMIN, zoom / 1.12);
+    else if (k === "Escape"){ pinIdx = -1; hoverIdx = -1; hideTip(); }
+    else used = false;
+    if (used){ ev.preventDefault(); resumeAt = performance.now() + 3000; }
+  });
+
+  /* ---- 對外：選一個點並釘住 tooltip（測試與之後的跨分頁跳轉用）---- */
+  window.lit3dSelect = function(id){
+    for (var i = 0; i < N; i++){
+      if (NODES[i].id === id){
+        pinIdx = i; hoverIdx = -1;
+        resize();
+        draw();
+        showTip(i, "node", sx[i], sy[i]);
+        return true;
+      }
+    }
+    return false;
+  };
+})();
+"""
+
+
+def _literature_tab(ir: dict) -> list[str]:
+    """第三個分頁「文獻」。缺檔或沒有可畫的點時只出一行說明，其他分頁不受影響。"""
+    lit = ir.get('literature') or {}
+    source = _h(lit.get('source') or LIT_REL)
+    lines = ['<section id="tab-literature" hidden>', '<div class="lit3d-wrap">']
+    if not lit.get('nodes'):
+        why = '不存在' if not lit.get('present') else '沒有可畫的節點'
+        lines += [f'<p class="lit3d-empty">尚無文獻引用資料（{source} {why}）</p>', '</div>', '</section>']
+        return lines
+    counts = lit.get('edges') or {}
+    if lit.get('demo'):
+        lines.append('<p class="lit3d-demo">示範資料：點與連線都是隨機產生的</p>')
+    lines += [
+        '<ul class="lit3d-legend">',
+        '<li><span class="lit3d-dot is-q"></span>問題點</li>',
+        '<li><span class="lit3d-dot is-l"></span>文獻點</li>',
+        '<li><span class="lit3d-bar is-q"></span>文獻—問題</li>',
+        '<li><span class="lit3d-bar is-c"></span>文獻引用文獻</li>',
+        '</ul>',
+        '<p class="lit3d-hint">拖曳旋轉・滾輪或雙指縮放・指到點看文獻・方向鍵旋轉、加減號縮放、Esc 取消選取</p>',
+        '<div class="lit3d-stage" id="lit3d-stage">',
+        '<canvas id="lit3d-canvas" class="lit3d-canvas" tabindex="0" role="img" '
+        'aria-label="文獻引用 3D 圖。方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
+        '<div class="lit3d-tip" id="lit3d-tip" hidden></div>',
+        '</div>',
+        f'<p class="notice">來源：<code>{source}</code>；節點 {lit.get("nodes", 0)}、'
+        f'文獻—問題 {counts.get("cited_for", 0)} 條、文獻引用文獻 {counts.get("cites", 0)} 條。'
+        f'版面座標由產生資料的腳本算好寫在 layout，本頁只讀不重算。</p>',
+        '</div>',
+        '</section>',
+    ]
+    return lines
+
+
 STATE_SYMBOL = {'done': '●', 'expired': '◐', 'blocked': '✖', 'pending': '○', 'unknown': '◌', '': ''}
 
 
@@ -5416,7 +6060,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{_h(p["title"])} 研究問題里程圖</title>',
-        f'<style>{CSS}{GRAPH_CSS}</style>',
+        f'<style>{CSS}{GRAPH_CSS}{LIT_CSS}</style>',
         '</head>',
         '<body>',
         '<header>',
@@ -5428,7 +6072,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         f'<p class="notice">本檔由 {SCRIPT_REL} 自動產生，請勿手動編輯；要改內容請改對應的 SSOT 檔再重跑。</p>',
         '</header>',
         *_inbox_block(ir),
-        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button></nav>',
+        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button><button type="button" data-tab="literature">文獻</button></nav>',
         '<section id="tab-milestones">',
         '<div class="controls">',
         '<span>顯示 state：</span>',
@@ -5454,6 +6098,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '</section>',
     ]
     lines += _relations_tab(ir, notes)
+    lines += _literature_tab(ir)
     gs = ir['graph']['stats']
     lines += [
         '<footer>',
@@ -5472,6 +6117,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '</script>',
         f'<script>{JS}</script>',
         f'<script>{GRAPH_JS}</script>',
+        f'<script>{LIT_JS}</script>',
         '</body>',
         '</html>',
     ]
@@ -5493,7 +6139,17 @@ def stats_line(ir: dict) -> str:
             f'區帶 main {gs["band_main_nodes"]} 節點、ext {gs["band_ext_nodes"]} 節點、supp {gs["band_supp_nodes"]} 節點、'
             f'問題帶 {gs.get("strips", 0)}、敏感性分析群 {gs["sensitivity_groups"]} 組' + (f'、支撐結果 {gs["supporting_result_keys"]} 鍵' if gs.get('supporting_result_keys') else '')
             + f'；預設檢視線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
-            f'收件匣待處理 {ir["inbox"]["pending"]}。')
+            f'收件匣待處理 {ir["inbox"]["pending"]}。'
+            + _lit_stats_line(ir.get('literature') or {}))
+
+
+def _lit_stats_line(lit: dict) -> str:
+    if not lit.get('present'):
+        return f'文獻圖：{lit.get("source", LIT_REL)} 不存在（分頁顯示空狀態）。'
+    counts = lit.get('edges') or {}
+    demo = '（示範資料）' if lit.get('demo') else ''
+    edges = '、'.join(f'{k} {v} 條' for k, v in sorted(counts.items())) or '無連線'
+    return f'文獻圖{demo}：節點 {lit.get("nodes", 0)}、{edges}。'
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5505,6 +6161,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--ir-only', action='store_true', help='只寫 PROGRESS.ir.json、不寫 PROGRESS.html')
     parser.add_argument('--embed-figures', action='store_true',
                         help='把圖檔（svg／png，單檔 ≤ 5 MB）以 data URI 內嵌進圖表節點 meta.data_uri；預設不內嵌')
+    parser.add_argument('--literature-graph', default=None, metavar='PATH',
+                        help=f'文獻引用 3D 圖的資料檔；預設 <root>/{LIT_REL}。缺檔時分頁照出、顯示空狀態')
     args = parser.parse_args(argv)
 
     quiet_stdout = args.dry_run or args.json
@@ -5520,7 +6178,8 @@ def main(argv: list[str] | None = None) -> int:
 
     src = Sources(root)
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
-    ir = build_ir(root, src, generated_at, args.embed_figures)
+    lit_path = Path(args.literature_graph).expanduser() if args.literature_graph else None
+    ir = build_ir(root, src, generated_at, args.embed_figures, lit_path)
     for w in src.warnings:
         print(f'WARNING {w}', file=diag)
     for i in src.infos:

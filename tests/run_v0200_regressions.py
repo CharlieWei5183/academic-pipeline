@@ -247,9 +247,11 @@ def _old_module(tmp: Path):
 
 
 def _strip_band_source(ir: dict) -> dict:
+    """拿掉 0.19.0 沒有的欄位：每個節點的 meta.band_source（0.20.0）與 top-level literature（0.21.0 的文獻分頁）。"""
     ir = copy.deepcopy(ir)
     for n in ir['graph']['nodes']:
         n['meta'].pop('band_source', None)
+    ir.pop('literature', None)
     return ir
 
 
