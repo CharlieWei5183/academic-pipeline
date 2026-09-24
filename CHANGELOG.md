@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.21.0（2026-09-24）
+
+`PROGRESS.html` 在「里程」「關聯」之後多一個分頁「**文獻**」（URL hash `#literature`），以 Canvas 2D 畫一張會自動慢轉的 3D 文獻引用圖：問題點與文獻點，加上文獻指向問題的 `cited_for` 線與文獻之間的 `cites` 線。這一版只接畫法與資料管道，本身不附帶任何真實文獻；跨專案通用，不設門檻、不做逐專案設定。資料檔不存在時分頁照出、顯示空狀態，里程與關聯兩個分頁完全不受影響。IR `schema_version` 維持 1（只加一個 top-level 鍵與一條驗證規則，沿用 0.18.x 以來的慣例）；skills、agents、管線階段、收件匣動作腳本都不變。
+
+1. **資料來源**：固定讀 `<root>/literature/citation-graph.json`（`schema: academic-pipeline/citation-graph@1`）。`nodes` 的 kind 是 `question` 或 `literature`，`edges` 的 kind 是 `cited_for`（文獻→問題）或 `cites`（文獻→文獻），`layout.coords` 放每個點的 3D 座標。新旗標 `--literature-graph PATH` 可改指別的檔案，給測試與預覽用。
+2. **版面座標只讀不重算**：頁面每次改 SSOT 都由 SessionEnd hook 重畫，幾百篇的 3D 版面要十幾秒才排得出來，所以算座標是產生那份資料的腳本的事，renderer 只讀 `layout.coords`。
+3. **問題點的說明文字一律取自 `project.yaml` 的 goals**（`sub_questions` ∪ `appendix_questions`），那裡是單一事實來源；找不到該 id 就只顯示 id 並記一句 WARNING。
+4. **壞資料不 hard fail**：邊指向不存在的 id、點缺座標、kind 不認得、自環、id 重複、schema 字串不符，各記一句 WARNING 並只略過那一筆，其餘照畫，走既有的 `warnings` 機制。整份檔案無法解析時視同 present 但 0 點，頁面顯示「沒有可畫的節點」。
+5. **IR**：新 top-level `literature` 鍵（`source` 路徑、`present`、`demo`、點數、各類線數與資料本體），`validate_ir` 新規則 **IR-16**（十四條，涵蓋欄位形狀、點與邊的型別、索引範圍與座標）。
+6. **前端**：新色票 token `--t-lit`（淺色 `#a8751b`、深色 `#ddaa33`，兩套主題都補），class 與 id 一律 `lit3d-` 前綴。拖曳旋轉、滾輪或雙指縮放、指到點或點一下看書目與連到的問題、方向鍵旋轉、加減號縮放、Esc 取消選取；`prefers-reduced-motion` 時不自動轉；分頁隱藏時停掉 `requestAnimationFrame`、切回來先重量尺寸。`showTab()` 改發 `progress:tab` 事件；深層連結改走 `window.lit3dSelect(id)`，不用裸 token，免得和分頁 hash 打架。`demo: true` 時分頁上方標示這是示範資料。
+7. **測試**：新增 `tests/run_literature3d_regressions.py`（缺檔空狀態、demo 資料的 IR 與 `validate_ir`、七類壞資料的 WARNING、IR-16 各條規則），fixture 用 `tests/mini-project` 的複本、不需要 Chrome。既有測試配合改動：`run_v0110` 的「只允許內嵌三個 script」改為四個，兩處 `build_ir` 的 monkeypatch lambda 改吃 `*args, **kwargs`（簽章多了 `literature_path`）；`run_v0200` 的 `_strip_band_source()` 一併拿掉 0.19.0 沒有的 top-level `literature` 鍵。其餘各支照跑、沒有改斷言。
+8. **文件**：README、`status` SKILL.md、`tests/README.md` 登記；`plugin.json` 0.21.0。
+
 ## 0.20.0（2026-09-17）
 
 關聯圖的 **Extended Data 區帶除了圖表，也能放方法（plan／敏感性子分析）、結果、驗證；只有問題節點（SQ／AQ／主問題）不能放**——使用者 2026-09-17 裁定，原話「方法，結果，驗証也要能放在 extended data。只有 SQ/AQ 不行」。理由：稿件的 Extended Data 本來就不只收圖，一組敏感性子分析、一個主要結果或一筆驗證都可能整段放到 ED，關聯圖的三個區帶要能照實呈現；問題是研究的骨架、不是投稿材料，所以不歸帶。歸屬寫在新檔 `analysis/extended-data.yaml`（opt-in、只寫「放 ED 的」、沒有負向覆寫；缺檔＝沒有任何節點放 ED、畫法與 0.19.0 相同），刻意不寫進 results.json 或 plan yaml——那些在 `rerun_all.py` 的 fingerprint 雜湊範圍，改一個歸屬標籤不該讓 validation 過期。skills、agents、管線階段不變；收件匣 `schema_version` 維持 1（只多一種 kind）；IR `schema_version` 維持 1（只加欄位 `meta.band_source`、加驗證規則，與 0.18.x／0.19.0 的慣例相同）。
