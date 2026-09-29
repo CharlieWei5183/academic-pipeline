@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## 0.23.1（2026-09-29）
+
+修 0.23.0 的「投稿檔案」批次預覽：在 PROGRESS 頁面把幾個移除動作送成一批，預覽第一步就擋下來，訊息是
+`BLOCKER <外部資料夾> 不在衍生出來的清單裡（沒有這個節點可移除）`（rc=2），使用者什麼都送不出去。這是
+**通用的路徑解析錯誤**，跟哪個專案無關；只改解析基準，衍生規則、分頁版面、打包內容、IR 與 skills 全部不動。
+
+1. **症狀**：`run_batch.py --dry-run`（以及 `package_edit.py` 自己的 dry-run）會先在 `make_workspace()`
+   建的暫存工作區把整條鏈真跑一次。SSOT 散文裡以**專案根的上一層**寫的來源路徑（`<兄弟資料夾>/input/…`
+   這種）在工作區裡一個都 resolve 不到，對應的節點沒建出來，於是移除動作被判成「沒有這個節點可移除」。
+2. **原因**：`submission_package_common.Resolver` 拿 `root.parent` 當「專案根的上一層」。工作區是
+   `tempfile.mkdtemp()` 開的，它的上一層是 `/tmp`——基準整個歪掉。同一個錯誤也在 include 的路徑界線
+   （`_pkg_path_ok`）裡：界線變成 `/tmp`，等於把 `/tmp` 底下所有東西都放行，該拒絕的反而收得進來。
+3. **做法**：`make_workspace()` 在工作區根寫一個標記檔 `.ssot-workspace-origin`，內容是原本的專案根絕對
+   路徑；新函式 `ssot_actions_common.origin_root(root)` 讀它——工作區回它複製自哪個根，真實專案根回自己
+   （巢狀工作區回最原始那個根）。凡是要判斷「專案根的上一層」的地方一律改用 `origin_root(root).parent`：
+   `Resolver.parent`、`_pkg_path_ok` 與走它的 `package_edit` validator。`Resolver` 另外多一個 `fold()`
+   ——解到**原根底下**的路徑折回工作區的同一個位置（散文以專案根上一層寫 root 內的檔時會走到），
+   `locate()`／`placement()`／`_resolve_token()`／include 的分類都過它，所以節點 id、落點、`external`、
+   缺檔判定與統計在工作區與原根上**完全相同**。標記檔以 `.` 開頭，不在 `rerun_all` 的 fingerprint 範圍
+   （只走 `data/` 與 `analysis/scripts/`）、不在 `check_gate`／`check_validation` 的宣告路徑裡、
+   `progress_hook` 找專案根時跳過 `.` 開頭的項目、`derive()` 只認 SSOT 追出來的節點——四處都不會把它
+   當成專案檔。寫入前先 `unlink`，避免巢狀時寫穿符號連結改到上一層工作區的標記。
+4. **沒動到的**：`submission_preview.py` 的縮圖快取鍵本來就用 `path.resolve()`（符號連結已經解到原檔），
+   工作區與原根算出同一把鍵，不必改。`build_submission_package.py` 走的是 `derive()` 的落點，跟著一起修好。
+5. **測試**：新增 `tests/run_v0231_regressions.py`（五項規格）。fixture 在 v0.23.0 的基礎上多一個**只**以
+   專案根上一層寫的外部資料夾——v0.23.0 原有的 `ext_sib/x.csv` 另外被 hash 表以絕對路徑點名，絕對路徑在
+   工作區裡照樣 resolve 得到，光靠它咬不到這個 bug。規格 1 比對工作區與原根的 `derive()` 逐節點相同
+   （`abs` 與 `mtime_ns` 除外）；規格 2 用 `run_batch.py --dry-run` 送兩步 `package_edit` 重現使用者那串；
+   規格 3 驗 include 的界線——`/tmp` 底下但在專案根上一層之外的檔**必須被拒**（這是會咬人的那一條，
+   0.23.0 在工作區會放行）；規格 4 驗標記檔不被當成專案檔、巢狀工作區指回最原始的根；規格 5 跑
+   `run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d`。既有斷言一條都沒改。
+6. **登記**：CHANGELOG、`tests/README.md`、`plugin.json` 0.23.1；三支 submission-prep 腳本的 `VERSION`。
+
 ## 0.23.0（2026-09-29）
 
 `PROGRESS.html` 在「里程」「關聯」「文獻」之後多第四個分頁「**投稿檔案**」（URL hash `#submission`）：把投稿時要上傳的檔案整份列出來——從 manifest 的圖表與 `analysis/results.json` 的現行結果鍵往回追到每一個實體檔——看過沒問題就在頁面上按鈕打包，不合適的逐項移除，漏掉的手動加入。清單是**衍生**的，`submission/package.yaml` 只記手動差量。**版面是依分析分卡、不畫線**——使用者 2026-09-29 兩次裁定：先看過四欄三帶的連線圖（真實專案上共用檔太多、線交叉到讀不出東西）裁定改列表，再看過逐入口的列表版裁定「依分析分為輸入資料，分析腳本，輸出結果，作圖/表腳本，圖/表；重覆的資料不要重覆出現在頁面上；不用完整路徑；不要等效命令；統整頁面的視覺化」。跨專案同一條規則，不設門檻、沒有逐專案設定。IR `schema_version` 維持 1（只加一個 top-level 鍵與一條驗證規則）；skills、agents、管線階段都不變，收件匣動作腳本多兩支。

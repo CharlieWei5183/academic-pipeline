@@ -1,6 +1,6 @@
 {
   "name": "academic-pipeline",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "description": "可稽核的學術研究與論文全流程：方法學路由、研究 protocol 與版本化分析計畫、研究倫理／資料治理、獨立資料稽核、clean-room 分析重跑與 code review、結果穩健性／可信度驗證、可重現證據綜整、主張反方審查、圖表與中英文稿撰寫、全量一致性 gate、虛擬同儕審查、修訂、投稿完整性與重現性打包、docx／LaTeX 排版。支援定量推論、預測／ML、質性、混合方法、系統性回顧／統合分析、模擬計算與理論數學研究。",
   "author": {
     "name": "Charlie"

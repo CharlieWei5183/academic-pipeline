@@ -423,6 +423,30 @@ COPY_FILES = ('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'PROGRESS.inbox.y
 COPY_DIRS = ('analysis/plans', 'evaluations', 'reviews')
 # 這幾層底下沒被複製的項目要逐一 symlink（父層因為 COPY_FILES 有子項而變成實體目錄）
 RELINK_DIRS = ('analysis', 'analysis/figures', 'submission')
+# 0.23.1：工作區標記檔，內容＝原本的專案根絕對路徑。工作區的上一層是 /tmp，凡是拿「專案根的上一層」
+# 當基準的判斷在工作區裡都會歪掉，所以留一條線索讓那些判斷找回原根（見 origin_root()）。檔名以 `.` 開頭，
+# 不落在任何 checker 的掃描範圍：rerun_all 的 fingerprint 只走 `data/` 與 `analysis/scripts/`、
+# check_gate／check_validation 只讀宣告到的路徑、progress_hook 找專案根時跳過 `.` 開頭的項目、
+# derive() 只認 SSOT 追出來的節點，都不會把它當成專案檔。
+WORKSPACE_ORIGIN = '.ssot-workspace-origin'
+
+
+def origin_root(root: Path) -> Path:
+    """這個 root 對應的原始專案根：dry-run 工作區回它複製自哪個根，真實專案根回自己（0.23.1）。
+
+    要判斷「專案根的上一層」、或要把解到原根底下的絕對路徑折回工作區，一律先過這個函式。0.23.0 的批次
+    預覽就是少了這一步——工作區裡 root 變成 /tmp/ssot-dryrun-xxx、上一層變成 /tmp，SSOT 散文裡以專案根
+    上一層寫的來源路徑整批解不到，節點不存在，移除動作被判成「沒有這個節點可移除」。
+    """
+    root = Path(root).resolve()
+    try:
+        text = (root / WORKSPACE_ORIGIN).read_text(encoding='utf-8').strip()
+    except OSError:
+        return root
+    if not text:
+        return root
+    origin = Path(text)
+    return origin.resolve() if origin.is_dir() else root
 
 
 def make_workspace(root: Path) -> Path:
@@ -456,6 +480,9 @@ def make_workspace(root: Path) -> Path:
         for child in sorted(src.iterdir()):
             if not (dst / child.name).exists() and not (dst / child.name).is_symlink():
                 os.symlink(child, dst / child.name)
+    marker = ws / WORKSPACE_ORIGIN
+    marker.unlink(missing_ok=True)   # 萬一是 symlink（工作區複製自工作區），write_text 會寫穿回去改到來源的標記
+    marker.write_text(origin_root(root).as_posix() + '\n', encoding='utf-8')   # 巢狀時記最原始那個根，不記上一層工作區
     return ws
 
 
@@ -2026,13 +2053,18 @@ def pkg_op_of(payload: dict) -> tuple[str, str]:
 
 
 def _pkg_path_ok(root: Path, path: str) -> str:
-    """include 的路徑由 server 端先驗：必須存在，而且在 root 之內或 root 的上一層之內。回錯誤訊息（空＝通過）。"""
+    """include 的路徑由 server 端先驗：必須存在，而且在 root 之內或 root 的上一層之內。回錯誤訊息（空＝通過）。
+
+    「上一層」以 origin_root(root) 為準（0.23.1）：在 dry-run 工作區裡 root 的上一層是 /tmp，拿它當界線等於
+    什麼都放行（工作區自己就在 /tmp 底下），真正該收的 root 上一層來源反而落在界線外。
+    """
     root = root.resolve()
+    parent = origin_root(root).parent
     p = Path(os.path.normpath(path if os.path.isabs(path) else str(root / path)))
     if not p.exists():
         return f'{path} 不存在（相對 root 或絕對路徑都找不到）：手動加入的檔案必須存在'
     real = os.path.realpath(p)
-    for base in (root, root.parent):
+    for base in (root, origin_root(root), parent):
         if real == os.path.realpath(base) or real.startswith(os.path.realpath(base).rstrip('/') + '/'):
             return ''
     return (f'{path} 在專案根 {root} 與其上一層之外，不接受手動加入：'

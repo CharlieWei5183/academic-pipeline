@@ -40,7 +40,7 @@ import submission_package_common as S  # noqa: E402
 import ssot_actions_common as C  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
-VERSION = '0.23.0'
+VERSION = '0.23.1'
 PKG_REL = S.PACKAGE_REL
 LIST_NAMES = ('include', 'exclude')
 ITEM_FIELDS = {'include': ('path', 'tier', 'kind', 'attach_to', 'note'),

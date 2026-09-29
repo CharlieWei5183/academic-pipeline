@@ -511,3 +511,14 @@ v0.18.0 兩件事：（1）關聯圖敏感性分析群縮排在所屬 plan 之�
 - 規格 9（既有回歸）：`build_repro_package.py` 抽出 `scan_scripts`／`write_dependency_files` 後行為不變；`set_tier` 相關的 v0.20.0 回歸與 `ssot_actions_common` 的工作區改動（`COPY_FILES` 加 `submission/package.yaml`）不影響既有動作；順帶把 v0200／v0190／v0180 三支完整跑一次。
 - 登記錨點：CHANGELOG `## 0.23.0`；README、`status` 與 `submission-prep` 兩支 SKILL.md 含「投稿檔案」；本檔含 `run_v0230_regressions.py`；`plugin.json` ≥ 0.23.0；相關檔不含 arm 的直譯字（U+81C2）。
 - 0.23.0 的配合改動：`run_v0110` 與 `run_literature3d` 的內嵌 `<script>` 數由 4 改 5（多一段 SUB_JS）；`run_v0170`／`run_v0180` 的動作種類清單字面各多「投稿清單」「打包投稿檔案」兩種；`run_v0200` 的 `ACTION_KINDS` 斷言改成「前十種順序不變、`batch` 仍在最後」，不再寫死整串；`run_v0171`／`run_v0173` 的 `'/api/inbox'` 字面數由 3 改 4（打包自己送一筆 `package_build`）；`run_v0172` 的 `applyOptimistic` 錨點跟著 `package_edit`／`package_build` 早退那一行改寫。
+
+## run_v0231_regressions.py
+
+dry-run 工作區裡的「專案根上一層」——`.ssot-workspace-origin` 標記與 `ssot_actions_common.origin_root()`。0.23.0 的批次預覽在真實專案上一送就擋：`package_edit` 的移除被判成「不在衍生出來的清單裡（沒有這個節點可移除）」（rc=2），因為 `Resolver` 拿 `root.parent` 當專案根的上一層，而 `make_workspace()` 開的工作區上一層是 `/tmp`。fixture 沿用 `run_v0230_regressions.variant`，再加一個**只**以專案根上一層寫的外部資料夾 `ext_only/imgs`——0.23.0 原有的 `ext_sib/x.csv` 另外被 hash 表以絕對路徑點名，絕對路徑在工作區裡照樣 resolve 得到，光靠它咬不到這個 bug。執行：`python3 tests/run_v0231_regressions.py`。
+
+- 規格 1（工作區與原根的 `derive()` 完全相同）：節點集合與逐節點的 id／落點／`external`／缺檔／`n_files`／`bytes`、`edges`、`stats`、`analyses`、`groups`、`package_files()` 逐列、warnings 全部相同（`abs` 與 `mtime_ns` 不比：`COPY_FILES` 是實體複製）；以專案根上一層寫的來源在工作區裡 resolve 得到，落點 `external/ext_sib/x.csv` 與 `external/ext_only/imgs`。
+- 規格 2（批次預覽不再誤判）：`run_batch.py --dry-run` 送兩步 `package_edit`（移除一個只以上一層寫的外部資料夾＋移除一個 root 內的檔）rc=0，輸出不得出現「沒有這個節點可移除」；整份專案零寫入。
+- 規格 3（include 的界線以原根的上一層為準）：在工作區與在原根上都一樣——root 內的與 root 上一層的通過、再外面的（`/tmp` 底下但不在專案根上一層之下）**被拒**；`validate_payload('package_edit', …)` 走同一條界線。這是會咬人的那一條：0.23.0 在工作區會誤放行。
+- 規格 4（標記檔不是專案檔）：加不加標記檔，`rerun_all --fingerprint-only` 與 `check_validation` 的 rc 與輸出逐字相同；標記檔不出現在 PROGRESS 頁面，也不成為 `derive()` 的節點；工作區再開工作區時標記指回最原始那個根，且不是符號連結。
+- 規格 5（既有回歸）：`run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d` 完整跑一次。
+- 登記錨點：CHANGELOG `## 0.23.1`；本檔含 `run_v0231_regressions.py`；`plugin.json` ≥ 0.23.1；三支 submission-prep 腳本的 `VERSION` 為 0.23.1；相關檔不含 arm 的直譯字（U+81C2）。
