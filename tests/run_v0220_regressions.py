@@ -12,15 +12,19 @@ fixture 沿用 v0.16.1 的 build_fixture，再加 run 資料夾（scripts／repo
 - 規格 2（帶）：結果鍵的帶沿用關聯圖既有歸帶規則（bands_from_ir_nodes 讀 IR 節點 band，次要鍵由聚合節點
   meta.keys 展開）；extended-data.yaml 列入 plan 後該 plan 的鍵跟著進 Extended Data；圖表的帶＝manifest role。
 - 規格 3（自由文字）：分隔符（；、，、全形括號）、「與」接裸檔名（相對前一個成功 resolve 的資料夾）、
-  brace 展開、glob 展開、純數字與比值（0/255、6.9／12.8、0.5）不當路徑、含 / 又有副檔名但 resolve 不到 → 缺檔。
+  brace 展開、glob 展開、純數字與比值（0/255、6.9／12.8、0.5）不當路徑、含 / 又有副檔名但 resolve 不到 → 缺檔；
+  含 / 的相對 token 相對 root 不到時，再相對前一個成功 resolve 路徑的各層上層資料夾（由近到遠，到 root 為止）試。
 - 規格 4（run 與 hash 表）：run 的 scripts/ 整個一個 code 節點、report.md／status.json 為 result、
   input_snapshot 的實體檔為 data、hash 表逐 cell 判斷（欄名 source_abs／file／path_abs 都通）、
-  相對 cell（copied_to 那類）不追、絕對 cell 不存在 → 缺檔、run 資料夾不存在 → 缺檔。
+  相對 cell（copied_to 那類）不追、絕對 cell 不存在 → 缺檔；run 資料夾不存在時分兩種——script 欄指得到實體檔
+  （run_id 只是標籤）→ 不建缺檔節點、不擋打包，改在入口掛徽章「run 資料夾不存在」並記一條 warning；script 欄也
+  resolve 不到 → 照舊記缺檔並擋打包。
 - 規格 5（external 與分類）：root.parent 內 → data/external/<相對 parent>；再外面 → external/abs/<絕對路徑>
   ＋ warning；副檔名或 scripts/ → code、input_snapshot 或 root 的 data/ → data、manifest files → figure、其餘 result。
 - 規格 6（去重與最高帶）：同一檔被多個入口引用只有一個節點、多條邊、帶取最高；資料夾節點與檔案節點落點相同時
   併成一列不重複複製。
 - 規格 7（打包）：缺檔擋住打包（exit 1）、MANIFEST sha256 正確、results_subset 只含納入的鍵、
+  README 的結果鍵表只列鍵名／plan／run／type（不搬 results.json 的中文描述）、未見種子的腳本列相對 root 路徑並去重、
   code/requirements.txt 與 r-packages.txt 沿用 build_repro_package 的掃描、第二次打包得到 _2、
   --expect-token 不符 exit 2、zip 內容與資料夾一致。
 - 規格 8（package_edit）：include／exclude／exclude-entry／restore 的 dry-run 不寫檔與 apply 全鏈
@@ -67,7 +71,8 @@ FAR: Path | None = None   # root 與其上一層之外的資料夾（external/ab
 
 FREE_TEXT = ('analysis/runs/RUN_A/scripts/a.py（第一支，K = 250）；helper.py 與 a.py；'
              '合併表 analysis/runs/RUN_A/reports/t_{x,y}.tsv、t_*.tsv；'
-             '比值 0/255、6.9／12.8、門檻 0.5；缺的 analysis/runs/RUN_A/nope.tsv')
+             '比值 0/255、6.9／12.8、門檻 0.5；缺的 analysis/runs/RUN_A/nope.tsv；'
+             '相對 run 資料夾寫的 config/c.json 與 reports/t_y.tsv；缺的 reports/zzz.tsv')
 
 
 def _hash_table(header: str, rows: list[tuple[str, ...]]) -> str:
@@ -91,6 +96,8 @@ def variant(tmp: Path, name: str) -> Path:
     (a / 'scripts/helper.py').write_text('import pandas\n', encoding='utf-8')
     (a / 'report.md').write_text('# RUN_A 報告\n', encoding='utf-8')
     (a / 'status.json').write_text('{"status": "ok"}\n', encoding='utf-8')
+    (a / 'config').mkdir(parents=True, exist_ok=True)
+    (a / 'config/c.json').write_text('{}\n', encoding='utf-8')
     (a / 'reports').mkdir(parents=True, exist_ok=True)
     for n in ('t_x.tsv', 't_y.tsv'):
         (a / 'reports' / n).write_text('v\n1\n', encoding='utf-8')
@@ -104,6 +111,7 @@ def variant(tmp: Path, name: str) -> Path:
     b = root / 'analysis/runs/RUN_B'
     (b / 'scripts').mkdir(parents=True, exist_ok=True)
     (b / 'scripts/b.R').write_text('library(mgcv)\nset.seed(42)\n', encoding='utf-8')
+    (b / 'scripts/helper.py').write_text('import pandas\n', encoding='utf-8')   # 與 RUN_A 同檔名、不同路徑，都沒有種子
     (b / 'input_snapshot').mkdir(parents=True, exist_ok=True)
     (b / 'input_snapshot/source_hashes.tsv').write_text(_hash_table(
         'role file md5 bytes', [('input/ROOT', str(root / 'analysis/scripts/analyze.py'), 'c' * 32, '10')]), encoding='utf-8')
@@ -131,7 +139,10 @@ def variant(tmp: Path, name: str) -> Path:
     results['odd_status'] = {**base, 'plan_id': 'SQ2-v1', 'status': 'draft-ish', 'conclusion_use': 'maybe',
                              'script': 'analysis/scripts/analyze.py', 'description': '未知 status 值。'}
     results['miss_run'] = {**base, 'plan_id': 'SQ2-v1', 'run_id': 'RUN_NOPE',
-                           'script': 'analysis/scripts/analyze.py', 'description': '指到不存在的 run。'}
+                           'script': 'analysis/scripts/nope.py', 'description': '指到不存在的 run，script 也 resolve 不到。'}
+    results['miss_run_label'] = {**base, 'plan_id': 'SQ2-v1', 'run_id': 'RUN_NOPE3',
+                                 'script': 'analysis/scripts/analyze.py',
+                                 'description': 'run_id 只是標籤（資料夾從未存在），script 指得到檔。'}
     rpath.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
     figdir = root / 'analysis/figures'
@@ -180,9 +191,9 @@ def test_entries(tmp: Path) -> None:
     ids = {e['id'] for e in v['entries']}
     assert {'G_main', 'G_ext', 'G_supp', 'F_a', 'F_b'} <= ids, ids
     assert 'F_c' not in ids, 'F_c 缺 role，不是入口'
-    assert {'cur_a', 'cur_b', 'cur_c', 'odd_status', 'miss_run'} <= ids, ids
+    assert {'cur_a', 'cur_b', 'cur_c', 'odd_status', 'miss_run', 'miss_run_label'} <= ids, ids
     assert 'old_hist' not in ids and 'old_np' not in ids, 'historical／not-permitted 不是入口'
-    assert v['stats']['entries_by_kind'] == {'figure': 5, 'result': 11}, v['stats']['entries_by_kind']
+    assert v['stats']['entries_by_kind'] == {'figure': 5, 'result': 12}, v['stats']['entries_by_kind']
     g = entry(v, 'G_main')
     keys = {k['key']: k for k in g['result_keys']}
     assert keys['old_hist']['historical'] is True and keys['old_hist']['is_entry'] is False
@@ -238,6 +249,10 @@ def test_free_text(tmp: Path) -> None:
         assert prose not in n, f'{prose} 是散文或比值，不該成為節點'
     assert 'analysis/figures/nope.png' in n and n['analysis/figures/nope.png']['missing']
     assert not any(k.endswith('沒有路徑') for k in n), n.keys()
+    # 相對 run 資料夾寫的 token：相對 root 與前一個資料夾都不到 → 往前一個資料夾的各層上層找（由近到遠）
+    assert 'analysis/runs/RUN_A/config/c.json' in n, 'config/c.json 要相對前一個成功 resolve 路徑的上層資料夾找到'
+    assert 'reports/zzz.tsv' in n and n['reports/zzz.tsv']['missing'], '各層上層都找不到 → 照舊記缺檔'
+    assert 'config/c.json' not in n, '找得到就不該另記一個相對 root 的缺檔節點'
     # glob：t_*.tsv 相對前一個資料夾展開，兩個檔都在（與 brace 的結果去重成同兩個節點）
     hits = [k for k in n if k.startswith('analysis/runs/RUN_A/reports/')]
     assert sorted(hits) == ['analysis/runs/RUN_A/reports/t_x.tsv', 'analysis/runs/RUN_A/reports/t_y.tsv'], hits
@@ -270,7 +285,18 @@ def test_runs(tmp: Path) -> None:
     assert far_id in n, 'hash 表欄名 path_abs 的 cell'
     assert 'data_derived/copied.csv' not in n and 'data_derived/x.csv' not in n, '相對 cell（copied_to）不追'
     assert 'data/gone.csv' in n and n['data/gone.csv']['missing'], '絕對 cell 不存在 → 缺檔'
-    assert 'analysis/runs/RUN_NOPE' in n and n['analysis/runs/RUN_NOPE']['missing'], 'run 資料夾不存在 → 缺檔'
+    assert 'analysis/runs/RUN_NOPE' in n and n['analysis/runs/RUN_NOPE']['missing'], \
+        'run 資料夾不存在、script 欄也 resolve 不到 → 照舊記缺檔'
+    assert 'analysis/runs/RUN_NOPE' in v['blocking_missing'], 'script 也不到的才擋打包'
+    # run_id 只是標籤（資料夾從未存在）但 script 欄指得到實體檔：不建節點、不擋打包，改在入口掛徽章並記 warning
+    assert 'analysis/runs/RUN_NOPE3' not in n, 'script 找得到就不建這個缺檔節點'
+    assert not any('RUN_NOPE3' in x for x in v['blocking_missing']), v['blocking_missing']
+    assert v['run_missing'] == {'miss_run_label': 'analysis/runs/RUN_NOPE3'}, v['run_missing']
+    e = entry(v, 'miss_run_label')
+    assert S.RUN_MISSING_BADGE in e['badges'] and e['run_missing'] == ['analysis/runs/RUN_NOPE3'], e
+    assert S.RUN_MISSING_BADGE not in (entry(v, 'miss_run')['badges']), entry(v, 'miss_run')['badges']
+    hits = [w for w in v['warnings'] if 'RUN_NOPE3' in w]
+    assert len(hits) == 1 and '只在入口標徽章' in hits[0], hits
     assert 'RUN_B/scripts' in ' '.join(n), n.keys()
     print('  規格 4 run 與 hash 表 ok')
 
@@ -348,11 +374,11 @@ def test_build(tmp: Path) -> None:
     pkg.write_text('schema_version: 1\ninclude: []\nexclude:\n'
                    + ''.join(f'  - {{path: "{p}", reason: "測試"}}\n' for p in
                              ('analysis/runs/RUN_NOPE', 'data/gone.csv', 'analysis/runs/RUN_A/nope.tsv',
-                              'analysis/figures/nope.png')), encoding='utf-8')
+                              'analysis/figures/nope.png', 'analysis/scripts/nope.py', 'reports/zzz.tsv')), encoding='utf-8')
     out = run(BUILD, root, '--dry-run')
     assert '缺檔（納入中）：無' in out, out[-600:]
     token = next(ln.split(': ', 1)[1].strip() for ln in out.splitlines() if ln.startswith('token: '))
-    assert '已移除 4' in out, out
+    assert '已移除 6' in out, out
 
     out = run(BUILD, root, '--apply', '--expect-token', 'nope', expect=2)
     assert 'BLOCKER 打包清單 token 不符' in out, out[-400:]
@@ -382,8 +408,14 @@ def test_build(tmp: Path) -> None:
     readme = (o / 'README.md').read_text(encoding='utf-8')
     for anchor in ('# Submission files', '## Items', '### Main', '### Extended Data', '### Supplementary',
                    '## Archive layout', '`Main/<item>/`', '## Code and data per item', 'G_main', 'Fig. 1',
-                   '主圖標題。', '[TO BE COMPLETED BY THE AUTHORS]'):
+                   '主圖標題。', '[TO BE COMPLETED BY THE AUTHORS]', '| Result key | Plan | Run | Type |'):
         assert anchor in readme, anchor
+    assert '現行鍵 A。' not in readme and '現行鍵 B（附錄）。' not in readme, 'README 是英文的，不放 results.json 的中文描述'
+    # 未見種子的腳本：列相對 root 的路徑並去重（同名不同路徑不可看起來像重複）
+    unseeded = S.unseeded_scripts(S.derive(root))
+    assert unseeded == sorted(set(unseeded)), unseeded
+    assert 'analysis/runs/RUN_A/scripts/helper.py' in unseeded and 'analysis/runs/RUN_B/scripts/helper.py' in unseeded, unseeded
+    assert not any(u.startswith('/') for u in unseeded), unseeded
     with zipfile.ZipFile(o.with_suffix('.zip')) as zf:
         names = {n.split('/', 1)[1] for n in zf.namelist()}
     on_disk = {p.relative_to(o).as_posix() for p in o.rglob('*') if p.is_file()}

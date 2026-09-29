@@ -65,6 +65,7 @@ KINDS = ('code', 'data', 'result', 'figure', 'other')
 KIND_PRIORITY = {'figure': 0, 'code': 1, 'data': 2, 'result': 3, 'other': 4}
 CODE_SUFFIXES = {'.py', '.r', '.jl', '.m', '.sh', '.ipynb', '.rmd', '.qmd'}
 KIND_DIR = {'code': 'code', 'data': 'data', 'result': 'results', 'figure': '', 'other': 'other'}
+RUN_MISSING_BADGE = 'run 資料夾不存在'
 
 # ---------- 路徑抽取 ----------
 
@@ -392,10 +393,19 @@ def _glob(base: Path, pattern: str) -> list[Path]:
 
 
 def _resolve_token(token: str, resolver: Resolver, state: dict) -> tuple[list[Path], list[str], list[str]]:
-    # root → root 上一層（overlay 外的來源常以專案根寫相對路徑，見 placement 的 external 規則）→ 同一欄位前一個成功 resolve 的資料夾
+    # root → root 上一層（overlay 外的來源常以專案根寫相對路徑，見 placement 的 external 規則）→ 同一欄位前一個成功
+    # resolve 的資料夾 → 該資料夾的各層上層（由近到遠，到 root 或其上一層為止）
     bases = [resolver.root, resolver.parent]
-    if state.get('dir'):
-        bases.append(state['dir'])
+    prev = state.get('dir')
+    if prev:
+        bases.append(prev)
+        # 散文裡的相對路徑常以 run 資料夾為基準（`config/x.json`、`reports/y/`），前一個成功 resolve 的那層本身不見得對得上，
+        # 所以再往上逐層試。只對「含 / 又像路徑」的 token 做，避免比值與純散文白跑一堆 stat。
+        if not os.path.isabs(token) and missing_worthy(token):
+            for anc in prev.parents:
+                bases.append(anc)
+                if anc == resolver.root or anc == resolver.parent or len(bases) > 16:
+                    break
     if '*' in token or '?' in token or '[' in token:
         for base in bases:
             hits = _glob(base, token)
@@ -523,6 +533,7 @@ class _View:
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
         self.warnings: list[str] = []
+        self.run_missing: dict[str, str] = {}   # 結果鍵 → run 資料夾（從未存在、但 script 欄找得到實體檔；只標徽章不當缺檔）
 
     # ---- 節點 ----
 
@@ -562,7 +573,8 @@ class _View:
         return nid
 
     def add_field(self, value: Any, entry_id: str, tier: str, via: str, *, kind: str | None = None,
-                  from_manifest_files: bool = False, state: dict | None = None) -> None:
+                  from_manifest_files: bool = False, state: dict | None = None) -> tuple[int, int]:
+        """回 (resolve 到的檔數, 缺檔數)：呼叫端要判斷「這個欄位到底有沒有指到實體檔」。"""
         state = state if state is not None else {}
         found, missing, warns = extract_paths(value, self.res, state)
         for w in warns:
@@ -574,19 +586,28 @@ class _View:
                                  self.root, from_manifest_files)
             self.node(Path(raw), k, entry_id, tier, via, missing=True, raw=raw,
                       note=f'{via} 引用，但檔案不存在')
+        return len(found), len(missing)
 
 
 def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, prefix: str) -> None:
     """一個結果鍵往回追的檔案：script 欄的路徑 ＋ run 資料夾內的宣告粒度節點。"""
-    v.add_field(obj.get('script'), entry_id, tier, f'{prefix}script', state={})
+    n_found, _n_missing = v.add_field(obj.get('script'), entry_id, tier, f'{prefix}script', state={})
     run_id = _text(obj.get('run_id'))
     if not run_id:
         return
     rel = f'{RUNS_REL}/{run_id}'
     run_dir = v.root / rel
     if not run_dir.is_dir():
+        if n_found:
+            # run_id 只是標籤、資料夾從未存在（腳本另外放在 manuscript/figures/ 之類的地方），而 script 欄指得到實體檔：
+            # 不建缺檔節點、不擋打包，改在入口掛徽章並記 warning。同一個鍵會被圖表與自己兩條路徑追到，warning 只記一次。
+            if key not in v.run_missing:
+                v.run_missing[key] = rel
+                v.warnings.append(f'{RESULTS_REL}#{key}.run_id 指到 {rel}，但該資料夾不存在；'
+                                  f'script 欄指到的檔案找得到，因此不當缺檔，只在入口標徽章')
+            return
         v.node(Path(rel), 'result', entry_id, tier, f'{prefix}run_id', missing=True, raw=rel,
-               note=f'results.json#{key}.run_id 指到 {rel}，但該資料夾不存在')
+               note=f'results.json#{key}.run_id 指到 {rel}，但該資料夾不存在，script 欄也沒有指到任何實體檔')
         return
     scripts_dir = run_dir / 'scripts'
     if scripts_dir.is_dir():
@@ -675,7 +696,7 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         entry = {'id': fid, 'kind': 'figure', 'tier': tier, 'label': fid, 'type': ftype,
                  'figure_number': _text(fig.get('figure_number')), 'role': _text(fig.get('role')),
                  'caption_first': caption_first_sentence(fig.get('caption')),
-                 'status': _text(fig.get('status')), 'result_keys': [], 'badges': [],
+                 'status': _text(fig.get('status')), 'result_keys': [], 'badges': [], 'run_missing': [],
                  'excluded': False, 'exclude_reason': '', 'source': f'{MANIFEST_REL}#figures[{fid}]'}
         v.entries.append(entry)
         files = [_text(x) for x in _list(fig.get('files')) if _text(x)] or ([_text(fig.get('file'))] if _text(fig.get('file')) else [])
@@ -715,9 +736,18 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
                  'status': _text(obj.get('status')), 'plan_id': _text(obj.get('plan_id')),
                  'run_id': _text(obj.get('run_id')), 'result_keys': [{'key': key, 'historical': False,
                                                                       'registered': True, 'is_entry': True}],
-                 'badges': [], 'excluded': False, 'exclude_reason': '', 'source': f'{RESULTS_REL}#{key}'}
+                 'badges': [], 'run_missing': [], 'excluded': False, 'exclude_reason': '', 'source': f'{RESULTS_REL}#{key}'}
         v.entries.append(entry)
         _trace_result_key(v, key, obj, key, tier, '')
+
+    # ---- run 資料夾不存在的入口徽章（結果鍵入口與引用該鍵的圖表入口都標）----
+    for entry in v.entries:
+        for item in entry.get('result_keys') or []:
+            rel = v.run_missing.get(item['key'])
+            if rel and rel not in entry['run_missing']:
+                entry['run_missing'].append(rel)
+        if entry['run_missing'] and RUN_MISSING_BADGE not in entry['badges']:
+            entry['badges'].append(RUN_MISSING_BADGE)
 
     # ---- 手動加入 ----
     added: list[str] = []
@@ -805,6 +835,7 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         'blocking_missing': blocking,
         'excluded': excluded,
         'added': added,
+        'run_missing': dict(sorted(v.run_missing.items())),
         'stats': {
             'entries': sum(1 for e in v.entries if not e['excluded']),
             'entries_excluded': sum(1 for e in v.entries if e['excluded']),
@@ -929,8 +960,12 @@ def result_keys_included(view: dict) -> list[str]:
 
 
 def unseeded_scripts(view: dict) -> list[str]:
-    """未見隨機種子的腳本（沿用 build_repro_package 的種子規則，不重寫）。"""
+    """未見隨機種子的腳本（沿用 build_repro_package 的種子規則，不重寫）。
+
+    回相對 root 的路徑並去重：同名不同路徑的腳本（各 run 都有一支 `24_v2_evidence_labels.R`）只列檔名會看起來像重複。
+    """
     from build_repro_package import scan_scripts
+    root = Path(view['root'])
     paths = []
     for node in view['nodes'].values():
         if node['excluded'] or node['missing'] or node['kind'] != 'code':
@@ -941,4 +976,13 @@ def unseeded_scripts(view: dict) -> list[str]:
         elif p.is_dir():
             paths.extend(sorted(c for c in p.rglob('*') if c.is_file() and not c.is_symlink()))
     _py, _r, _seeded, unseeded = scan_scripts(paths)
-    return [str(p) for p in unseeded]
+    out: list[str] = []
+    for p in unseeded:
+        p = Path(p)
+        try:
+            rel = p.relative_to(root).as_posix()
+        except ValueError:
+            rel = p.as_posix()
+        if rel not in out:
+            out.append(rel)
+    return sorted(out)

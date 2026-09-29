@@ -89,7 +89,7 @@ def summary_lines(view: dict, rows: list[dict], token: str, out_rel: str, dry: b
         lines.append('缺檔（納入中）：無')
     unseeded = S.unseeded_scripts(view)
     if unseeded:
-        lines.append(f'WARNING 未見顯式隨機種子的腳本 {len(unseeded)} 支：' + '、'.join(Path(p).name for p in unseeded[:8])
+        lines.append(f'WARNING 未見顯式隨機種子的腳本 {len(unseeded)} 支：' + '、'.join(unseeded[:8])
                      + ('…' if len(unseeded) > 8 else ''))
     for w in view['warnings'][:10]:
         lines.append(f'WARNING {w}')
@@ -133,10 +133,11 @@ def build_readme(view: dict, rows: list[dict], root: Path, out_name: str, date: 
                            f'{_cell(e["caption_first"]) or "—"} | ' + (', '.join(f'`{f}`' for f in files) or '—') + ' |')
             out.append('')
         if res:
-            out += ['| Result key | Plan | Run | Description (first sentence) |', '|---|---|---|---|']
+            # results.json 的 description 是中文，投稿包的 README 是英文的：只列鍵名、plan、run 與 type，不搬描述
+            out += ['| Result key | Plan | Run | Type |', '|---|---|---|---|']
             for e in res:
                 out.append(f'| `{e["id"]}` | {_cell(e.get("plan_id")) or "—"} | {_cell(e.get("run_id")) or "—"} | '
-                           f'{_cell(e["caption_first"]) or "—"} |')
+                           f'{_cell(e.get("type")) or "—"} |')
             out.append('')
     counts: dict[str, int] = {}
     for row in rows:
