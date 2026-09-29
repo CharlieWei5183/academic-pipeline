@@ -289,7 +289,11 @@ class Resolver:
 
 
 def classify(path: Path, root: Path, from_manifest_files: bool = False) -> str:
-    """分類：code → data → figure → result（順序即優先序，依 pipeline 慣例目錄與副檔名，不看專案）。"""
+    """分類：code → data → figure → result（順序即優先序，依 pipeline 慣例目錄與副檔名，不看專案）。
+
+    root 外的檔一律歸 data：從 root 的角度，外面的東西都是它讀進來的輸入，不是它算出來的結果。
+    唯一的例外是第一條規則——副檔名屬程式碼、或路徑上有 `scripts/` 的，還是 code。
+    """
     parts = path.parts
     if path.suffix.lower() in CODE_SUFFIXES or 'scripts' in parts:
         return 'code'
@@ -297,10 +301,10 @@ def classify(path: Path, root: Path, from_manifest_files: bool = False) -> str:
         return 'data'
     try:
         rel = path.relative_to(root.resolve()).parts
-        if rel and rel[0] == 'data':
-            return 'data'
     except ValueError:
-        pass
+        return 'data'      # root 外＝讀進來的輸入（外部原始資料、別的子專案的輸出檔或影像資料夾）
+    if rel and rel[0] == 'data':
+        return 'data'
     if from_manifest_files:
         return 'figure'
     return 'result'
@@ -887,7 +891,7 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
             tier_entries[entry['tier']] = tier_entries.get(entry['tier'], 0) + 1
     entry_kind = {'figure': sum(1 for e in v.entries if e['kind'] == 'figure' and not e['excluded']),
                   'result': sum(1 for e in v.entries if e['kind'] == 'result' and not e['excluded'])}
-    return {
+    out = {
         'schema': SCHEMA,
         'version': VERSION,
         'root': root.as_posix(),
@@ -909,8 +913,8 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
             'nodes': sum(1 for n in v.nodes.values() if not n['excluded']),
             'nodes_excluded': sum(1 for n in v.nodes.values() if n['excluded']),
             'nodes_by_kind': kind_counts,
-            'bytes': sum(n['bytes'] for n in v.nodes.values() if n['counted']),
-            'files': sum(n['n_files'] for n in v.nodes.values() if n['counted']),
+            'bytes': 0,
+            'files': 0,
             'missing': len(missing),
             'blocking_missing': len(blocking),
             'external': sum(1 for n in v.nodes.values() if n['external'] and not n['excluded']),
@@ -920,6 +924,13 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         },
         'warnings': v.warnings,
     }
+    # 檔數與位元組就是「真的會複製出去的那些列」：直接跑一次 package_files()，跟 build_submission_package.py --dry-run
+    # 同一套算法、同一個數字。節點自己的 n_files／bytes 仍照 counted 算（面板顯示用），但不再拿來加總——
+    # 那個加總只靠路徑前綴判斷誰被資料夾節點收走，落點不同（例如同一支腳本同時落在 code/ 與 results/）時會少算。
+    rows = package_files(out)
+    out['stats']['files'] = len(rows)
+    out['stats']['bytes'] = sum(r['bytes'] for r in rows)
+    return out
 
 
 def packaged_path_of(node: dict, entries: list[dict]) -> str:
@@ -978,8 +989,10 @@ def package_files(view: dict) -> list[dict]:
             continue
         p = Path(row['packaged_path'])
         alt = (p.parent / (Path(row['source_path']).parent.name + '__' + p.name)).as_posix()
-        view['warnings'].append(f'{row["packaged_path"]} 有兩個不同來源（{old["source_path"]}、{row["source_path"]}）：'
-                                f'後者改放 {alt}')
+        warn = (f'{row["packaged_path"]} 有兩個不同來源（{old["source_path"]}、{row["source_path"]}）：'
+                f'後者改放 {alt}')
+        if warn not in view['warnings']:      # derive() 收尾與打包各跑一次，同一條提醒只記一次
+            view['warnings'].append(warn)
         row['packaged_path'] = alt
         merged.setdefault(alt, row)
     out = sorted(merged.values(), key=lambda r: r['packaged_path'])
