@@ -128,6 +128,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Iterable
 
 try:
     import yaml
@@ -3297,24 +3298,31 @@ def _sub_stats_zero() -> dict:
             'blocking_missing': 0, 'external': 0, 'added': 0}
 
 
-def _sub_own_node(n: dict) -> bool:
-    """這個檔案節點在圖上有沒有自己的節點（節點粒度＝SSOT 的宣告粒度）。
+def _sub_disp(n: dict) -> str:
+    """節點的顯示路徑：root 內用相對 root，root 外用相對專案根（`../`）。頁面上不出現絕對路徑。
 
-    缺檔與已移除一律保留自己的節點——擋打包的清單要點得到、要還原也要點得到。其餘兩種情形收進上層：
-    落在某個資料夾節點之下（`under`，例如 run 的 `scripts/` 裡被 script 欄點名的腳本）；
-    只從某個 run 的輸入群組追到、沒有任何逐條宣告（`groups` 有值而 `itemized` 為 False）。
-    JS 端讀 IR 的 `own` 欄，不重算這個判斷。
+    `path`／`id` 對 root 外的檔就是絕對路徑（那是 package.yaml 的 exclude 識別，DOM 屬性得照原樣留），
+    所以顯示與 tooltip 一律改用這裡算出來的 `disp`。
     """
-    if n['missing'] or n['excluded']:
-        return True
-    if n['under']:
-        return False
-    return not (n['groups'] and not n['itemized'])
+    seg = n.get('segment') or n['path']
+    if not n.get('external'):
+        return n['path']
+    if seg.startswith('external/abs/'):      # 專案根與其上一層之外：連相對路徑都給不出來，只留尾段
+        return '…/' + '/'.join(seg[len('external/abs/'):].split('/')[-2:])
+    if seg.startswith('external/'):
+        return '../' + seg[len('external/'):]
+    return n['path']
+
+
+def _sub_ana_stats_zero() -> dict:
+    return {'cards': 0, 'cards_by_tier': {t: 0 for t in SUB_TIERS}, 'shared': 0, 'shared_files': 0,
+            'shared_bytes': 0, 'figures': 0, 'result_keys': 0}
 
 
 def _sub_empty(error: str = '', present: bool = False) -> dict:
     return {'source': SUB_MODULE, 'present': present, 'error': error, 'entries': [], 'nodes': {}, 'groups': {}, 'refs': [],
             'missing': [], 'blocking_missing': [], 'excluded': [], 'added': [], 'run_missing': {},
+            'analyses': {'cards': [], 'shared': [], 'group_unique': {}, 'stats': _sub_ana_stats_zero()},
             'warnings': [], 'stats': _sub_stats_zero()}
 
 
@@ -3345,7 +3353,7 @@ def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
                              files=int((view.get('entry_files') or {}).get(e['id'], 0)),
                              bytes=int((view.get('entry_bytes') or {}).get(e['id'], 0))) for e in view['entries']],
             'nodes': {nid: dict({k: n[k] for k in SUB_NODE_FIELDS},
-                                own=_sub_own_node(n),
+                                own=SP.own_node(n), disp=_sub_disp(n),
                                 pkg_files=int((view.get('node_files') or {}).get(nid, 0)),
                                 pkg_bytes=int((view.get('node_bytes') or {}).get(nid, 0))) for nid, n in view['nodes'].items()},
             'groups': {gid: {k: g[k] for k in SUB_GROUP_FIELDS} for gid, g in (view.get('groups') or {}).items()},
@@ -3355,6 +3363,8 @@ def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
             'excluded': list(view['excluded']),
             'added': list(view['added']),
             'run_missing': dict(view.get('run_missing') or {}),
+            # 依分析分卡的分組（derive 的單一衍生規則）；`home` 只是 derive 內部用的，不進 IR
+            'analyses': {k: (view.get('analyses') or {}).get(k) for k in ('cards', 'shared', 'group_unique', 'stats')},
             'warnings': list(view['warnings']),
             'stats': {k: view['stats'][k] for k in SUB_STAT_KEYS},
         }
@@ -3399,7 +3409,7 @@ def _validate_submission(sub) -> list[str]:
     for key in ('entries', 'refs', 'missing', 'blocking_missing', 'excluded', 'added', 'warnings'):
         if not isinstance(sub.get(key), list):
             errors.append(f'IR-17 submission.{key}')
-    for key in ('nodes', 'groups', 'run_missing', 'stats'):
+    for key in ('nodes', 'groups', 'run_missing', 'stats', 'analyses'):
         if not isinstance(sub.get(key), dict):
             errors.append(f'IR-17 submission.{key}')
     if errors:
@@ -3466,6 +3476,9 @@ def _validate_submission(sub) -> list[str]:
         for key in ('pkg_files', 'pkg_bytes'):   # 這個節點真的會被複製出去的檔數與位元組
             if not isinstance(n.get(key), int) or isinstance(n.get(key), bool) or n[key] < 0:
                 errors.append(f'{pre}.{key}')
+        # 顯示路徑：頁面上不出現絕對路徑，所以 root 外的節點一定要有一個不是絕對路徑的 disp
+        if not isinstance(n.get('disp'), str) or not n['disp'] or n['disp'].startswith('/'):
+            errors.append(f'{pre}.disp')
         if not isinstance(n.get('all_entries'), list) or any(x not in eids for x in n.get('all_entries') or []) \
                 or any(x not in (n.get('all_entries') or []) for x in n.get('entries') or []):
             errors.append(f'{pre}.all_entries')
@@ -3493,6 +3506,65 @@ def _validate_submission(sub) -> list[str]:
     for nid in sub['missing'] + sub['blocking_missing']:
         if nid not in sub['nodes']:
             errors.append(f'IR-17 submission.missing {nid} 不在 nodes')
+    # 依分析分卡：卡片 id 不重複、入口與節點 id 都要指得到、每個檔只落一張卡的一欄
+    ana = sub.get('analyses') if isinstance(sub.get('analyses'), dict) else {}
+    if not isinstance(ana.get('cards'), list) or not isinstance(ana.get('shared'), list) \
+            or not isinstance(ana.get('group_unique'), dict) or not isinstance(ana.get('stats'), dict):
+        errors.append('IR-17 submission.analyses 欄位')
+    else:
+        seen_cards: set[str] = set()
+        placed: dict[str, str] = {}
+        for i, c in enumerate(ana['cards']):
+            pre = f'IR-17 submission.analyses.cards[{i}]'
+            if not isinstance(c, dict) or not isinstance(c.get('id'), str) or not c['id']:
+                errors.append(f'{pre}.id')
+                continue
+            if c['id'] in seen_cards:
+                errors.append(f'{pre}.id 重複')
+            seen_cards.add(c['id'])
+            if c.get('kind') not in ('run', 'unassigned', 'manual'):
+                errors.append(f'{pre}.kind')
+            if c.get('tier') not in SUB_TIERS:
+                errors.append(f'{pre}.tier')
+            if not isinstance(c.get('cols'), dict) or set(c['cols']) != set(SUB_ANA_COL_IDS):
+                errors.append(f'{pre}.cols')
+                continue
+            for cid, lst in c['cols'].items():
+                for nid in lst:
+                    if nid not in sub['nodes']:
+                        errors.append(f'{pre}.cols[{cid}] {nid} 不在 nodes')
+                    elif nid in placed:
+                        errors.append(f'{pre}.cols[{cid}] {nid} 已落在 {placed[nid]}')
+                    else:
+                        placed[nid] = f'{c["id"]}／{cid}'
+            for eid in c.get('entries') or []:
+                if eid not in eids:
+                    errors.append(f'{pre}.entries {eid} 不是入口')
+            for fig in c.get('figures') or []:
+                if not isinstance(fig, dict) or fig.get('entry') not in eids:
+                    errors.append(f'{pre}.figures')
+            for gid in c.get('groups') or []:
+                if gid not in (sub.get('groups') or {}):
+                    errors.append(f'{pre}.groups {gid}')
+        for i, s in enumerate(ana['shared']):
+            if not isinstance(s, dict) or s.get('node') not in sub['nodes'] or s.get('col') not in ('input', 'script'):
+                errors.append(f'IR-17 submission.analyses.shared[{i}]')
+            elif s['node'] in placed:
+                errors.append(f'IR-17 submission.analyses.shared[{i}] {s["node"]} 也落在 {placed[s["node"]]}')
+            else:
+                placed[s['node']] = '共用檔案區'
+        # 群組展開出來的成員也不能與別處重覆（同一個檔在整頁只出現一次）
+        for gid, members in (ana['group_unique'] or {}).items():
+            if gid not in (sub.get('groups') or {}) or not isinstance(members, list):
+                errors.append(f'IR-17 submission.analyses.group_unique[{gid}]')
+                continue
+            for nid in members:
+                if nid not in sub['nodes']:
+                    errors.append(f'IR-17 submission.analyses.group_unique[{gid}] {nid} 不在 nodes')
+                elif nid in placed:
+                    errors.append(f'IR-17 submission.analyses.group_unique[{gid}] {nid} 也落在 {placed[nid]}')
+                else:
+                    placed[nid] = f'群組 {gid}'
     st = sub['stats']
     for key in SUB_STAT_KEYS:
         if key not in st:
@@ -6370,22 +6442,24 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
 
 
 # ---------- 投稿檔案分頁（第四個分頁）----------
-# 列表版（0.23.0；使用者 2026-09-29 看過連線圖後裁定「改成逐入口列表、不畫線」）：原本畫成四欄三帶的
-# 連線圖，真實專案上共用檔太多、線交叉到讀不出來，所以改列表——每個入口一張列卡，卡內分資料／程式碼／
-# 結果／圖表四格放檔案標籤；「誰連到誰」改由可點的連結標籤表示（圖表列卡列出它的結果鍵，結果鍵列卡
-# 列出用到它的圖表）。這一版完全不用關聯圖的排版引擎（band_frame／route_edges／crossing_stats／_lane_x），
-# 那幾個共用函式維持 origin/main 的版本，一個字都不為投稿分頁改。
+# 依分析分卡（0.23.0 第二次改版；使用者 2026-09-29 先裁定「改成逐入口列表、不畫線」，看過列表版後再裁定
+# 「依分析分為輸入資料／分析腳本／輸出結果／作圖表腳本／圖表，重覆的資料不要重覆出現，不用完整路徑，
+# 不要等效命令」）：一張卡＝一個分析（run），卡內五欄。分組規則全在 derive() 的 `analyses`，這裡只負責畫。
+# 這一版完全不用關聯圖的排版引擎（band_frame／route_edges／crossing_stats／_lane_x），那幾個共用函式維持
+# origin/main 的版本，一個字都不為投稿分頁改。
 
-SUB_CELLS = (('data', '資料'), ('code', '程式碼'), ('result', '結果'), ('figure', '圖表'))
-SUB_CELL_OF = {'data': 0, 'code': 1, 'result': 2, 'other': 2, 'figure': 3}
-SUB_LINK_CELL = {'figure': 2, 'result': 3}   # 連結標籤放哪一格：圖表列卡的結果鍵進結果格、結果鍵列卡的圖表進圖表格
-SUB_BADGE_SHORT = {'缺檔': '缺檔', 'root 外': 'root 外', '手動加入': '手動', '已移除': '已移除',
+SUB_ANA_COLS = (('input', '輸入資料'), ('script', '分析腳本'), ('output', '輸出結果'),
+                ('figscript', '作圖／表腳本'), ('figure', '圖／表'))
+SUB_ANA_COL_IDS = tuple(cid for cid, _label in SUB_ANA_COLS)
+SUB_ANA_OPT_COLS = ('figscript', 'figure')      # 這張卡沒有就不顯示這一欄（卡片變三欄）
+SUB_BADGE_SHORT = {'缺檔': '缺檔', 'root 外': '專案外', '手動加入': '手動', '已移除': '已移除',
                    'historical': 'historical', 'run 資料夾不存在': 'run 缺'}
-SUB_BADGE_CLASS = {'缺檔': 'miss', 'root 外': 'ext', '手動': 'add', '已移除': 'gone',
+SUB_BADGE_CLASS = {'缺檔': 'miss', '專案外': 'ext', '手動': 'add', '已移除': 'gone',
                    'historical': 'hist', 'run 缺': 'runmiss', '共用': 'share'}
 SUB_BAND_TITLE = {b: BAND_TITLE[b].split('：')[0] for b in BANDS}   # 沿用關聯圖的帶標籤（去掉關聯圖專屬的補述）
+SUB_TIER_SHORT = {'main': 'Main', 'extended': 'ED', 'supplementary': 'SI'}
 RUNS_DIR_PREFIX = 'analysis/runs/'
-SUB_UNATTACHED = 'unattached'      # 未掛入口的手動加入檔那張列卡
+SUB_CARD_TITLE = {'unassigned': '未歸屬分析', 'manual': '手動加入（未掛分析）'}
 
 
 def _sub_human(n: int) -> str:
@@ -6398,12 +6472,32 @@ def _sub_human(n: int) -> str:
 
 
 def _sub_label(node: dict) -> str:
-    """檔案節點的顯示名：檔名（資料夾補「/」）。"""
-    name = node['path'].rstrip('/').rsplit('/', 1)[-1] or node['path']
+    """檔案節點的顯示名：檔名（資料夾補「/」）。完整路徑只進 tooltip 與側面板，而且是相對路徑。"""
+    disp = node.get('disp') or node['path']
+    name = disp.rstrip('/').rsplit('/', 1)[-1] or disp
     return name + '/' if node['is_dir'] else name
 
 
-def _sub_badges(node: dict, hist: bool) -> list[str]:
+def _sub_labels(sub: dict, nids: Iterable[str]) -> dict[str, str]:
+    """同一張卡（或共用區）裡的顯示名：預設只有檔名，撞名時往上補一段路徑，補到分得出來為止。
+
+    不同 run 底下常有同名的輸出檔，只印檔名會讓兩個不同的檔看起來一模一樣。
+    這是通用規則，不設門檻、也不逐專案設定。
+    """
+    disp = {nid: (sub['nodes'][nid].get('disp') or sub['nodes'][nid]['path']).rstrip('/')
+            for nid in nids if nid in sub['nodes']}
+    out: dict[str, str] = {}
+    for nid, d in disp.items():
+        parts = d.split('/')
+        k = 1
+        while k < len(parts) and sum(1 for od in disp.values()
+                                     if '/'.join(od.split('/')[-k:]) == '/'.join(parts[-k:])) > 1:
+            k += 1
+        out[nid] = '/'.join(parts[-k:]) + ('/' if sub['nodes'][nid]['is_dir'] else '')
+    return out
+
+
+def _sub_badges(node: dict, hist: bool = False) -> list[str]:
     out = [SUB_BADGE_SHORT.get(b, b) for b in node['badges']]
     if hist and 'historical' not in out:
         out.append('historical')
@@ -6418,304 +6512,294 @@ def _sub_chip_size(node: dict) -> str:
     return _sub_human(node['bytes'])
 
 
-def _sub_list(sub: dict, edit: str = '') -> dict:
-    """列表版的資料：依帶分三段，每個入口一張列卡，卡內四格各放標籤。
-
-    回 {'bands': [{'tier', 'band', 'title', 'cards': [...]}], 'stats': {...}}。
-    標籤三種：file（檔案，含資料夾與群組展開後的成員）、group（run 輸入群組或資料夾節點，可展開）、
-    link（連到另一張列卡的結果鍵或圖表）。同一個共用檔在每張引用它的列卡都出現一次，標「共用 N」。
-    """
-    entries, nodes = sub['entries'], sub['nodes']
-    groups = sub.get('groups') or {}
-    by_id: dict[str, list[dict]] = {}
-    for e in entries:
-        by_id.setdefault(e['id'], []).append(e)
-    hist_keys = {it['key'] for e in entries for it in e['result_keys'] if it['historical']}
-    cur_keys = {it['key'] for e in entries for it in e['result_keys'] if not it['historical']}
-    # 結果鍵 → 用到它的圖表入口（取代原本「結果鍵 → 圖表」那條線）
-    used_by: dict[str, list[dict]] = {}
-    for e in entries:
-        if e['kind'] != 'figure':
-            continue
-        for it in e['result_keys']:
-            used_by.setdefault(it['key'], []).append(e)
-
-    def member_html(nid: str, edit: str, dir_named: bool) -> str:
-        n = nodes[nid]
-        mark = 'script 欄點名' if dir_named and any(v == 'script' or v.endswith('.script') for v in n['via']) else ''
-        return _sub_member_html(nid, n, edit, mark)
-
-    def file_chip(nid: str, n: dict) -> dict:
-        via_hist = any(f'results_keys[{k}]' in v for v in n['via'] for k in hist_keys)
-        via_cur = any(not v.startswith('results_keys[') for v in n['via']) or \
-            any(f'results_keys[{k}]' in v for v in n['via'] for k in cur_keys)
-        shared = len(n.get('all_entries') or n['entries'])
-        members = sorted(k for k, m in nodes.items() if m['under'] == nid) if n['is_dir'] else []
-        return {'type': 'group' if members else 'file', 'snode': f'f:{nid}', 'ref': n['path'],
-                'label': _sub_label(n), 'size': _sub_chip_size(n), 'kind': n['kind'],
-                'badges': _sub_badges(n, via_hist and not via_cur), 'shared': shared,
-                'excluded': n['excluded'], 'missing': n['missing'], 'members': members,
-                'group': '', 'note': n['note'], 'path': n['path'], 'sort': (1, n['path']),
-                'pkg_files': int(n.get('pkg_files') or 0), 'pkg_bytes': int(n.get('pkg_bytes') or 0),
-                'member_html': [member_html(m, edit, True) for m in members]}
-
-    def group_chip(gid: str, g: dict) -> dict:
-        mem = [nodes[m] for m in g['members'] if m in nodes]
-        badges = (['缺檔'] if any(x['missing'] for x in mem) else []) \
-            + (['root 外'] if any(x['external'] for x in mem) else []) \
-            + (['已移除'] if mem and all(x['excluded'] for x in mem) else [])
-        return {'type': 'group', 'snode': f'g:{gid}', 'ref': g['run_id'], 'label': g['label'],
-                'size': f'{g["n_files"]} 檔 {_sub_human(g["bytes"])}', 'kind': 'data', 'badges': badges,
-                'shared': len(g['entries']), 'excluded': bool(mem) and all(x['excluded'] for x in mem),
-                'missing': False, 'members': list(g['members']), 'group': gid,
-                'pkg_files': sum(int(nodes[m].get('pkg_files') or 0) for m in g['members'] if m in nodes),
-                'pkg_bytes': sum(int(nodes[m].get('pkg_bytes') or 0) for m in g['members'] if m in nodes),
-                'member_html': [member_html(m, edit, False) for m in g['members'] if m in nodes],
-                'note': f'{len(g["members"])} 個檔案節點收在這一組（run 的 input_snapshot 是一個宣告單位）',
-                'path': f'{RUNS_DIR_PREFIX}{g["run_id"]}/input_snapshot', 'sort': (0, g['run_id'])}
-
-    def link_chip(label: str, target: str, badges: list[str], note: str) -> dict:
-        return {'type': 'link', 'snode': '', 'ref': '', 'label': label, 'size': '', 'kind': 'link',
-                'badges': badges, 'shared': 0, 'excluded': False, 'missing': False, 'members': [],
-                'group': '', 'note': note, 'path': '', 'target': target, 'sort': (2, label),
-                'pkg_files': 0, 'pkg_bytes': 0, 'member_html': []}
-
-    cards: dict[str, dict] = {}
-    for e in entries:
-        cards[e['node_id']] = {
-            'id': e['node_id'], 'snode': e['node_id'], 'kind': 'entry', 'entry': e, 'tier': e['tier'],
-            'title': e['id'], 'figure_number': e['figure_number'] if e['kind'] == 'figure' else '',
-            'type_label': (e['type'] or 'figure') if e['kind'] == 'figure' else '結果鍵',
-            'badges': [SUB_BADGE_SHORT.get(b, b) for b in e['badges']] + (['已移除'] if e['excluded'] else []),
-            'files': int(e.get('files') or 0), 'bytes': int(e.get('bytes') or 0),
-            'excluded': e['excluded'], 'cells': [[], [], [], []], 'seen': set(),
-        }
-    unatt: dict[str, dict] = {}
-    for tier in SUB_TIERS:
-        unatt[tier] = {'id': f'{SUB_UNATTACHED}:{tier}', 'snode': '', 'kind': 'unattached', 'entry': None,
-                       'tier': tier, 'title': '手動加入（未掛入口）', 'figure_number': '', 'type_label': '手動加入',
-                       'badges': [], 'files': 0, 'bytes': 0,
-                       'excluded': False, 'cells': [[], [], [], []], 'seen': set()}
-
-    def put(card: dict, chip: dict) -> None:
-        key = chip['snode'] or ('link:' + chip['label'])
-        if key in card['seen']:
-            return
-        card['seen'].add(key)
-        card['cells'][SUB_CELL_OF.get(chip['kind'], 2) if chip['type'] != 'link' else chip['cell']].append(chip)
-
-    shared_files = 0
-    for nid, n in sorted(nodes.items()):
-        if not n['own']:
-            continue
-        chip = file_chip(nid, n)
-        if chip['shared'] > 1:
-            shared_files += 1
-        owners = [x for x in (n.get('all_entries') or n['entries']) if x in by_id]
-        if owners:
-            for eid in owners:
-                for e in by_id[eid]:
-                    put(cards[e['node_id']], dict(chip))
-        else:
-            card = unatt[n['tier']]
-            card['files'] += chip['pkg_files']
-            card['bytes'] += chip['pkg_bytes']
-            put(card, dict(chip))
-    for gid, g in sorted(groups.items()):
-        chip = group_chip(gid, g)
-        if chip['shared'] > 1:
-            shared_files += 1
-        owners = [x for x in g['entries'] if x in by_id]
-        if owners:
-            for eid in owners:
-                for e in by_id[eid]:
-                    put(cards[e['node_id']], dict(chip))
-        else:
-            card = unatt[g['tier']]
-            card['files'] += chip['pkg_files']
-            card['bytes'] += chip['pkg_bytes']
-            put(card, dict(chip))
-    links = 0
-    for e in entries:
-        card = cards[e['node_id']]
-        if e['kind'] == 'figure':
-            for it in e['result_keys']:
-                tgt = next((x['node_id'] for x in by_id.get(it['key'], []) if x['kind'] == 'result'), '')
-                badges = (['historical'] if it['historical'] else []) + ([] if it['registered'] else ['未登錄'])
-                chip = link_chip(it['key'], tgt if it['is_entry'] else '', badges,
-                                 '這張圖表宣告的結果鍵' + ('（也是投稿入口，點了跳到那張列卡）' if tgt else '（不是投稿入口）'))
-                chip['cell'] = SUB_LINK_CELL['figure']
-                links += 1
-                put(card, chip)
-        else:
-            for f in used_by.get(e['id'], []):
-                chip = link_chip(f['figure_number'] + ' ｜ ' + f['id'] if f['figure_number'] else f['id'],
-                                 f['node_id'], [], '用到這個結果鍵的圖表（點了跳到那張列卡）')
-                chip['cell'] = SUB_LINK_CELL['result']
-                links += 1
-                put(card, chip)
-
-    bands = []
-    n_cards = n_chips = 0
-    for tier in SUB_TIERS:
-        rows = [cards[e['node_id']] for e in entries if e['tier'] == tier]
-        if any(unatt[tier]['cells']):
-            rows.append(unatt[tier])
-        for c in rows:
-            c.pop('seen', None)
-            n_chips += sum(len(x) for x in c['cells'])
-        n_cards += len(rows)
-        bands.append({'tier': tier, 'band': SUB_TIER_BAND[tier], 'title': SUB_BAND_TITLE[SUB_TIER_BAND[tier]],
-                      'cards': rows})
-    return {'bands': bands,
-            'stats': {'cards': n_cards, 'chips': n_chips, 'shared': shared_files, 'groups': len(groups),
-                      'links': links, 'collapsed': sum(1 for n in nodes.values() if not n['own'])}}
+def _sub_bhtml(badges: list[str]) -> str:
+    # 「共用 N」帶數字，查表前先去掉數字；其餘徽章照原字查
+    return ''.join(f'<span class="bsw b-{SUB_BADGE_CLASS.get("共用" if b.startswith("共用 ") else b, "other")}">{_h(b)}</span>'
+                   for b in badges)
 
 
-def _sub_member_html(nid: str, n: dict, edit: str, mark: str) -> str:
-    """可展開標籤裡的一列成員：路徑、大小、分類與標記，各自有移除／還原按鈕。"""
-    marks = [x for x in (mark, '另有獨立節點' if n['own'] else '', '缺檔' if n['missing'] else '',
-                         '已移除' if n['excluded'] else '', 'root 外' if n['external'] else '') if x]
-    return (f'<li class="sub-member" data-snode="f:{_h(nid)}"><code>{_h(n["path"])}</code> '
+def _sub_tip(node: dict, extra: str = '') -> str:
+    """tooltip：相對路徑（root 外相對專案根）＋備註＋徽章。頁面上不出現絕對路徑。"""
+    parts = [node.get('disp') or node['path']]
+    if extra:
+        parts.append(extra)
+    if node['note']:
+        parts.append(node['note'])
+    bs = _sub_badges(node)
+    if bs:
+        parts.append('、'.join(bs))
+    return '\n'.join(parts)
+
+
+def _sub_acts(remove: str, ref: str, restore_ref: str = '') -> str:
+    """標籤上的小圖示鈕：× 移除、↺ 還原（hover 才明顯）。不再顯示任何等效命令。"""
+    return ('<span class="ca">'
+            f'<button type="button" class="ib" data-saction="{remove}" data-ref="{_h(ref)}" '
+            'title="移除" aria-label="移除" disabled>×</button>'
+            f'<button type="button" class="ib" data-saction="restore" data-ref="{_h(restore_ref or ref)}" '
+            'title="還原" aria-label="還原" disabled>↺</button></span>')
+
+
+def _sub_member_row(sub: dict, nid: str, mark: str = '') -> str:
+    """可展開標籤裡的一列成員：相對路徑、大小、分類與標記，各自有移除／還原。"""
+    n = sub['nodes'].get(nid)
+    if n is None:
+        return ''
+    marks = [x for x in (mark, '另有獨立標籤' if n['own'] else '', '缺檔' if n['missing'] else '',
+                         '已移除' if n['excluded'] else '', '專案外' if n['external'] else '') if x]
+    return (f'<li class="sub-member{" is-gone" if n["excluded"] else ""}" data-snode="f:{_h(nid)}">'
+            f'<code>{_h(n.get("disp") or n["path"])}</code> '
             f'<span class="cs">{_h(_sub_chip_size(n))}</span> '
             f'<span class="mk">{_h(SUB_KIND_LABEL.get(n["kind"], n["kind"]))}'
             + (('・' + '・'.join(marks)) if marks else '') + '</span>'
-            f'<span class="ca">'
-            # 展開後的成員列可能上千列（同一個資料夾標籤在每張引用它的列卡都展得開），data-cmd 不逐列寫，
-            # 改由 SUB_JS 的 refreshButtons() 用同一個 package_edit 模板補在 title 上，省下每列六百多個位元組
-            f'<button type="button" data-saction="exclude" data-ref="{_h(n["path"])}" disabled>移除</button>'
-            f'<button type="button" data-saction="restore" data-ref="{_h(n["path"])}" disabled>還原</button>'
-            '</span></li>')
+            + _sub_acts('exclude', n['path']) + '</li>')
 
 
-def _sub_chip_html(chip: dict, edit: str) -> str:
-    """一個標籤。檔案與群組帶 data-snode（點了開側面板）與移除／還原按鈕；連結標籤帶 data-sgoto。"""
-    if chip['type'] == 'link':
-        cls = 'sub-chip sub-link' + ('' if chip['target'] else ' is-plain')
-        attr = f' data-sgoto="{_h(chip["target"])}" tabindex="0" role="button"' if chip['target'] else ''
-        out = [f'<span class="{cls}"{attr} title="{_h(chip["note"])}">',
-               f'<span class="cl">{_h(chip["label"])}</span>']
-        out += [f'<span class="bsw b-{SUB_BADGE_CLASS.get(b, "other")}">{_h(b)}</span>' for b in chip['badges']]
-        out.append('</span>')
-        return ''.join(out)
-    title = f'{chip["path"]}\n{chip["note"]}' if chip['note'] else chip['path']
-    if chip['badges']:
-        title += '\n' + '、'.join(chip['badges'])
-    cls = ('sub-chip k-' + chip['kind'] + (' is-miss' if chip['missing'] else '')
-           + (' is-gone' if chip['excluded'] else '') + (' is-group' if chip['group'] else ''))
-    badges = list(chip['badges']) + ([f'共用 {chip["shared"]}'] if chip['shared'] > 1 else [])
-    # 「共用 N」帶數字，查表前先去掉數字；其餘徽章（含「root 外」「run 缺」這種本來就有空白的）照原字查
-    bhtml = ''.join(f'<span class="bsw b-{SUB_BADGE_CLASS.get("共用" if b.startswith("共用 ") else b, "other")}">{_h(b)}</span>'
-                    for b in badges)
-    acts = (f'<button type="button" data-saction="exclude" data-ref="{_h(chip["ref"] if not chip["group"] else chip["path"])}" '
-            f'data-cmd="{_h(edit + " --exclude " + chip["path"] + " --dry-run")}" disabled>移除</button>'
-            f'<button type="button" data-saction="restore" data-ref="{_h(chip["path"])}" '
-            f'data-cmd="{_h(edit + " --restore " + chip["path"] + " --dry-run")}" disabled>還原</button>')
-    if chip['group']:
-        acts = (f'<button type="button" data-saction="exclude-group" data-group="{_h(chip["group"])}" '
-                f'data-ref="{_h(chip["ref"])}" data-cmd="{_h(edit + " --exclude <每個成員> --dry-run")}" '
-                f'disabled>整組移除（{len(chip["members"])} 筆）</button>')
-    head = (f'<span class="cl">{_h(chip["label"])}</span>'
-            f'<span class="cs">{_h(chip["size"])}</span>{bhtml}<span class="ca">{acts}</span>')
-    if chip['type'] == 'group':
-        return (f'<details class="{cls}" data-snode="{_h(chip["snode"])}" title="{_h(title)}">'
+def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '') -> str:
+    """一個檔案標籤。資料夾一律收合成 `<details>`（收合與否只看型別，不看數量），單檔直接顯示。"""
+    n = sub['nodes'][nid]
+    cls = ('sub-chip k-' + n['kind'] + (' is-miss' if n['missing'] else '')
+           + (' is-gone' if n['excluded'] else '') + (' is-dir' if n['is_dir'] else ''))
+    head = (f'<span class="cl">{_h(label or _sub_label(n))}</span>'
+            f'<span class="cs">{_h(_sub_chip_size(n))}</span>'
+            + _sub_bhtml(_sub_badges(n))
+            + (f'<span class="tag">{_h(tag)}</span>' if tag else '')
+            + _sub_acts('exclude', n['path']))
+    if n['is_dir'] and not n['missing']:
+        inside = sorted(k for k, m in sub['nodes'].items() if m['under'] == nid and not m['own'])
+        named = {k for k in inside
+                 if any(v == 'script' or v.endswith('.script') for v in sub['nodes'][k]['via'])}
+        return (f'<details class="{cls}" data-snode="f:{_h(nid)}" title="{_h(_sub_tip(n))}">'
                 f'<summary>{head}</summary><ul class="sub-members">'
-                + ''.join(chip['member_html']) + '</ul></details>')
-    return (f'<span class="{cls}" data-snode="{_h(chip["snode"])}" title="{_h(title)}" tabindex="0" role="button">'
+                + ''.join(_sub_member_row(sub, k, 'script 欄點名' if k in named else '') for k in inside)
+                + '</ul></details>')
+    return (f'<span class="{cls}" data-snode="f:{_h(nid)}" title="{_h(_sub_tip(n))}" tabindex="0" role="button">'
             f'{head}</span>')
 
 
-def _sub_card_html(card: dict, edit: str) -> list[str]:
-    e = card['entry']
-    head = [f'<article class="sub-card{" is-gone" if card["excluded"] else ""}" '
-            f'{"data-snode=" + chr(34) + _h(card["snode"]) + chr(34) + " " if card["snode"] else ""}'
-            f'data-scard="{_h(card["id"])}" data-tier="{card["tier"]}">',
-            '<header class="sub-card-head">']
-    if card['figure_number']:
-        head.append(f'<span class="sub-num">{_h(card["figure_number"])}</span>')
-    head.append(f'<span class="sub-id">{_h(card["title"])}</span>')
-    head.append(f'<span class="sub-type">{_h(card["type_label"])}</span>')
-    head += [f'<span class="bsw b-{SUB_BADGE_CLASS.get(b, "other")}">{_h(b)}</span>' for b in card['badges']]
-    head.append(f'<span class="sub-count">{card["files"]} 檔 {_sub_human(card["bytes"])}</span>')
-    if e is not None:
-        head.append('<span class="sub-card-act">'
-                    f'<button type="button" data-saction="exclude-entry" data-ref="{_h(e["id"])}" '
-                    f'data-cmd="{_h(edit + " --exclude-entry " + e["id"] + " --reason <理由> --dry-run")}" disabled>移除入口</button>'
-                    f'<button type="button" data-saction="restore" data-ref="{_h(e["id"])}" '
-                    f'data-cmd="{_h(edit + " --restore " + e["id"] + " --dry-run")}" disabled>還原</button></span>')
-    else:
-        head.append('<span class="sub-card-act"><span class="sub-cmd">submission/package.yaml 的 include 沒填 '
-                    'attach_to，所以沒掛在任何入口下</span></span>')
-    head.append('</header><div class="sub-cells">')
-    for idx, (cid, label) in enumerate(SUB_CELLS):
-        chips = sorted(card['cells'][idx], key=lambda c: c['sort'])
-        head.append(f'<div class="sub-cell c-{cid}"><h5>{_h(label)} <span class="n">{len(chips)}</span></h5>')
-        head.append('<div class="sub-chips">' + (''.join(_sub_chip_html(c, edit) for c in chips)
-                                                or '<span class="sub-none">（無）</span>') + '</div></div>')
-    head.append('</div></article>')
-    return head
+def _sub_group_chip(sub: dict, gid: str) -> str:
+    """run 的 `input_snapshot/` 群組：一個宣告單位一個可展開標籤。
+
+    共用檔已移到頁首共用區、另有自己標籤的檔在同一欄已經列過（derive 的 `group_unique` 都扣掉了），
+    這裡不重列——同一個檔在整頁只出現一次。成員全被別處收走時整個標籤不畫（回空字串）。
+    """
+    g = sub['groups'][gid]
+    members = list((sub.get('analyses') or {}).get('group_unique', {}).get(gid) or [])
+    if not members:
+        return ''
+    mem = [sub['nodes'][m] for m in members if m in sub['nodes']]
+    n_files = sum(m['n_files'] for m in mem if m['counted'])
+    size = sum(m['bytes'] for m in mem if m['counted'])
+    badges = (['缺檔'] if any(x['missing'] for x in mem) else []) \
+        + (['專案外'] if any(x['external'] for x in mem) else []) \
+        + (['已移除'] if mem and all(x['excluded'] for x in mem) else [])
+    gone = bool(mem) and all(x['excluded'] for x in mem)
+    head = (f'<span class="cl">{_h(g["run_id"])} 的輸入</span>'
+            f'<span class="cs">{len(members)} 檔 {_sub_human(size)}</span>'
+            + _sub_bhtml(badges)
+            + ('<span class="ca">'
+               f'<button type="button" class="ib" data-saction="exclude-group" data-group="{_h(gid)}" '
+               f'data-ref="{_h(g["run_id"])}" title="整組移除（{len(members)} 筆）" '
+               f'aria-label="整組移除" disabled>×</button></span>'))
+    tip = (f'{RUNS_DIR_PREFIX}{g["run_id"]}/input_snapshot\n'
+           f'這個 run 的輸入是 SSOT 的一個宣告單位：{len(members)} 個檔案節點（{n_files} 檔不重複計）')
+    return (f'<details class="sub-chip is-group{" is-gone" if gone else ""}" data-snode="g:{_h(gid)}" '
+            f'title="{_h(tip)}"><summary>{head}</summary><ul class="sub-members">'
+            + ''.join(_sub_member_row(sub, m) for m in members) + '</ul></details>')
 
 
-def _sub_cmd(plugin: Path, root: str, script: str, tail: str) -> str:
-    return f'python3 {plugin}/skills/submission-prep/scripts/{script} {root} {tail}'
+def _sub_shared_chip(sub: dict, nids: list[str]) -> str:
+    """卡內的「共用 N 個」：只放一個可展開的連結，檔案本身列在頁首共用區，點檔名跳過去。"""
+    rows = ''.join(f'<li><span class="goto" data-sgoto="f:{_h(nid)}">{_h(_sub_label(sub["nodes"][nid]))}</span>'
+                   f' <span class="cs">{_h(_sub_chip_size(sub["nodes"][nid]))}</span></li>'
+                   for nid in nids if nid in sub['nodes'])
+    return ('<details class="sub-chip is-shared" title="被兩個以上分析引用，檔案列在頁首的共用檔案區，這裡不重列">'
+            f'<summary><span class="cl">共用 {len(nids)} 個</span>'
+            '<span class="bsw b-share">共用</span></summary>'
+            f'<ul class="sub-members">{rows}</ul></details>')
+
+
+def _sub_fig_item(sub: dict, fig: dict, names: dict[str, str] | None = None) -> str:
+    """圖／表欄的一項：一張圖表一項（figure_number＋id、格式小字、所屬帶），數值快照收在底下。"""
+    fmt = '・'.join(fig['formats']) or '（無檔）'
+    badges = [SUB_BADGE_SHORT.get(b, b) for b in fig['badges']] + (['已移除'] if fig['excluded'] else [])
+    head = (f'<span class="cl">{_h(fig["figure_number"] + " ｜ " if fig["figure_number"] else "")}'
+            f'{_h(fig["label"])}</span>'
+            f'<span class="cs">{_h(fmt)}</span>'
+            f'<span class="bsw b-band">{_h(SUB_TIER_SHORT.get(fig["tier"], fig["tier"]))}</span>'
+            + _sub_bhtml(badges)
+            + _sub_acts('exclude-entry', fig['entry']))
+    tip = '\n'.join(x for x in (fig['caption_first'], f'檔案格式：{fmt}',
+                                f'所屬帶：{SUB_TIER_LABEL.get(fig["tier"], fig["tier"])}') if x)
+    vals = [n for n in fig['values'] if n in sub['nodes']]
+    body = ''
+    if vals:
+        body = ('<div class="sub-vals"><span class="vl">數值快照</span>'
+                + ''.join(_sub_file_chip(sub, n, '', (names or {}).get(n, '')) for n in vals) + '</div>')
+    return (f'<div class="sub-fig-item{" is-gone" if fig["excluded"] else ""}" data-snode="ef:{_h(fig["entry"])}" '
+            f'title="{_h(tip)}"><div class="fh" tabindex="0" role="button">{head}</div>{body}</div>')
+
+
+def _sub_key_chip(sub: dict, item: dict) -> str:
+    """輸出結果欄的結果鍵：以鍵名呈現，外觀與檔案標籤區分（不顯示大小、加「鍵」標）。"""
+    badges = (['已移除'] if item['excluded'] else []) + (['historical'] if item['historical'] else [])
+    return (f'<span class="sub-chip is-key{" is-gone" if item["excluded"] else ""}" '
+            f'data-snode="er:{_h(item["key"])}" tabindex="0" role="button" '
+            f'title="{_h(item.get("caption_first") or "")}">'
+            f'<span class="kb">鍵</span><span class="cl">{_h(item["key"])}</span>'
+            + _sub_bhtml(badges)
+            + _sub_acts('exclude-entry', item['key']) + '</span>')
+
+
+def _sub_card_html(sub: dict, card: dict) -> list[str]:
+    """一張分析卡：標頭（分析名＋小字＋徽章＋「移除這個分析」）＋五欄＋「也用於」那一行。"""
+    title = card['run_id'] or SUB_CARD_TITLE.get(card['kind'], card['id'])
+    if card['kind'] == 'unassigned':
+        title = f'{SUB_CARD_TITLE["unassigned"]}（{SUB_TIER_LABEL.get(card["tier"], card["tier"])}）'
+    meta = []
+    if card['plan_ids']:
+        meta.append('計畫 ' + '、'.join(card['plan_ids']))
+    if card['result_keys']:
+        meta.append(f'結果鍵 {len(card["result_keys"])}')
+    if card['figures']:
+        meta.append(f'圖表 {len(card["figures"])}')
+    meta.append(f'{card["files"]} 檔 {_sub_human(card["bytes"])}')
+    out = [f'<article class="sub-card" data-scard="{_h(card["id"])}" data-tier="{card["tier"]}" '
+           f'data-akind="{card["kind"]}">', '<header class="sub-card-head">',
+           f'<span class="sub-id">{_h(title)}</span>',
+           f'<span class="sub-meta">{_h(" ｜ ".join(meta))}</span>']
+    out += [f'<span class="bsw b-{SUB_BADGE_CLASS.get(SUB_BADGE_SHORT.get(b, b), "other")}">'
+            f'{_h(SUB_BADGE_SHORT.get(b, b))}</span>' for b in card['badges']]
+    if card['entries']:
+        out.append('<span class="sub-card-act">'
+                   f'<button type="button" data-saction="exclude-analysis" data-ref="{_h(card["id"])}" '
+                   f'data-entries="{_h("|".join(card["entries"]))}" '
+                   f'title="對這張卡的 {len(card["entries"])} 個入口各寫一筆移除，一次套用、一筆 D#" '
+                   'disabled>移除這個分析</button></span>')
+    out.append('</header>')
+    cols = []
+    dual, figdata = set(card['dual']), set(card['figdata'])
+    names = _sub_labels(sub, [nid for lst in card['cols'].values() for nid in lst]
+                        + [n for f in card['figures'] for n in f['values']])
+    for cid, label in SUB_ANA_COLS:
+        items: list[str] = []
+        if cid == 'input':
+            items += [x for x in (_sub_group_chip(sub, g) for g in card['groups']) if x]
+        items += [_sub_file_chip(sub, nid,
+                                 '兼作圖' if nid in dual else ('作圖用' if nid in figdata else ''),
+                                 names.get(nid, ''))
+                  for nid in card['cols'][cid]]
+        if cid == 'output':
+            items = [_sub_key_chip(sub, it) for it in card['result_keys']] + items
+        if cid == 'figure':
+            items = [_sub_fig_item(sub, f, names) for f in card['figures']] + items
+        shared = card['shared'].get(cid) or []
+        n_items = len(items) + (1 if shared else 0)
+        if shared:
+            items.append(_sub_shared_chip(sub, shared))
+        if not n_items and cid in SUB_ANA_OPT_COLS:
+            continue      # 這張卡沒有作圖腳本／圖表就不顯示那一欄
+        cols.append(f'<div class="sub-cell c-{cid}"><h5>{_h(label)} <span class="n">{n_items}</span></h5>'
+                    + '<div class="sub-chips">' + (''.join(items) or '<span class="sub-none">（無）</span>')
+                    + '</div></div>')
+    out.append(f'<div class="sub-cells" data-cols="{len(cols)}">' + ''.join(cols) + '</div>')
+    if card['also_figures']:
+        out.append('<p class="sub-also">也用於：' + '、'.join(
+            f'<span class="goto" data-sgoto="ef:{_h(a["entry"])}">'
+            f'{_h((a["figure_number"] + " ｜ " if a["figure_number"] else "") + a["label"])}</span>'
+            for a in card['also_figures']) + '</p>')
+    out.append('</article>')
+    return out
+
+
+def _sub_shared_section(sub: dict) -> list[str]:
+    """頁首的共用檔案區：被兩個以上分析引用的輸入資料與分析腳本，各列一次，旁邊標引用它的分析。"""
+    ana = sub.get('analyses') or {}
+    rows = ana.get('shared') or []
+    st = ana.get('stats') or {}
+    if not rows:
+        return []
+    names = _sub_labels(sub, [r['node'] for r in rows])
+    out = ['<details id="sub-shared" class="sub-shared">',
+           f'<summary>共用檔案 <span class="n">{len(rows)} 個檔、{st.get("shared_files", 0)} 檔 '
+           f'{_sub_human(st.get("shared_bytes", 0))}</span>'
+           '<span class="hint">被兩個以上分析引用，這裡各列一次；分析卡那一欄只放「共用 N 個」</span></summary>',
+           '<div class="sub-shared-list">']
+    for r in rows:
+        nid = r['node']
+        if nid not in sub['nodes']:
+            continue
+        out.append(f'<div class="sub-shared-row" data-scol="{r["col"]}">'
+                   + _sub_file_chip(sub, nid, '', names.get(nid, ''))
+                   + '<span class="sub-usedby">'
+                   + '<span class="lb">用於</span>' + '、'.join(
+                       f'<span class="goto" data-sgoto="card:{_h(aid)}">{_h(aid)}</span>' for aid in r['cards'])
+                   + '</span></div>')
+    out += ['</div></details>']
+    return out
+
+
+def _sub_strip_abs(text: str, root: str, nodes: dict | None = None) -> str:
+    """提醒文字裡的絕對路徑改成相對：先把節點自己的絕對 id 換成它的 disp（專案根與其上一層之外的檔只有
+    這條換得掉），再去掉 root 前綴、把 root 上一層改成 `../`。頁面上不出現絕對路徑。"""
+    for nid in sorted((nodes or {}), key=len, reverse=True):
+        if nid.startswith('/') and nid in text:
+            text = text.replace(nid, (nodes[nid].get('disp') or nid))
+    parent = str(Path(root).parent)
+    return text.replace(root.rstrip('/') + '/', '').replace(parent.rstrip('/') + '/', '../')
 
 
 def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
-    """第四個分頁「投稿檔案」：摘要列、依帶分三段的逐入口列卡、側面板、加入表單與打包對話框。
+    """第四個分頁「投稿檔案」：摘要列、依分析分卡（三段）、共用檔案區、側面板、加入表單與打包對話框。
 
     按鈕的 data 屬性就是接線契約，SUB_JS 用事件委派抓 `[data-saction]`：data-saction（動作種類，
-    exclude／exclude-entry／exclude-group／restore／include／build）、data-snode（標籤或列卡對應的節點 id）、
-    data-ref（SSOT 的識別：入口 id 或相對 root 的路徑）、data-group、data-cmd（等效命令）。
-    連上 `progress_server.py --allow-apply` 才啟用；否則維持 disabled 並顯示等效命令。
+    exclude／exclude-entry／exclude-group／exclude-analysis／restore／include／build）、
+    data-snode（標籤對應的節點 id）、data-ref（SSOT 的識別：入口 id 或相對 root 的路徑，root 外是絕對路徑
+    ——那是 package.yaml 的 exclude 識別，只進屬性不顯示）、data-group、data-entries。
+    連上 `progress_server.py --allow-apply` 才啟用；否則維持 disabled，摘要列顯示一行說明。
     """
     sub = ir.get('submission') or _sub_empty()
-    plugin = Path(__file__).resolve().parents[3]
     root = ir['project_root']
-    lines = [f'<section id="tab-submission" hidden data-plugin="{_h(str(plugin))}" data-root="{_h(root)}">']
+    lines = [f'<section id="tab-submission" hidden data-root="{_h(root)}">']
     if sub['error']:
         lines += [f'<p class="sub-empty">投稿檔案清單這次算不出來：{_h(sub["error"])}。'
                   f'其他分頁不受影響；修好 <code>{_h(sub["source"])}</code> 後重跑本頁即可。</p>', '</section>']
         return lines
     st = sub['stats']
-    edit = _sub_cmd(plugin, root, 'package_edit.py', '').rstrip()
-    build_cmd = _sub_cmd(plugin, root, 'build_submission_package.py', '--dry-run')
+    ana = sub.get('analyses') or {}
+    ast = ana.get('stats') or {}
     blocked = st['blocking_missing'] > 0
     lines += [
         '<div class="sub-summary">',
         '<div class="sub-figs">',
         '<span class="sub-fig"><b>入口</b> ' + '、'.join(
-            f'{SUB_TIER_LABEL[t]} {st["entries_by_tier"].get(t, 0)}' for t in SUB_TIERS)
-        + f'（圖表／表格 {st["entries_by_kind"].get("figure", 0)}、結果鍵 {st["entries_by_kind"].get("result", 0)}）</span>',
-        '<span class="sub-fig"><b>檔案節點</b> ' + '、'.join(
-            f'{SUB_KIND_LABEL[k]} {st["nodes_by_kind"].get(k, 0)}' for k in SUB_KINDS if st['nodes_by_kind'].get(k))
-        + '</span>',
+            f'{SUB_TIER_LABEL[t]} {st["entries_by_tier"].get(t, 0)}' for t in SUB_TIERS) + '</span>',
+        f'<span class="sub-fig"><b>分析</b> {ast.get("cards", 0)} 個</span>',
         f'<span class="sub-fig"><b>總計</b> {st["files"]} 個檔、{_sub_human(st["bytes"])}</span>',
-        f'<span class="sub-fig"><b>root 外</b> {st["external"]}</span>',
-        f'<span class="sub-fig"><b>手動加入</b> {st["added"]}</span>',
-        f'<span class="sub-fig"><b>已移除</b> 入口 {st["entries_excluded"]}、節點 {st["nodes_excluded"]}</span>',
-        ('<span class="sub-fig is-bad"><b>缺檔（擋打包）</b> ' + str(st['blocking_missing']) + '</span>'
-         if blocked else '<span class="sub-fig is-ok"><b>缺檔（擋打包）</b> 0</span>'),
+        (f'<span class="sub-fig is-bad"><b>缺檔</b> <span class="goto" data-sgoto="missing">'
+         f'{st["blocking_missing"]}</span></span>' if blocked
+         else '<span class="sub-fig is-ok"><b>缺檔</b> 0</span>'),
+        f'<span class="sub-fig"><b>已移除</b> 入口 {st["entries_excluded"]}、檔 {st["nodes_excluded"]}</span>',
         '</div>',
         '<div class="sub-act">',
-        f'<button type="button" id="sub-build" data-saction="build" data-cmd="{_h(build_cmd)}" disabled>打包</button>',
+        '<button type="button" id="sub-build" data-saction="build" disabled>打包</button>',
         '<span class="sub-why" id="sub-build-why"></span>',
-        '<span class="sub-cmd">等效命令：<code>' + _h(build_cmd) + '</code></span>',
+        '<span class="sub-hint" id="sub-hint">未連上 progress server，按鈕停用</span>',
     ]
     if blocked:
-        lines.append(f'<span class="sub-why">有 {st["blocking_missing"]} 個納入中的缺檔，打包會被拒絕（exit 1）：'
+        lines.append(f'<span class="sub-why">有 {st["blocking_missing"]} 個納入中的缺檔，打包會被拒絕：'
                      '先移除那些標籤，或補上替代檔。</span>')
     lines.append('</div>')
-    lines.append('<p class="sub-hint" id="sub-hint">頁面是用 <code>file://</code> 開的，按鈕停用：'
-                 '要在這裡增刪與打包，請改用 <code>progress_server.py --allow-apply</code> 開啟。</p>')
     if blocked:
-        lines.append('<ul class="sub-missing">')
+        lines.append('<ul class="sub-missing" id="sub-missing">')
         for nid in sub['blocking_missing']:
-            lines.append(f'<li><a href="#" class="sub-goto" data-sgoto="f:{_h(nid)}"><code>{_h(nid)}</code></a>'
-                         '（點了捲到第一張含它的列卡並高亮）</li>')
+            n = sub['nodes'].get(nid) or {}
+            lines.append(f'<li><span class="goto" data-sgoto="f:{_h(nid)}">'
+                         f'<code>{_h(n.get("disp") or nid)}</code></span></li>')
         lines.append('</ul>')
     if sub['warnings']:
         lines.append(f'<details class="sub-warn"><summary>衍生時的提醒 {len(sub["warnings"])} 條</summary><ul>')
-        lines += [f'<li>{_h(w)}</li>' for w in sub['warnings']]
+        lines += [f'<li>{_h(_sub_strip_abs(w, root, sub["nodes"]))}</li>' for w in sub['warnings']]
         lines.append('</ul></details>')
     lines.append('</div>')
     if not sub['present']:
@@ -6723,53 +6807,52 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
                   '<code>analysis/figures/manifest.json</code> 沒有標 role 的圖表，<code>analysis/results.json</code> 也沒有現行結果鍵。'
                   '兩者其中之一有內容後重跑本頁就會出現。</p>', '</section>']
         return lines
-    lst = _sub_list(sub, edit)
-    ls = lst['stats']
+    cards = ana.get('cards') or []
     lines += [
-        '<div class="sub-legend">',
-        '<span>一個入口一張列卡（圖表／表格與結果鍵），依帶分三段：'
-        + '、'.join(b['title'] for b in lst['bands']) + '</span>',
-        '<span>列卡內四格：' + ' ｜ '.join(label for _cid, label in SUB_CELLS) + '</span>',
+        '<p class="sub-lede">一張卡＝一個分析（run），卡內五欄：'
+        + ' ｜ '.join(label for _cid, label in SUB_ANA_COLS)
+        + '；同一個檔在整頁只出現一次。</p>',
+        '<p class="sub-legend">'
+        + ''.join(f'<span><span class="ksw k-{cid}"></span>{label}</span>' for cid, label in SUB_ANA_COLS)
+        + '<span><span class="bsw b-share">共用</span>兩個以上分析共用，列在頁首</span>'
+        + '<span><span class="bsw b-miss">缺檔</span>擋打包</span>'
+        + '<span><span class="bsw b-runmiss">run 缺</span>run 資料夾不存在（不擋）</span>'
+        + '<span><span class="bsw b-ext">專案外</span></span>'
+        + '<span><span class="bsw b-add">手動</span></span>'
+        + '<span><span class="bsw b-gone">已移除</span>可還原</span>'
+        + '<span>▸ 資料夾與群組預設收合</span><span>× 移除・↺ 還原</span>'
+        + '<span>點標籤看細節，Esc 關面板</span></p>',
     ]
-    for kind, label in SUB_CELLS:
-        lines.append(f'<span><span class="ksw k-{kind}"></span>{label}</span>')
-    lines += [
-        '<span>列卡標頭的「N 檔 大小」＝這個入口牽涉的檔案總數與位元組，與打包同一套算法（共用檔照實計入每一張列卡）</span>',
-        '<span><span class="bsw b-share">共用 N</span>同一個檔被 N 個入口引用：它在每張列卡都出現一次，'
-        '點標籤看側面板列出全部引用它的入口（可點跳過去）</span>',
-        '<span>可展開的標籤（▸）＝一個宣告單位：run 的 <code>input_snapshot/</code> 群組、'
-        '<code>scripts/</code> 等資料夾節點；展開逐列成員，每列可單獨移除／還原，群組另有「整組移除」</span>',
-        '<span>圖表列卡的「結果」格列出它的 results_keys、結果鍵列卡的「圖表」格列出用到它的圖表：'
-        '<span class="sub-chip sub-link"><span class="cl">點了跳到那張列卡</span></span>——這是取代連線的「誰連到誰」</span>',
-        '<span>徽章：<span class="bsw b-miss">缺檔</span>擋打包・<span class="bsw b-runmiss">run 缺</span>run 資料夾不存在'
-        '（不擋）・<span class="bsw b-ext">root 外</span>・<span class="bsw b-add">手動</span>手動加入・'
-        '<span class="bsw b-gone">已移除</span>變灰加刪除線但仍列出、可還原・'
-        '<span class="bsw b-hist">historical</span>只被歷史鍵引用</span>',
-        '<span>點標籤看來源路徑、打包後路徑與引用它的入口；Esc 關面板</span>',
-        '</div>',
-        '<div id="sub-list">',
-    ]
-    for band in lst['bands']:
-        n = len(band['cards'])
-        lines.append(f'<section class="sub-band" data-band="{band["band"]}" data-tier="{band["tier"]}">')
-        lines.append(f'<h4 class="sub-band-head">{_h(band["title"])} <span class="n">{n} 張列卡</span>'
-                     f'<button type="button" class="sub-fold" data-sexpand="open" data-tier="{band["tier"]}">全部展開</button>'
-                     f'<button type="button" class="sub-fold" data-sexpand="close" data-tier="{band["tier"]}">全部收合</button>'
+    lines += _sub_shared_section(sub)
+    lines.append('<div id="sub-list">')
+    for tier in SUB_TIERS:
+        rows = [c for c in cards if c['tier'] == tier and c['kind'] != 'manual']
+        band = SUB_TIER_BAND[tier]
+        lines.append(f'<section class="sub-band" data-band="{band}" data-tier="{tier}">')
+        lines.append(f'<h4 class="sub-band-head">{_h(SUB_BAND_TITLE[band])} <span class="n">{len(rows)} 個分析</span>'
+                     f'<button type="button" class="sub-fold" data-sexpand="open" data-tier="{tier}">全部展開</button>'
+                     f'<button type="button" class="sub-fold" data-sexpand="close" data-tier="{tier}">全部收合</button>'
                      '</h4>')
-        if not n:
-            lines.append('<p class="sub-none">這一帶沒有入口。</p>')
-        for card in band['cards']:
-            lines += _sub_card_html(card, edit)
+        if not rows:
+            lines.append('<p class="sub-none">這一帶沒有分析。</p>')
+        for card in rows:
+            lines += _sub_card_html(sub, card)
+        lines.append('</section>')
+    manual = [c for c in cards if c['kind'] == 'manual']
+    if manual:
+        lines.append('<section class="sub-band" data-band="manual" data-tier="manual">')
+        lines.append('<h4 class="sub-band-head">手動加入 <span class="n">'
+                     'submission/package.yaml 的 include 沒填 attach_to，沒掛在任何分析下</span></h4>')
+        for card in manual:
+            lines += _sub_card_html(sub, card)
         lines.append('</section>')
     lines += [
         '</div>',
-        f'<p class="notice">投稿檔案列表：列卡 {ls["cards"]}（入口 {st["entries"] + st["entries_excluded"]}'
-        f'＋未掛入口的手動加入 {ls["cards"] - st["entries"] - st["entries_excluded"]}）、標籤 {ls["chips"]}'
-        f'（其中連結標籤 {ls["links"]}、可展開的群組與資料夾 {ls["groups"]} 組）、共用檔 {ls["shared"]}；'
-        f'另有 {ls["collapsed"]} 個檔案收在群組或資料夾標籤裡，展開才逐列顯示。'
-        f'清單與帶的規則來自 <code>{_h(sub["source"])}</code>（derive()），歸帶沿用關聯圖同一套；本頁只讀不改 SSOT。</p>',
-        '<aside id="sub-detail" hidden><button type="button" class="close" id="sub-detail-close">關閉（Esc）</button>',
-        '<div id="sub-detail-body"></div>',
+        f'<p class="notice">投稿檔案：分析 {ast.get("cards", 0)} 個（'
+        + '、'.join(f'{SUB_TIER_LABEL[t]} {(ast.get("cards_by_tier") or {}).get(t, 0)}' for t in SUB_TIERS)
+        + f'）、圖表 {ast.get("figures", 0)}、結果鍵 {ast.get("result_keys", 0)}、共用檔 {ast.get("shared", 0)}；'
+        f'各卡與共用區的檔數相加＝總計 {st["files"]} 個檔，與打包同一套算法。'
+        f'分卡與歸帶的規則來自 <code>{_h(sub["source"])}</code>（derive()），歸帶沿用關聯圖同一套；本頁只讀不改 SSOT。</p>',
         '<form id="sub-include-form" class="sub-form">',
         '<h4>加入檔案</h4>',
         '<label>路徑 <input type="text" name="path" placeholder="相對 root；root 外用絕對路徑" disabled></label>',
@@ -6777,14 +6860,14 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         + ''.join(f'<option value="{t}">{SUB_TIER_LABEL[t]}</option>' for t in SUB_TIERS) + '</select></label>',
         '<label>分類 <select name="kind" disabled>'
         + ''.join(f'<option value="{k}">{SUB_KIND_LABEL[k]}</option>' for k in SUB_KINDS) + '</select></label>',
-        '<label>掛到哪個入口 <select name="attach_to" disabled><option value="">（不掛）</option>'
-        + ''.join(f'<option value="{_h(e["id"])}">{_h(e["id"])}</option>' for e in sub['entries']) + '</select></label>',
+        '<label>掛到哪個分析／入口 <select name="attach_to" disabled><option value="">（不掛，放在頁尾的手動加入）</option>'
+        + ''.join(_sub_attach_options(sub, cards)) + '</select></label>',
         '<label>備註 <input type="text" name="note" disabled></label>',
-        f'<button type="button" data-saction="include" data-cmd="{_h(_sub_cmd(plugin, root, "package_edit.py", "--include <路徑> --tier <帶> --kind <分類> --dry-run"))}" disabled>加入檔案</button>',
-        '<p class="sub-cmd">等效命令：<code>'
-        + _h(_sub_cmd(plugin, root, 'package_edit.py', '--include <路徑> --tier <帶> --kind <分類> --dry-run')) + '</code></p>',
+        '<button type="button" data-saction="include" disabled>加入檔案</button>',
         '<p class="sub-form-msg" id="sub-include-msg"></p>',
         '</form>',
+        '<aside id="sub-detail" hidden><button type="button" class="close" id="sub-detail-close">關閉（Esc）</button>',
+        '<div id="sub-detail-body"></div>',
         '</aside>',
         # 打包對話框：按「打包」先送一筆 package_build 進收件匣並跑 dry-run，摘要（入口數、檔數、總大小、
         # 輸出資料夾、未見種子的腳本數）顯示在這裡，確認後才 --apply。
@@ -6796,37 +6879,61 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<div class="sub-dlg-act">',
         '<button type="button" id="sub-dlg-apply" disabled>確認打包</button>',
         '<button type="button" id="sub-dlg-close">取消</button>',
-        '<span class="sub-cmd">「確認打包」才會真的複製檔案（腳本 --apply）；取消只留一筆 pending 在收件匣。</span>',
+        '<span class="sub-cmd">「確認打包」才會真的複製檔案；取消只留一筆 pending 在收件匣。</span>',
         '</div></div></div>',
         '</section>',
     ]
     return lines
 
 
+def _sub_attach_options(sub: dict, cards: list[dict]) -> list[str]:
+    """加入表單的下拉：依分析分組列出入口（attach_to 的值必須是入口 id）。"""
+    out: list[str] = []
+    placed: set[str] = set()
+    for card in cards:
+        if not card['entries']:
+            continue
+        label = card['run_id'] or SUB_CARD_TITLE.get(card['kind'], card['id'])
+        out.append(f'<optgroup label="{_h(label)}">')
+        for eid in card['entries']:
+            placed.add(eid)
+            out.append(f'<option value="{_h(eid)}">{_h(eid)}</option>')
+        out.append('</optgroup>')
+    rest = [e['id'] for e in sub['entries'] if e['id'] not in placed]
+    if rest:
+        out.append('<optgroup label="其他入口">')
+        out += [f'<option value="{_h(eid)}">{_h(eid)}</option>' for eid in rest]
+        out.append('</optgroup>')
+    return out
+
+
 SUB_CSS = """
 .sub-summary{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
-.sub-figs{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px}
+.sub-figs{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px}
 .sub-fig b{font-weight:600;color:var(--muted);margin-right:4px}
 .sub-fig.is-bad{color:var(--badge-blocked);font-weight:600}
 .sub-fig.is-ok{color:var(--done)}
-.sub-act{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px}
+.sub-act{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:8px}
 .sub-act button{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:4px 12px;font:inherit}
 .sub-act button[disabled]{opacity:.55;cursor:not-allowed}
 .sub-cmd{font-size:11px;color:var(--muted)}
-.sub-cmd code{font-size:11px;word-break:break-all}
 .sub-why{font-size:12px;color:var(--badge-blocked)}
 .sub-missing{margin:8px 0 0;padding-left:18px;font-size:12px}
 .sub-missing code{word-break:break-all}
-.sub-missing a{color:var(--badge-blocked)}
+.sub-missing .goto{color:var(--badge-blocked)}
 .sub-warn{margin-top:8px;font-size:12px;color:var(--muted)}
 .sub-warn ul{margin:4px 0;padding-left:18px}
-.sub-warn li{margin:2px 0}
+.sub-warn li{margin:2px 0;word-break:break-all}
 .sub-empty{margin:16px 0;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
-.sub-legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:8px 0 10px;font-size:12px;color:var(--muted)}
-.sub-legend>span{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
-.ksw{display:inline-block;width:10px;height:14px;border-radius:2px;background:var(--pending)}
-.ksw.k-data{background:var(--t-validation)}.ksw.k-code{background:var(--t-method)}
-.ksw.k-result{background:var(--t-result)}.ksw.k-figure{background:var(--t-figure)}
+#tab-submission .goto{color:var(--current);cursor:pointer;text-decoration:underline dotted}
+/* ---- 一行說明＋一行圖例 ---- */
+.sub-lede{margin:10px 0 4px;font-size:13px}
+.sub-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 10px;font-size:11px;color:var(--muted)}
+.sub-legend>span{display:inline-flex;align-items:center;gap:4px}
+.ksw{display:inline-block;width:9px;height:12px;border-radius:2px;background:var(--pending)}
+.ksw.k-input{background:var(--t-validation)}.ksw.k-script{background:var(--t-method)}
+.ksw.k-output{background:var(--t-result)}.ksw.k-figscript{background:var(--t-lit)}
+.ksw.k-figure{background:var(--t-figure)}
 .bsw{border-radius:3px;padding:0 4px;font-size:11px;border:1px solid var(--line);white-space:nowrap}
 .bsw.b-miss{color:var(--badge-blocked);border-color:var(--badge-blocked)}
 .bsw.b-runmiss{color:var(--expired);border-color:var(--expired)}
@@ -6835,7 +6942,17 @@ SUB_CSS = """
 .bsw.b-gone{color:var(--muted)}
 .bsw.b-hist{color:var(--t-lit);border-color:var(--t-lit)}
 .bsw.b-share{color:var(--t-validation);border-color:var(--t-validation)}
-/* ---- 列表版（0.23.0）：依帶分三段，每個入口一張列卡，卡內四格 ---- */
+.bsw.b-band{color:var(--muted)}
+/* ---- 共用檔案區（頁首）---- */
+.sub-shared{margin:0 0 16px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.sub-shared>summary{cursor:pointer;font-size:13px;font-weight:600;list-style:revert}
+.sub-shared>summary .n{font-size:11px;font-weight:400;color:var(--muted);margin-left:4px}
+.sub-shared>summary .hint{font-size:11px;font-weight:400;color:var(--muted);margin-left:8px}
+.sub-shared-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:4px 16px;margin-top:8px}
+.sub-shared-row{min-width:0}
+.sub-usedby{display:block;font-size:11px;color:var(--muted);margin:1px 0 0 6px}
+.sub-usedby .lb{margin-right:3px}
+/* ---- 分析卡 ---- */
 #sub-list{margin:0 0 12px}
 .sub-band{margin:0 0 18px}
 .sub-band-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px;font-size:14px;
@@ -6844,60 +6961,76 @@ SUB_CSS = """
 button.sub-fold{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var(--line);border-radius:6px;
   background:var(--proj);color:inherit;cursor:pointer}
 .sub-card{border:1px solid var(--line);border-radius:8px;background:var(--card);margin:0 0 8px;padding:8px 10px}
-.sub-card.is-gone{opacity:.55}
-.sub-card.is-gone .sub-id{text-decoration:line-through}
-.sub-card-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;font-size:13px}
-.sub-card-head .sub-num{font-weight:600;color:var(--current)}
+.sub-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;font-size:13px}
 .sub-card-head .sub-id{font-weight:600;word-break:break-all}
-.sub-card-head .sub-type{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px}
-.sub-card-head .sub-count{font-size:12px;color:var(--muted)}
+.sub-card-head .sub-meta{font-size:11px;color:var(--muted)}
 .sub-card-act{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
 .sub-card-act button{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var(--line);border-radius:6px;
-  background:var(--proj);color:inherit;cursor:pointer}
-.sub-card-act button[disabled]{opacity:.55;cursor:not-allowed}
-.sub-cells{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px}
+  background:var(--proj);color:inherit;cursor:pointer;opacity:.7}
+.sub-card:hover .sub-card-act button{opacity:1}
+.sub-card-act button[disabled]{opacity:.5;cursor:not-allowed}
+.sub-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px}
+.sub-cells[data-cols="4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
+.sub-cells[data-cols="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}
 .sub-cell{min-width:0;border-left:3px solid var(--line);padding-left:6px}
-.sub-cell.c-data{border-left-color:var(--t-validation)}
-.sub-cell.c-code{border-left-color:var(--t-method)}
-.sub-cell.c-result{border-left-color:var(--t-result)}
+.sub-cell.c-input{border-left-color:var(--t-validation)}
+.sub-cell.c-script{border-left-color:var(--t-method)}
+.sub-cell.c-output{border-left-color:var(--t-result)}
+.sub-cell.c-figscript{border-left-color:var(--t-lit)}
 .sub-cell.c-figure{border-left-color:var(--t-figure)}
 .sub-cell h5{margin:0 0 4px;font-size:11px;font-weight:600;color:var(--muted)}
 .sub-cell h5 .n{font-weight:400}
 .sub-chips{display:flex;flex-direction:column;gap:3px}
 .sub-none{font-size:11px;color:var(--muted)}
+.sub-also{margin:6px 0 0;font-size:11px;color:var(--muted)}
+/* ---- 標籤 ---- */
 .sub-chip{display:block;border:1px solid var(--line);border-left-width:4px;border-radius:5px;background:var(--bg-none);
   padding:2px 5px;font-size:12px;cursor:pointer;min-width:0}
 .sub-chip .cl{font-weight:500;word-break:break-all;margin-right:5px}
 .sub-chip .cs{font-size:11px;color:var(--muted);margin-right:4px;white-space:nowrap}
-.sub-chip .ca{display:inline-flex;gap:3px;margin-left:4px}
-.sub-chip .ca button{font:inherit;font-size:10px;padding:0 5px;border:1px solid var(--line);border-radius:4px;
-  background:var(--proj);color:inherit;cursor:pointer}
-.sub-chip .ca button[disabled]{opacity:.5;cursor:not-allowed}
+.sub-chip .tag{font-size:10px;color:var(--muted);border:1px dotted var(--line);border-radius:3px;padding:0 3px;margin-right:3px}
+.sub-chip .kb{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 3px;margin-right:4px}
 .sub-chip.k-data{border-left-color:var(--t-validation)}
 .sub-chip.k-code{border-left-color:var(--t-method)}
 .sub-chip.k-result,.sub-chip.k-other{border-left-color:var(--t-result)}
 .sub-chip.k-figure{border-left-color:var(--t-figure)}
+.sub-chip.is-key{border-left-color:var(--t-result);border-style:solid;background:var(--proj)}
+.sub-chip.is-shared{border-left-color:var(--t-validation);border-style:dashed}
 .sub-chip.is-miss{border-color:var(--badge-blocked);border-style:dashed}
-.sub-chip.is-gone{opacity:.5}
+.sub-chip.is-gone{opacity:.55}
 .sub-chip.is-gone .cl{text-decoration:line-through}
 .sub-chip.is-group{border-left-color:var(--t-validation);border-left-width:5px}
-.sub-chip.sub-link{border-left-color:var(--current);background:var(--proj)}
-.sub-chip.sub-link.is-plain{border-left-color:var(--line);cursor:default}
 .sub-chip.sub-hl{outline:2px solid var(--current);outline-offset:1px}
 .sub-card.sub-hl-card{border-color:var(--current);box-shadow:0 0 0 1px var(--current) inset}
-.sub-chip:focus{outline:2px solid var(--current);outline-offset:1px}
+.sub-chip:focus,.sub-fig-item .fh:focus{outline:2px solid var(--current);outline-offset:1px}
 .sub-chip summary{cursor:pointer;list-style:revert}
+/* 移除／還原：平時淡，hover 才明顯 */
+#tab-submission .ca{display:inline-flex;gap:2px;margin-left:3px;vertical-align:baseline}
+#tab-submission button.ib{font:inherit;font-size:11px;line-height:1.1;padding:0 4px;border:1px solid transparent;
+  border-radius:4px;background:none;color:var(--muted);cursor:pointer;opacity:.35}
+#tab-submission .sub-chip:hover button.ib,#tab-submission .sub-member:hover button.ib,
+#tab-submission .sub-fig-item:hover button.ib,#tab-submission button.ib:focus{opacity:1;border-color:var(--line);background:var(--proj)}
+#tab-submission button.ib[disabled]{cursor:not-allowed}
 .sub-members{margin:4px 0 2px;padding-left:16px;font-size:11px}
 .sub-member{margin:2px 0;word-break:break-all}
 .sub-member code{font-size:11px}
 .sub-member .mk{color:var(--muted)}
-.sub-member .ca{display:inline-flex;gap:3px;margin-left:4px}
-.sub-member .ca button{font:inherit;font-size:10px;padding:0 5px;border:1px solid var(--line);border-radius:4px;
-  background:var(--proj);color:inherit;cursor:pointer}
-.sub-member .ca button[disabled]{opacity:.5;cursor:not-allowed}
-@media (max-width:680px){
-  .sub-cells{grid-template-columns:minmax(0,1fr)}
+.sub-member.is-gone code{text-decoration:line-through;opacity:.6}
+/* ---- 圖／表欄的一項 ---- */
+.sub-fig-item{border:1px solid var(--line);border-left:4px solid var(--t-figure);border-radius:5px;
+  background:var(--bg-none);padding:2px 5px;font-size:12px;min-width:0}
+.sub-fig-item .fh{cursor:pointer}
+.sub-fig-item .cl{font-weight:500;word-break:break-all;margin-right:5px}
+.sub-fig-item .cs{font-size:11px;color:var(--muted);margin-right:4px}
+.sub-fig-item.is-gone{opacity:.55}
+.sub-fig-item.is-gone .cl{text-decoration:line-through}
+.sub-vals{margin:3px 0 1px 8px;font-size:11px}
+.sub-vals .vl{color:var(--muted);margin-right:4px}
+.sub-vals .sub-chip{font-size:11px}
+@media (max-width:760px){
+  .sub-cells,.sub-cells[data-cols="4"],.sub-cells[data-cols="3"]{grid-template-columns:minmax(0,1fr)}
   .sub-card-act{margin-left:0}
+  .sub-shared-list{grid-template-columns:minmax(0,1fr)}
 }
 #sub-detail{position:fixed;right:16px;bottom:16px;width:min(520px,calc(100vw - 32px));max-height:76vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:10}
 #sub-detail h3{margin:0 0 6px;font-size:15px;word-break:break-all}
@@ -6910,13 +7043,16 @@ button.sub-fold{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var
 #sub-detail .row{display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap}
 #sub-detail button[data-saction]{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:1px 8px;font-size:12px}
 #sub-detail button[disabled]{opacity:.55;cursor:not-allowed}
-#sub-detail .goto{color:var(--current);cursor:pointer;text-decoration:underline dotted}
 #sub-detail .mk{font-size:11px;color:var(--muted)}
-#sub-detail .sub-form{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
-#sub-detail .sub-form label{display:block;font-size:12px;margin:4px 0;color:var(--muted)}
-#sub-detail .sub-form input,#sub-detail .sub-form select{font:inherit;font-size:12px;padding:2px 4px;max-width:100%;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
-#sub-detail .sub-form button{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:3px 10px;font-size:12px;margin-top:4px}
-#sub-hint{margin:6px 0 0;font-size:12px;color:var(--muted)}
+.sub-form{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.sub-form h4{margin:0 0 6px;font-size:13px}
+.sub-form label{display:inline-block;font-size:12px;margin:4px 10px 4px 0;color:var(--muted)}
+.sub-form input,.sub-form select{font:inherit;font-size:12px;padding:2px 4px;max-width:100%;background:var(--bg-none);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+.sub-form button{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:3px 10px;font-size:12px}
+.sub-form button[disabled]{opacity:.55;cursor:not-allowed}
+.sub-form-msg{margin:4px 0 0;font-size:12px;color:var(--current)}
+.sub-form-msg:empty{display:none}
+#sub-hint{font-size:12px;color:var(--muted)}
 #sub-build-why:empty{display:none}
 #sub-build-dialog{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
 #sub-build-dialog[hidden]{display:none}   /* display:flex 會蓋過 hidden 屬性的 UA 預設 display:none，要自己寫回來 */
@@ -6930,12 +7066,10 @@ button.sub-fold{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var
 #sub-build-dialog .sub-dlg-act{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
 #sub-build-dialog .sub-dlg-act button{font:inherit;font-size:13px;padding:4px 12px;border:1px solid var(--line);border-radius:6px;background:var(--proj);color:inherit;cursor:pointer}
 #sub-build-dialog .sub-dlg-act button[disabled]{opacity:.55;cursor:not-allowed}
-/* 暫存狀態：同一個檔在列表版會在每張引用它的列卡各出現一次，class 一律 querySelectorAll 全部標（見 SUB_JS 的 markPending） */
+/* 暫存狀態：一個 ref 在頁面上可能對到好幾個元素（標籤、成員列、面板按鈕），class 一律 querySelectorAll 全部標（見 SUB_JS 的 markPending） */
 #tab-submission .sub-pending-exclude{outline:1px dashed var(--current);outline-offset:2px;border-radius:4px;opacity:.62}
 #tab-submission .sub-pending-restore,#tab-submission .sub-pending-include{outline:1px dashed var(--current);outline-offset:2px;border-radius:4px;opacity:1}
 #tab-submission .sub-pend-tag{font-size:11px;color:var(--current);margin-left:4px}
-#sub-detail .sub-form-msg{margin:4px 0 0;font-size:12px;color:var(--current)}
-#sub-detail .sub-form-msg:empty{display:none}
 """
 
 SUB_JS = r"""
@@ -6948,14 +7082,12 @@ SUB_JS = r"""
   var section=document.getElementById('tab-submission'); if(!section) return;
   var list=document.getElementById('sub-list');
   var detail=document.getElementById('sub-detail'), body=document.getElementById('sub-detail-body');
-  var PLUGIN=section.getAttribute('data-plugin')||'', ROOT=section.getAttribute('data-root')||'';
-  var EDIT='python3 '+PLUGIN+'/skills/submission-prep/scripts/package_edit.py '+ROOT;
   var TIER={main:'正式文章',extended:'延伸資料',supplementary:'補充資料'};
   var KIND={data:'資料',code:'程式碼',result:'結果',figure:'圖表',other:'其他',
             entry_result:'結果鍵入口',entry_figure:'圖表／表格入口'};
   var WHY={'缺檔':'引用它的欄位指到這個路徑，但檔案不存在；打包會被拒絕',
            'run 資料夾不存在':'結果鍵的 run_id 只是標籤，資料夾從未存在；script 欄找得到檔，所以不擋打包',
-           'root 外':'來源在專案根之外，打包時放進 external/',
+           '專案外':'來源在專案根之外，打包時放進 external/（頁面顯示相對專案根的路徑）',
            '手動加入':'submission/package.yaml 的 include 加的，不是衍生出來的',
            '已移除':'submission/package.yaml 的 exclude 移掉了，仍列出以便還原',
            'historical':'只被 status=historical 的結果鍵引用（該鍵本身不是入口）'};
@@ -6966,10 +7098,9 @@ SUB_JS = r"""
   function q(s){return String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"');}
   function human(n){var v=n||0,u=['B','KB','MB','GB'],i=0;
     while(v>=1024&&i<3){v/=1024;i++;} return (i?v.toFixed(1):v.toFixed(0))+' '+u[i];}
-  function btn(action,ref,label,cmd,extra){
-    return '<button type="button" data-saction="'+h(action)+'" data-ref="'+h(ref)+'" data-cmd="'+h(cmd)+'"'+
+  function btn(action,ref,label,extra){
+    return '<button type="button" data-saction="'+h(action)+'" data-ref="'+h(ref)+'"'+
       (extra||'')+' disabled>'+h(label)+'</button>';}
-  function cmdline(cmd){return '<p class="sub-cmd">等效命令：<code>'+h(cmd)+'</code></p>';}
   function gotoLink(id,label){return '<span class="goto" data-sgoto="'+h(id)+'">'+h(label)+'</span>';}
   function dl(pairs){var out='<dl>';pairs.forEach(function(p){
       if(p[1]===''||p[1]===null||p[1]===undefined)return;
@@ -6981,9 +7112,8 @@ SUB_JS = r"""
   /* 引用某個節點的入口（含收在它底下的檔案帶來的入口，IR 的 all_entries 已經算好） */
   function ownersOf(n){return (n&&(n.all_entries||n.entries))||[];}
   function fileRow(n){
-    return '<li><div class="row"><span><code>'+h(n.path)+'</code> '+(n.missing?'<span class="bsw b-miss">缺檔</span>':h(human(n.bytes)))+'</span>'+
-      '<span>'+btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --dry-run')+
-      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div></li>';}
+    return '<li><div class="row"><span><code>'+h(n.disp||n.path)+'</code> '+(n.missing?'<span class="bsw b-miss">缺檔</span>':h(human(n.bytes)))+'</span>'+
+      '<span>'+btn('exclude',n.path,'移除')+btn('restore',n.path,'還原')+'</span></div></li>';}
   /* 沒有自己標籤的檔案 → 收它的那個標籤（資料夾標籤或 run 輸入群組）。IR 的 own 欄已經算好，這裡只查表。 */
   function hostOf(nid){var n=nodes[nid]; if(!n||n.own) return '';
     if(n.under) return 'f:'+n.under;
@@ -6994,18 +7124,15 @@ SUB_JS = r"""
     if(extra) marks.push(extra);
     if(n.missing) marks.push('缺檔');
     if(n.excluded) marks.push('已移除');
-    if(n.external) marks.push('root 外');
-    return '<li><div class="row"><span><code>'+h(n.path)+'</code> '+
+    if(n.external) marks.push('專案外');
+    return '<li><div class="row"><span><code>'+h(n.disp||n.path)+'</code> '+
       (n.missing?'—':h(human(n.bytes)))+' <span class="mk">'+h(KIND[n.kind]||n.kind)+
       (marks.length?'・'+marks.join('・'):'')+'</span></span><span>'+
       (n.own?gotoLink('f:'+nid,'看標籤'):'')+
-      btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --dry-run')+
-      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div></li>';}
+      btn('exclude',n.path,'移除')+btn('restore',n.path,'還原')+'</span></div></li>';}
   function groupPanel(id){
     var g=(sub.groups||{})[id.slice(2)]; if(!g) return '';
-    var ms=g.members||[];
-    var paths=ms.map(function(x){return (nodes[x]||{}).path||x;});
-    var cmd=EDIT+' '+paths.map(function(x){return '--exclude '+x;}).join(' ')+' --reason <理由> --dry-run';
+    var ms=((sub.analyses||{}).group_unique||{})[id.slice(2)]||g.members||[];
     var refs=(g.entries||[]).map(function(x){
       var nid=(byId[x]||[])[0];
       return nid?gotoLink(nid,x):h(x);}).join('、');
@@ -7019,8 +7146,7 @@ SUB_JS = r"""
           ['引用它的入口',refs||'（無）'],
           ['所屬 run 的程式碼',g.scripts?'<code>'+h(g.scripts)+'</code>':'這個 run 沒有 scripts/ 節點']]);
     out+='<div class="row"><span>整組移除＝對每個成員各寫一筆 exclude（同一個 D#）</span><span>'+
-      btn('exclude-group',g.run_id,'整組移除（'+ms.length+' 筆）',cmd,' data-group="'+h(g.id)+'"')+'</span></div>'+
-      cmdline(cmd);
+      btn('exclude-group',g.run_id,'整組移除（'+ms.length+' 筆）',' data-group="'+h(g.id)+'"')+'</span></div>';
     out+='<h4>成員（'+ms.length+'）</h4><ul>'+ms.map(function(x){return memberRow(x,'');}).join('')+'</ul>';
     return out;}
   function nodePanel(id){
@@ -7030,21 +7156,21 @@ SUB_JS = r"""
       (byId[x]||[]).forEach(function(nid){refs.push(gotoLink(nid,x+'（'+(KIND[entries[nid].kind==='figure'?'entry_figure':'entry_result'])+'）'));});
       if(!byId[x])refs.push(h(x));});
     refs=refs.join('、');
-    var out='<h3>'+h(n.path.split('/').pop()||n.path)+'</h3>'+
+    var dp=n.disp||n.path;
+    var out='<h3>'+h(dp.split('/').pop()||dp)+'</h3>'+
       dl([['分類',h(KIND[n.kind]||n.kind)+'／'+h(TIER[n.tier]||n.tier)],
-          ['來源路徑','<code>'+h(n.path)+'</code>'+(n.external?'（專案根之外）':'')],
+          ['來源路徑','<code>'+h(n.disp||n.path)+'</code>'+(n.external?'（專案外，相對專案根）':'')],
           ['打包後路徑',n.missing?'—（缺檔不會被複製）':'<code>'+h(n.packaged_path)+'</code>'],
           ['大小',n.missing?'—':(n.is_dir?(n.n_files+' 個檔、'+human(n.bytes)):human(n.bytes))+
                  (n.counted?'':'（已含在上層資料夾標籤內，不重複計）')],
-          ['共用',own.length>1?(own.length+' 個入口都引用它，這個標籤在那幾張列卡各出現一次'):'只有一個入口引用'],
+          ['共用',own.length>1?(own.length+' 個入口引用它；被兩個以上分析引用的輸入資料與分析腳本列在頁首共用區，'+
+                 '整頁只出現一次'):'只有一個入口引用'],
           ['引用它的入口',refs||'（沒有入口引用，來自手動加入）'],
           ['被哪些欄位追到','<ul><li>'+(n.via||[]).map(h).join('</li><li>')+'</li></ul>'],
           ['備註',n.note?h(n.note):''],
           ['徽章',badgeList(n.badges)]]);
     out+='<div class="row"><span>'+(n.excluded?'已移除：'+h(n.exclude_reason||''):'納入打包')+'</span><span>'+
-      btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --reason <理由> --dry-run')+
-      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div>'+
-      cmdline(EDIT+' --exclude '+n.path+' --dry-run');
+      btn('exclude',n.path,'移除')+btn('restore',n.path,'還原')+'</span></div>';
     if(n.is_dir){
       /* 收進這個資料夾標籤的檔案：宣告粒度＝資料夾，所以它們不另開標籤。被 script 欄點名的那幾支標出來。 */
       var inside=Object.keys(nodes).filter(function(k){return nodes[k].under===n.id;}).sort();
@@ -7076,11 +7202,9 @@ SUB_JS = r"""
     var out='<h3>'+h(e.figure_number?e.figure_number+' ｜ '+e.id:e.id)+'</h3>'+dl(rows);
     if(e.kind==='figure'){
       var fs=filesOf(e.id);
-      out+='<h4>圖表檔（'+fs.length+'）</h4>'+(fs.length?'<ul>'+fs.map(fileRow).join('')+'</ul>':'<p class="sub-cmd">manifest 的 files 沒有列任何檔</p>');}
+      out+='<h4>圖表檔（'+fs.length+'）</h4>'+(fs.length?'<ul>'+fs.map(fileRow).join('')+'</ul>':'<p class="mk">manifest 的 files 沒有列任何檔</p>');}
     out+='<div class="row"><span>'+(e.excluded?'整個入口已移除：'+h(e.exclude_reason||''):'納入打包')+'</span><span>'+
-      btn('exclude-entry',e.id,'移除入口',EDIT+' --exclude-entry '+e.id+' --reason <理由> --dry-run')+
-      btn('restore',e.id,'還原',EDIT+' --restore '+e.id+' --dry-run')+'</span></div>'+
-      cmdline(EDIT+' --exclude-entry '+e.id+' --dry-run');
+      btn('exclude-entry',e.id,'移除入口')+btn('restore',e.id,'還原')+'</span></div>';
     return out;}
   /* ---- 選取與跳轉：同一個 id 在列表上可能有好幾個標籤，全部一起亮，捲到第一個 ---- */
   var cur='';
@@ -7104,6 +7228,12 @@ SUB_JS = r"""
       try{first.scrollIntoView({block:'center',inline:'nearest'});}catch(err){first.scrollIntoView();}}
     try{(first.tagName==='DETAILS'?first.querySelector('summary')||first:first).focus({preventScroll:true});}catch(err){}}
   function clear(){detail.hidden=true;cur='';unhl();}
+  /* 捲到某張分析卡並高亮（共用檔案區的「用於」點過來） */
+  function gotoCard(aid){
+    var el=section.querySelector('article.sub-card[data-scard="'+q(aid)+'"]');
+    if(!el)return;
+    unhl();el.classList.add('sub-hl-card');
+    try{el.scrollIntoView({block:'center'});}catch(e4){el.scrollIntoView();}}
   var close=document.getElementById('sub-detail-close');
   if(close)close.addEventListener('click',clear);
   document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!detail.hidden&&!section.hidden&&(!dlg||dlg.hidden))clear();});
@@ -7112,8 +7242,12 @@ SUB_JS = r"""
     if(ev.target.closest('[data-saction]'))return;
     var t=ev.target.closest('[data-sgoto]');
     if(t){ev.preventDefault();
-      /* 缺檔清單指到的節點如果被收進資料夾標籤或群組，列表上沒有它自己的標籤：退到收它的那個標籤 */
-      var want=t.getAttribute('data-sgoto'),host=(want.indexOf('f:')===0)?hostOf(want.slice(2)):'';
+      var want=t.getAttribute('data-sgoto');
+      if(want.indexOf('card:')===0){gotoCard(want.slice(5));return;}
+      if(want==='missing'){var ml=document.getElementById('sub-missing');
+        if(ml){try{ml.scrollIntoView({block:'center'});}catch(e3){ml.scrollIntoView();}}return;}
+      /* 缺檔清單指到的節點如果被收進資料夾標籤或群組，頁面上沒有它自己的標籤：退到收它的那個標籤 */
+      var host=(want.indexOf('f:')===0)?hostOf(want.slice(2)):'';
       select(host||want,true);return;}
     var fold=ev.target.closest('[data-sexpand]');
     if(fold){var open=fold.getAttribute('data-sexpand')==='open',tier=fold.getAttribute('data-tier')||'';
@@ -7123,7 +7257,7 @@ SUB_JS = r"""
     if(sn){var id=sn.getAttribute('data-snode');
       if(id===cur&&ev.target.closest('summary')===null){clear();}else{select(id,false);}}});
   section.addEventListener('keydown',function(ev){
-    var sn=ev.target.closest?ev.target.closest('.sub-chip[data-snode],.sub-chip.sub-link'):null;
+    var sn=ev.target.closest?ev.target.closest('.sub-chip[data-snode],.sub-fig-item[data-snode]'):null;
     if(!sn||(ev.key!=='Enter'&&ev.key!==' '))return;
     if(sn.tagName==='DETAILS')return;   /* details 的 summary 自己會處理 Enter／空白 */
     ev.preventDefault();
@@ -7132,8 +7266,8 @@ SUB_JS = r"""
     else{select(sn.getAttribute('data-snode'),false);}});
 
   /* ==================== 0.23.0 接線：暫存增刪、加入表單、打包 ====================
-     按鈕一律用事件委派抓 [data-saction]，不逐個標籤綁：data-saction／data-ref／data-snode／data-group／data-cmd
-     是版面與伺服器之間唯一的契約，換成列表版之後照樣適用。
+     按鈕一律用事件委派抓 [data-saction]，不逐個標籤綁：data-saction／data-ref／data-snode／data-group／
+     data-entries 是版面與伺服器之間唯一的契約，換成依分析分卡之後照樣適用（頁面上不再顯示任何等效命令）。
      增刪走頁面既有的結構化動作流程：暫存 → 頁首「待套用動作」面板 → 預覽 dry-run → 套用，
      所以多筆增刪會在同一批 batch 一次套完，每一步各記一筆 D#。打包不能進 batch（它要讀其他動作
      都套用完之後的清單），自己送一筆 package_build、自己開對話框。 */
@@ -7184,17 +7318,15 @@ SUB_JS = r"""
     Array.prototype.forEach.call(section.querySelectorAll('[data-saction]'),function(b){
       var isBuild=b.getAttribute('data-saction')==='build';
       b.disabled=!actOk||(isBuild&&blocked>0);
-      /* 成員列的按鈕沒有逐列寫 data-cmd（列數太多），這裡用同一個模板補出等效命令當 title */
-      var cmd=b.getAttribute('data-cmd')||(EDIT+' --'+b.getAttribute('data-saction')+' '+
-        (b.getAttribute('data-ref')||'')+' --dry-run');
-      b.title=(isBuild&&blocked>0)
-        ?('有 '+blocked+' 個納入中的缺檔擋住打包：先移除那些標籤，或補上替代檔（下面列出缺檔，點進去可以跳到列卡）')
-        :(why||cmd||'');});
+      /* tooltip 只說「為什麼不能按」，不再顯示任何命令；Python 端已經給了「移除」／「還原」這些 title */
+      if(isBuild&&blocked>0)
+        b.title='有 '+blocked+' 個納入中的缺檔擋住打包：先移除那些標籤，或補上替代檔（摘要列的缺檔數點得到清單）';
+      else if(why) b.title=why;
+      else if(b.getAttribute('data-title')) b.title=b.getAttribute('data-title');});
     Array.prototype.forEach.call(section.querySelectorAll('#sub-include-form input,#sub-include-form select'),
       function(el){el.disabled=!actOk;});
     var hint=document.getElementById('sub-hint');
-    if(hint){hint.hidden=actOk;
-      if(!actOk)hint.textContent=srvWhy+'：這一頁的按鈕停用，旁邊的等效命令可以直接在終端機跑。';}
+    if(hint)hint.hidden=actOk;      /* 離線時就只有摘要列這一行，頁面其他地方不放命令 */
     var bw=document.getElementById('sub-build-why');
     if(bw)bw.textContent=(blocked>0)?'':(actOk?'':why);}
   function afterRender(){refreshButtons();markPending();}
@@ -7265,6 +7397,10 @@ SUB_JS = r"""
       var paths=g?(g.members||[]).map(function(m){return (nodes[m]||{}).path||m;}):[];
       if(!paths.length){AP.toast('找不到這個 run 輸入群組的成員：'+(ref||gid));return;}
       stageEdit({exclude:paths},'整組移除 '+g.run_id+' 的輸入（'+paths.length+' 筆）');return;}
+    if(act==='exclude-analysis'){
+      var ids=String(b.getAttribute('data-entries')||'').split('|').filter(function(x){return x;});
+      if(!ids.length){AP.toast('這張分析卡沒有可移除的入口');return;}
+      stageEdit({exclude_entry:ids},'移除分析 '+ref+' 的 '+ids.length+' 個入口');return;}
     if(act==='exclude'){stageEdit({exclude:[ref]},'');return;}
     if(act==='exclude-entry'){stageEdit({exclude_entry:[ref]},'');return;}
     if(act==='restore'){stageEdit({restore:[ref]},'');return;}});

@@ -1325,7 +1325,9 @@ def build_analyses(v: _View, out: dict) -> dict:
             'figure_number': _text(e.get('figure_number')), 'tier': e['tier'], 'excluded': e['excluded'],
             'caption_first': e.get('caption_first') or '', 'badges': list(e['badges']),
             'files': [n for n in fig_files[fid] if n in nodes],
-            'values': [n for n in fig_values[fid] if n in nodes],
+            # 數值快照有時是好幾張圖表共用一份（例如同一支作圖腳本出的四張偏效應圖）：只掛在第一張底下，
+            # 整頁不重覆出現（`consumed` 記的就是收它的那張圖表）
+            'values': [n for n in fig_values[fid] if n in nodes and consumed.get(n) == fid],
             'formats': fig_formats(fig_files[fid]),
             'result_keys': [dict(it) for it in e['result_keys']]})
         if fid not in c['entries']:
@@ -1358,7 +1360,11 @@ def build_analyses(v: _View, out: dict) -> dict:
         rid = groups[gid]['run_id']
         if rid in card_ids:
             card(rid)['groups'].append(gid)
-    group_unique = {gid: [m for m in groups[gid]['members'] if m not in shared_set] for gid in groups}
+    # 群組的成員清單：扣掉已經移到共用區的、在頁面上另有自己標籤的（own；逐條宣告也點名的檔、缺檔、已移除）、
+    # 以及收在某個資料夾標籤裡的（`under`，展開那個資料夾就看得到）。同一個檔在整頁只出現一次。
+    group_unique = {gid: [m for m in groups[gid]['members']
+                         if m not in shared_set and m in nodes
+                         and not own_node(nodes[m]) and not nodes[m]['under']] for gid in groups}
 
     # ---- 六、也用於：這個分析有貢獻、但圖表卡在別處 ----
     for fid in sorted(fig_ids, key=lambda x: order[x]):
