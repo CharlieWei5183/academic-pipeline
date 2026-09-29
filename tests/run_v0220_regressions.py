@@ -121,12 +121,20 @@ def variant(tmp: Path, name: str) -> Path:
     (b / 'input_snapshot/source_hashes.tsv').write_text(_hash_table(
         'role file md5 bytes', [('input/ROOT', str(root / 'analysis/scripts/analyze.py'), 'c' * 32, '10')]), encoding='utf-8')
 
+    up = root / 'analysis/runs/RUN_UP'      # 不是任何入口的 run：只被 RUN_C 的 hash 表列進來
+    (up / 'scripts').mkdir(parents=True, exist_ok=True)
+    (up / 'scripts/up.R').write_text('library(mgcv)\nset.seed(42)\n', encoding='utf-8')
+    (up / 'outputs').mkdir(parents=True, exist_ok=True)
+    (up / 'outputs/up.tsv').write_text('v\n1\n', encoding='utf-8')
+
     c = root / 'analysis/runs/RUN_C'
     (c / 'input_snapshot').mkdir(parents=True, exist_ok=True)
     (c / 'input_snapshot/source_hashes_x.tsv').write_text(_hash_table(
         'group role path_abs sha256 bytes',
         [('X', 'far', str(FAR / 'far.csv'), 'd' * 64, '10'),
-         ('X', 'gone', str(root / 'data/gone.csv'), 'e' * 64, '10')]), encoding='utf-8')
+         ('X', 'gone', str(root / 'data/gone.csv'), 'e' * 64, '10'),
+         ('X', 'upstream_code', str(up / 'scripts/up.R'), 'f' * 64, '10'),
+         ('X', 'upstream_out', str(up / 'outputs/up.tsv'), '0' * 64, '10')]), encoding='utf-8')
 
     rpath = root / 'analysis/results.json'
     results = json.loads(rpath.read_text(encoding='utf-8'))
@@ -303,6 +311,14 @@ def test_runs(tmp: Path) -> None:
     hits = [w for w in v['warnings'] if 'RUN_NOPE3' in w]
     assert len(hits) == 1 and '只在入口標徽章' in hits[0], hits
     assert 'RUN_B/scripts' in ' '.join(n), n.keys()
+    # hash 表列進來的上游腳本要走 input_kind()：副檔名／`scripts/` 優先判成 code，不因為「來自 input_snapshot」被壓成 data
+    up_code = n['analysis/runs/RUN_UP/scripts/up.R']
+    assert up_code['kind'] == 'code', up_code
+    assert up_code['packaged_path'] == 'code/analysis/runs/RUN_UP/scripts/up.R', up_code['packaged_path']
+    up_out = n['analysis/runs/RUN_UP/outputs/up.tsv']
+    assert up_out['kind'] == 'data', '別的 run 的輸出對這個 run 仍是輸入資料，不能變成 result'
+    assert up_out['packaged_path'] == 'data/analysis/runs/RUN_UP/outputs/up.tsv', up_out['packaged_path']
+    assert n['analysis/runs/RUN_A/input_snapshot/source_hashes.tsv']['kind'] == 'data', 'hash 表本身是資料'
     print('  規格 4 run 與 hash 表 ok')
 
 
@@ -512,6 +528,24 @@ def test_edit(tmp: Path) -> None:
     assert 'BLOCKER' in run(EDIT, root, '--include', 'extra_note.md', '--tier', 'main', '--kind', 'result',
                             '--attach-to', 'NOPE', '--dry-run', expect=2), 'attach_to 不是現有入口'
     assert 'BLOCKER' in run(EDIT, root, '--exclude', 'x', '--exclude-entry', 'y', '--dry-run', expect=2), '一次只能一個動作'
+
+    # 重複 --exclude：群組節點「整組移除」＝對每個成員各寫一筆 exclude，同一個 D# 一次 apply 完
+    n_before = len(C.decisions_list(root))
+    ex_before = len(C.load_yaml(root / 'submission/package.yaml')['exclude'])
+    two = ['analysis/runs/RUN_UP/scripts/up.R', 'analysis/runs/RUN_UP/outputs/up.tsv']
+    out = run(EDIT, root, '--exclude', two[0], '--exclude', two[1], '--reason', '整組移除', '--dry-run')
+    assert '移除檔案或資料夾 2 筆' in out, out
+    run(EDIT, root, '--exclude', two[0], '--exclude', two[1], '--reason', '整組移除', '--apply')
+    doc = C.load_yaml(root / 'submission/package.yaml')
+    assert len(doc['exclude']) == ex_before + 2, doc['exclude']
+    assert [it['path'] for it in doc['exclude'][-2:]] == two, doc['exclude']
+    ds = C.decisions_list(root)
+    assert len(ds) == n_before + 1, f'兩筆 exclude 只記一個 D#（{len(ds) - n_before}）'
+    assert all(x in ds[-1]['links'] for x in two), ds[-1]['links']
+    v = view_of(root)
+    assert all(v['nodes'][x]['excluded'] for x in two), '兩個成員都標 excluded'
+    assert 'BLOCKER' in run(EDIT, root, '--exclude', two[0], '--exclude', 'analysis/no/such.tsv',
+                            '--dry-run', expect=2), '任一筆不合法就整批拒絕'
     print('  規格 8 package_edit ok')
 
 
