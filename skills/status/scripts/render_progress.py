@@ -3457,6 +3457,8 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
     inbox = build_inbox(src, graph)
     literature = build_literature(src, literature_path)
     submission = build_submission(root, graph['nodes'])
+    if submission['error']:
+        src.warnings.append(f'{submission["source"]}：{submission["error"]}；投稿檔案分頁會顯示錯誤訊息、其他分頁不受影響')
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': generated_at,
