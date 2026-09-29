@@ -143,7 +143,7 @@ def test_missing_file_empty_state(tmp: Path) -> None:
     for token in ('<section id="tab-milestones">', '<section id="tab-relations" hidden>',
                   'data-tab="milestones"', 'data-tab="relations"', 'id="graph-wrap"'):
         assert token in out, token
-    assert out.count('<script') == 4, '內嵌 IR、里程 JS、關聯 JS、文獻 JS 四個 script'
+    assert out.count('<script') == 5, '內嵌 IR、里程 JS、關聯 JS、文獻 JS、投稿 JS 五個 script'
 
     # --literature-graph 指到不存在的路徑：一樣是空狀態，訊息換成那個路徑
     missing = tmp / 'nowhere' / 'citation-graph.json'

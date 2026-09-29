@@ -1164,7 +1164,7 @@ def test_progress_html_self_contained_and_escaped() -> None:
         html_text = raw.decode("utf-8")
         for token in ("http://", "https://", "<link ", 'src="http'):
             assert token not in html_text, f"HTML 不得含 {token}"
-        assert html_text.count("<script") == 4, "只允許內嵌 IR、里程 JS、關聯 JS、文獻 JS 四個 script"
+        assert html_text.count("<script") == 5, "只允許內嵌 IR、里程 JS、關聯 JS、文獻 JS、投稿 JS 五個 script"
         assert '<script id="progress-ir" type="application/json">' in html_text
         assert "@media (prefers-color-scheme: dark)" in html_text and "font:" in html_text
         # 逸出：SQ1 question 含 <script>alert(1)</script>
