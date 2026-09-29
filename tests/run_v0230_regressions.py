@@ -614,9 +614,12 @@ def test_tab(tmp: Path) -> None:
     pkg = root / 'submission/package.yaml'
     pkg.parent.mkdir(parents=True, exist_ok=True)
     (root / 'analysis/extra_note.md').write_text('# 手動加入、沒掛入口\n', encoding='utf-8')
+    (root / 'analysis/extra_attached.md').write_text('# 手動加入、掛在 G_main 之下\n', encoding='utf-8')
     pkg.write_text('schema_version: 1\n'
                    'include:\n  - {path: "analysis/extra_note.md", tier: supplementary, kind: other, '
                    'note: "沒填 attach_to"}\n'
+                   '  - {path: "analysis/extra_attached.md", tier: main, kind: other, attach_to: G_main, '
+                   'note: "掛在圖表入口下"}\n'
                    'exclude:\n  - {path: "analysis/figures/vals.tsv", reason: "測試用"}\n', encoding='utf-8')
     src = rp.Sources(root)
     ir = rp.build_ir(root, src, '1970-01-01T00:00:00+00:00')
@@ -709,6 +712,9 @@ def test_tab(tmp: Path) -> None:
     assert miss and miss[0]['missing'] and '缺檔' in miss[0]['badges'], miss
 
     # ---- 未掛入口的手動加入：自成一張列卡 ----
+    # 有 attach_to 的手動加入放進那個入口的列卡（不是未掛入口那張）
+    att = [x for cell in cards['ef:G_main']['cells'] for x in cell if x['snode'] == 'f:analysis/extra_attached.md']
+    assert len(att) == 1 and '手動' in att[0]['badges'], att
     ua = [c for c in cards.values() if c['kind'] == 'unattached']
     assert len(ua) == 1 and ua[0]['tier'] == 'supplementary', [c['id'] for c in ua]
     assert any(x['snode'] == 'f:analysis/extra_note.md' for cell in ua[0]['cells'] for x in cell), ua[0]['cells']

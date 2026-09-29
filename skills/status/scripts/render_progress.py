@@ -6604,7 +6604,8 @@ def _sub_chip_html(chip: dict, edit: str) -> str:
     cls = ('sub-chip k-' + chip['kind'] + (' is-miss' if chip['missing'] else '')
            + (' is-gone' if chip['excluded'] else '') + (' is-group' if chip['group'] else ''))
     badges = list(chip['badges']) + ([f'共用 {chip["shared"]}'] if chip['shared'] > 1 else [])
-    bhtml = ''.join(f'<span class="bsw b-{SUB_BADGE_CLASS.get(b.split(" ")[0], "other")}">{_h(b)}</span>'
+    # 「共用 N」帶數字，查表前先去掉數字；其餘徽章（含「root 外」「run 缺」這種本來就有空白的）照原字查
+    bhtml = ''.join(f'<span class="bsw b-{SUB_BADGE_CLASS.get("共用" if b.startswith("共用 ") else b, "other")}">{_h(b)}</span>'
                     for b in badges)
     acts = (f'<button type="button" data-saction="exclude" data-ref="{_h(chip["ref"] if not chip["group"] else chip["path"])}" '
             f'data-cmd="{_h(edit + " --exclude " + chip["path"] + " --dry-run")}" disabled>移除</button>'
