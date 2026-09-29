@@ -43,18 +43,19 @@ metadata:
    - **依賴掃描**：Python import 掃描產 requirements.txt（已安裝套件附版本）或 R 套件清單；掃不到即列待辦。
    - **隨機種子檢查**：scripts 中未見顯式種子＝warning，向使用者確認是否影響重現。
    - **`data/` 不自動隨包**——是否附原始資料由使用者依期刊政策、隱私與授權決定；`derived/` 比照辦理。
-3b. **投稿檔案分頁與打包（0.23.0）**：上一條的重現性包給的是「怎麼重跑」，這一條給的是「要上傳哪些檔」。`PROGRESS.html` 的第四個分頁「投稿檔案」（`#submission`）把投稿要上傳的檔案整份列出來——依帶分三段、每個入口一張列卡，卡內四格「資料｜程式碼｜結果｜圖表」，看過沒問題就在頁面上按鈕打包。
+3b. **投稿檔案分頁與打包（0.23.0）**：上一條的重現性包給的是「怎麼重跑」，這一條給的是「要上傳哪些檔」。`PROGRESS.html` 的第四個分頁「投稿檔案」（`#submission`）把投稿要上傳的檔案整份列出來——**一張卡＝一個分析（run）**，依帶分三段，卡內五欄「輸入資料｜分析腳本｜輸出結果｜作圖／表腳本｜圖／表」（後兩欄沒有就不顯示），看過沒問題就在頁面上按鈕打包。每個檔在整頁只出現一次：被兩個以上分析引用的輸入資料與分析腳本列在頁首的共用檔案區，卡內只放「共用 N 個」；標籤只顯示檔名，完整（相對）路徑在 tooltip 與側面板。
 
    - **清單是衍生的，不是手寫的**：入口＝`analysis/figures/manifest.json` 裡 role 屬 main／extended／supplementary 的圖表 ＋ `analysis/results.json` 的現行結果鍵，從入口往回追 `script` 欄、run 的 `scripts/`／`report.md`／`status.json`／`input_snapshot/`，以及快照 hash 表逐 cell 指到的來源檔。規則只有一份：`scripts/submission_package_common.py` 的 `derive()`。
    - **`submission/package.yaml` 只記手動差量**：`include`（手動加入）與 `exclude`（移除），不存整份清單，每次都重算再套。移除是可逆的——被移除的項目在分頁上仍列出、標「已移除」，還原就回到衍生規則算出來的樣子。這個檔**不在 `rerun_all` 的 fingerprint 雜湊範圍**，改它不會讓 validation 或 results 過期。
-   - **兩支 CLI**（分頁上的按鈕就是代跑這兩支，旁邊都寫著等效命令）：
+   - **兩支 CLI**（分頁上的按鈕就是代跑這兩支；頁面上不顯示命令，要在終端機跑就照下面）：
 
      ```bash
      # 看清單（不寫任何檔）；確認後改 --apply 才真的複製
      python3 <skill路徑>/scripts/build_submission_package.py <root> --dry-run
      python3 <skill路徑>/scripts/build_submission_package.py <root> --apply [--no-zip]
 
-     # 清單增刪：一次一個動作，--exclude 可重複；一次 apply 記一筆 D#
+     # 清單增刪：一次一個動作，--exclude 與 --exclude-entry 都可重複；一次 apply 記一筆 D#
+     # （分頁的「移除這個分析」＝對那張卡的每個入口各一筆 --exclude-entry）
      python3 <skill路徑>/scripts/package_edit.py <root> --exclude <路徑> --reason <理由> --dry-run
      python3 <skill路徑>/scripts/package_edit.py <root> --include <路徑> --tier <帶> --kind <分類> --dry-run
      python3 <skill路徑>/scripts/package_edit.py <root> --restore <路徑或入口 id> --dry-run
