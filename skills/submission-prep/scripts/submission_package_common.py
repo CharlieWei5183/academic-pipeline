@@ -1187,8 +1187,13 @@ def build_analyses(v: _View, out: dict) -> dict:
             return fig_card.get(eid) or unass(e['tier'])
         return _text(e.get('run_id')) or unass(e['tier'])
 
+    # 卡片集合：展開過的 run ＋ 結果鍵的 run_id 標籤 ＋ 圖表落卡的 run ＋ 底下有「自己一個標籤」的檔的 run
+    # （最後這條就是「落在 analysis/runs/<X>/ 下的檔歸分析 X」；只在群組或資料夾裡出現的 run 不另立卡，
+    # 它的檔跟著收它的那個標籤走）。
+    own_runs = sorted({run_of_node(nid) for nid, n in nodes.items() if own_node(n) and run_of_node(nid)})
     base_ids: list[str] = []
-    for rid in list(v.run_items) + [_text(ent_by_id[e].get('run_id')) for e in res_ids] + list(fig_card.values()):
+    for rid in (list(v.run_items) + [_text(ent_by_id[e].get('run_id')) for e in res_ids]
+                + list(fig_card.values()) + own_runs):
         if rid and rid not in base_ids:
             base_ids.append(rid)
 
@@ -1272,9 +1277,11 @@ def build_analyses(v: _View, out: dict) -> dict:
             col[nid] = 'input'
         else:
             col[nid] = 'output'
+    # 「被幾個分析引用」只看引用它的入口落在哪幾張卡，不看它自己落在哪張卡——一個檔住在某個 run 的
+    # 資料夾底下（落卡跟著路徑走）但只有一個分析用它，那不是共用檔，不該被搬到頁首。
     using: dict[str, list[str]] = {}
     for nid in nodes:
-        seen = [home[nid]] if home[nid] else []
+        seen: list[str] = []
         for eid in all_ent[nid]:
             c = card_of_entry(eid)
             if c and c not in seen:
@@ -1340,10 +1347,7 @@ def build_analyses(v: _View, out: dict) -> dict:
         if not cl:
             continue
         if nid in shared_set:
-            c = card(home[nid])
-            if nid not in c['shared'][cl]:
-                c['shared'][cl].append(nid)
-            for aid in using[nid]:
+            for aid in [home[nid]] + using[nid]:
                 cc = card(aid)
                 if nid not in cc['shared'][cl]:
                     cc['shared'][cl].append(nid)
@@ -1419,7 +1423,9 @@ def build_analyses(v: _View, out: dict) -> dict:
     ordered = [c for c in ordered if c['kind'] != 'manual'] + manual      # 手動加入卡固定在頁尾
     return {
         'cards': ordered,
-        'shared': [{'node': nid, 'col': col[nid], 'cards': list(using[nid])} for nid in shared],
+        'shared': [{'node': nid, 'col': col[nid],
+                    'cards': [x for x in [home[nid]] + using[nid] if x in cards] if home[nid] in cards
+                    else list(using[nid])} for nid in shared],
         'group_unique': group_unique,
         'home': home,
         'stats': {
