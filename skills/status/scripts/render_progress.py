@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """研究問題里程圖 renderer（確定性）: 唯讀 SSOT → typed JSON IR → schema 驗證 → 自含 HTML。
 
-用法: python3 render_progress.py <project-root> [--dry-run] [--json] [--ir-only]
+用法: python3 render_progress.py <project-root> [--dry-run] [--json] [--ir-only] [--no-previews]
 
 讀取（只讀）: <root>/project.yaml、decisions.yaml、analysis/plans/index.yaml、
 analysis/results.json、analysis/validation.yaml、analysis/claims.yaml、analysis/claim-audit.yaml、
@@ -10,12 +10,14 @@ analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger
 寫入: 只寫 <root>/PROGRESS.ir.json（IR）與 <root>/PROGRESS.html（自含 HTML）
 
 旗標:
-- --dry-run  不寫檔；單獨使用時把整份 HTML 印到 stdout
+- --dry-run  不寫檔（連投稿分頁的縮圖快取也不寫）；單獨使用時把整份 HTML 印到 stdout
 - --json     stdout 改印 IR（ensure_ascii=False, indent=2）；與 --dry-run 正交
              （單獨用仍寫檔；兩者同時 = 只印 IR、不寫）
 - --ir-only  只寫 PROGRESS.ir.json、不寫 PROGRESS.html
 - --embed-figures  圖表節點 meta.data_uri 內嵌圖檔（svg／png、單檔 ≤ 5 MB，超過跳過並 WARNING）；預設不內嵌，
              HTML 以相對路徑 meta.file 顯示（HTML 在專案根，相對路徑直接可用）
+- --no-previews  不產生投稿分頁「圖／表」欄的縮圖預覽（預設會產生）。預覽只進 HTML 的 <img src>，
+             不進 PROGRESS.ir.json、也絕不影響打包；快取見 submission_preview.py
 
 收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
 {present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}／promote {from, to}／
@@ -6746,6 +6748,8 @@ def _sub_thumb(fig: dict) -> str:
 
     縮圖不掛 `data-snode`（那是檔案節點的標籤，整頁只能出現一次），點它開投稿分頁自己的 lightbox。
     """
+    if 'preview' not in fig:
+        return ''                       # 整批關掉（--no-previews）：連位置都不留
     pv = fig.get('preview') or {}
     src = pv.get('data_uri') or pv.get('src') or ''
     if not src:
