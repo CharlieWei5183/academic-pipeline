@@ -695,6 +695,13 @@ def test_tab(tmp: Path) -> None:
         assert anchor in html, anchor
     assert html.count('data-saction') >= 3 and 'disabled>打包<' in html, '按鈕這一版全部 disabled'
     assert '臂' not in html, '中文不得使用「臂」'
+    # 打包對話框預設收起來：`display:flex` 會蓋過 hidden 屬性的 UA 預設 display:none，一定要自己寫回來
+    assert '<div id="sub-build-dialog" hidden>' in html
+    assert '#sub-build-dialog[hidden]{display:none}' in html, 'hidden 的對話框會一直蓋在頁面上'
+    # 接線錨點：事件委派、三個暫存狀態 class、ap:server 事件、對外鉤子
+    for anchor_txt in ("closest('[data-saction]')", 'sub-pending-exclude', 'sub-pending-restore', 'sub-pending-include',
+                       "ap:server", 'window.__apSub', 'window.__apActions', 'function markPending()'):
+        assert anchor_txt in html, f'HTML 缺接線錨點 {anchor_txt}'
     assert rp.render_html(ir, root, []) == html, '同一份 IR 兩次渲染要一致'
 
     # 空狀態：沒有 manifest 也沒有 results.json → present False、error 空、IR-17 照樣過、分頁出空狀態說明

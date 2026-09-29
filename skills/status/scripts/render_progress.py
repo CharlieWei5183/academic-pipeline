@@ -7085,6 +7085,7 @@ path.subedge.dim,path.subtrunk.dim{stroke:var(--edge-faint)}
 #sub-hint{margin:6px 0 0;font-size:12px;color:var(--muted)}
 #sub-build-why:empty{display:none}
 #sub-build-dialog{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+#sub-build-dialog[hidden]{display:none}   /* display:flex 會蓋過 hidden 屬性的 UA 預設 display:none，要自己寫回來 */
 #sub-build-dialog .sub-dlg-box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;max-width:760px;width:100%;max-height:82vh;overflow:auto}
 #sub-build-dialog h4{margin:0 0 8px}
 #sub-build-dialog .sub-dlg-facts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;margin-bottom:8px}
