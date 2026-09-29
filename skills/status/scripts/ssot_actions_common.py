@@ -2169,8 +2169,9 @@ def _title_package_edit(p: dict) -> tuple[str, str, str]:
         'exclude-entry': f'{PKG_YAML_REL} 的 exclude 加一筆入口 {target}：該入口與只被它引用的檔案一起不打包',
         'restore': f'把 {target} 從 {PKG_YAML_REL} 的 include／exclude 移掉，回到衍生規則算出來的狀態',
     }.get(op, f'投稿清單改定：{op} {target}')
-    goto = f'f:{target}' if op in ('exclude', 'restore', 'include') else (f'e:{target}' if op == 'exclude-entry' else '')
-    return title, body, goto
+    # target 留空（跟 batch 一樣）：server 會拿它去對現行關聯圖的節點 id，而投稿檔案分頁的節點不在那份 IR 裡
+    # （`f:` 在關聯圖是圖表）。分頁自己的跳轉走前端 stagedTarget 的 `sub:` 前綴。
+    return title, body, ''
 
 
 def _title_package_build(p: dict) -> tuple[str, str, str]:

@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA = 'academic-pipeline/submission-package-view@1'
-VERSION = '0.22.0'
+VERSION = '0.23.0'
 
 # ---------- 帶（tier） ----------
 

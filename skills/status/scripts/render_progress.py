@@ -4637,7 +4637,7 @@ GRAPH_JS = """
   var actionsOk=false,actionsWhy='server 未開 --allow-apply',nextAq='',nextSq='';   // actionsWhy：「全部套用」停用時顯示在鈕旁的原因（0.17.3）
   function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});
     Array.prototype.forEach.call(document.querySelectorAll('.act-dismiss-row'),function(b){b.disabled=false;b.title='標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT';});}   // 0.18.2 面板每列的撤回鈕只要連上 server（不需 --allow-apply）
-  function enableActions(){actionsOk=true;var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
+  function enableActions(){actionsOk=true;actionsWhy='';var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
   // 0.23.0：/api/ping 問完（不論結果）發一個 ap:server，讓投稿檔案分頁那段 IIFE 知道現在能不能按鈕
   function apNotify(){try{document.dispatchEvent(new CustomEvent('ap:server',{detail:{serverOk:serverOk,actionsOk:actionsOk,why:actionsWhy}}));}catch(e){}}

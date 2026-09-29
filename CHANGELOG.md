@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.23.0（2026-09-29）
+
+`PROGRESS.html` 在「里程」「關聯」「文獻」之後多第四個分頁「**投稿檔案**」（URL hash `#submission`）：把投稿時要上傳的檔案整份列出來——從 manifest 的圖表與 `analysis/results.json` 的現行結果鍵往回追到每一個實體檔——看過沒問題就在頁面上按鈕打包，不合適的逐項移除，漏掉的手動加入。清單是**衍生**的，`submission/package.yaml` 只記手動差量。跨專案同一條規則，不設門檻、沒有逐專案設定。IR `schema_version` 維持 1（只加一個 top-level 鍵與一條驗證規則）；skills、agents、管線階段都不變，收件匣動作腳本多兩支。
+
+1. **衍生規則只有一份**：`skills/submission-prep/scripts/submission_package_common.py` 的 `derive()`。入口＝manifest 裡 role 屬 main／extended／supplementary 的圖表 ＋ `results.json` 的現行結果鍵（status `historical` 與 conclusion_use `not-permitted` 的不算入口，但圖表指到它時仍往回追、標 `historical`）。往回追 `script` 欄、run 的 `scripts/`／`report.md`／`status.json`／`input_snapshot/`，以及快照 hash 表逐 cell 指到的來源檔；自由文字欄位也抽得出路徑（分隔符、`與` 接裸檔名、brace 與 glob 展開，純數字與比值不當路徑）。歸帶沿用關聯圖同一套規則，不另發明。
+2. **宣告粒度**：節點粒度跟 SSOT 的宣告粒度走，不是一檔一節點。一個 run 的 `scripts/` 是一個資料夾節點；一個 run 的 `input_snapshot/`（實體檔＋hash 表追到的來源）是一個**群組**，畫成一個節點、面板逐筆列成員並可單獨或整組移除。缺檔與已移除的一律保留自己的節點——擋打包的要點得到，要還原的也要點得到。
+3. **`submission/package.yaml`（差量檔）**：只記 `include`（手動加入：path、tier、kind、attach_to、note）與 `exclude`（移除：path 或 entry、reason），不存整份清單，每次都重算再套。移除是可逆的：被移除的項目在分頁上仍列出、標「已移除」，`--restore` 還原。這個檔**不在 `rerun_all` 的 fingerprint 雜湊範圍**，改它不會讓 validation 或 results 過期。
+4. **兩支 CLI**：`build_submission_package.py`（打包：複製到 `submission/package_<日期>/`、逐檔 sha256 的 `MANIFEST.tsv`、README、`results_subset.json`、依賴清單，預設壓 zip，`--no-zip` 可關；有納入中的缺檔一律拒絕打包）與 `package_edit.py`（清單增刪：`--include`／`--exclude`（可重複）／`--exclude-entry`／`--restore`，一次一個動作、一次 apply 記一筆 D#）。兩支都走既有的鏈骨架：dry-run 在暫存工作區跑完整條鏈不寫專案檔、apply 先備份、失敗還原、`--expect-token` 擋 stale。
+5. **兩種 server 動作 kind**：`package_edit` 與 `package_build`，三處同序登記（`ssot_actions_common.ACTIONS`、`progress_server.ACTION_KINDS`、`render_progress.INBOX_ACTION_KINDS`），插在 `set_tier` 與 `batch` 之間。`package_edit` 的 payload 四個動作欄一次只能填一個（`exclude` 可多個路徑），include 的路徑由 server 端先驗存在、且在 root 或 root 上一層之內；要一次做多種增刪就放進 batch，一筆一個 `package_edit`。`package_build` **不能進 batch**——它要讀的是其他動作都套用完之後的清單，在 validator 擋掉並回訊息。仍需 `--allow-apply`，stale token guard 照舊：`package_edit` 的 token 另外把 `package.yaml` 內容算進去（那個檔不在 `TOKEN_FILES` 裡），`package_build` 換成整份打包清單的 token（逐列 path／size／mtime），與各自的腳本逐字相同。
+6. **前端接線**：分頁內所有按鈕用**事件委派**抓 `[data-saction]`，不逐節點綁。增刪走頁面既有的結構化動作流程（暫存 → 頁首「待套用動作」面板 → 預覽 dry-run → 套用），多筆會在同一批 batch 一次套完；打包自己送一筆 `package_build`、自己開對話框，顯示入口數、檔數、總大小、未見種子的腳本數與輸出資料夾，確認後才 `--apply`。暫存狀態用三個 class 即時標在節點上（`sub-pending-exclude`／`sub-pending-restore`／`sub-pending-include`），一個路徑用 `querySelectorAll` 把**所有**對應元素一起標，不假設只對到一個節點。未連上 server 或沒開 `--allow-apply` 時按鈕維持停用並顯示等效命令。
+7. **兩項小修**：`classify()` 改成 root 外的檔一律歸 data（副檔名屬程式碼的仍是 code）——從 root 的角度，外面的東西都是它讀進來的輸入，之前掉進 result；只換落點資料夾，打包檔數與位元組不變。摘要列的檔數與位元組改直接跑 `package_files()`，與 `--dry-run` 同一套算法（原本按節點加總，落點不同時會少算）。
+8. **測試**：新增 `tests/run_v0230_regressions.py`（十項規格：入口、歸帶、自由文字、run 與 hash 表、external 與分類、去重與最高帶、打包、`package_edit`、既有回歸、PROGRESS 分頁，外加兩種動作 kind 的 validator 與一支對真實 server 的 POST 全鏈）。配合改動：`run_v0110` 與 `run_literature3d` 的內嵌 script 數由 4 改 5，`run_v0170`／`run_v0180` 的動作種類清單字面各多兩種，`run_v0200` 的 `ACTION_KINDS` 斷言改成「前十種順序不變、batch 仍在最後」。
+9. **文件**：README、`status` 與 `submission-prep` 兩支 SKILL.md、`tests/README.md` 登記；`plugin.json` 0.23.0。
+
 ## 0.22.1（2026-09-29）
 
 「文獻」分頁的文獻點改吃**對數刻度**，而且**顏色與大小同時編碼**圈內被引數。0.22.0 的線性刻度在真實資料上拉不開：被引數高度偏斜，多數文獻擠在色階最低的一小段，肉眼幾乎同色；引用多的那幾篇也只是稍深一點，在自動旋轉的 3D 圖裡認不出來。改成對數刻度後低端分得開，再讓點的半徑跟著刻度放大，遠近深度造成的大小差異就不會把訊號蓋掉。跨專案同一條規則，不設門檻、沒有逐專案設定。IR 完全不動（`schema_version` 1、citation-graph `@1`、`cin`／`max_cin` 照舊，刻度只在前端與圖例算），skills、agents、管線階段、收件匣動作腳本也都不變。
