@@ -418,8 +418,11 @@ def append_daily_log(path: Path, block: str) -> None:
 # 檔案層級的 symlink，目錄 symlink 會被 rglob 走進去，因此雜湊值與原根相同；dry-run 結束整個工作區刪除）。
 COPY_FILES = ('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'PROGRESS.inbox.yaml', 'PROGRESS.ir.json',
               'PROGRESS.html', 'DECISIONS-TIMELINE.md', 'analysis/results.json', 'analysis/validation.yaml',
-              'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml')   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
+              'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml',   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
+              'submission/package.yaml')   # 0.22.0：package_edit 改的檔，同理不得寫穿 symlink
 COPY_DIRS = ('analysis/plans', 'evaluations', 'reviews')
+# 這幾層底下沒被複製的項目要逐一 symlink（父層因為 COPY_FILES 有子項而變成實體目錄）
+RELINK_DIRS = ('analysis', 'analysis/figures', 'submission')
 
 
 def make_workspace(root: Path) -> Path:
@@ -443,8 +446,8 @@ def make_workspace(root: Path) -> Path:
         if src.is_file():
             (ws / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, ws / rel)
-    # analysis／figures 這兩層底下沒被複製的項目要逐一 symlink
-    for rel in ('analysis', 'analysis/figures'):
+    # analysis／figures／submission 這幾層底下沒被複製的項目要逐一 symlink
+    for rel in RELINK_DIRS:
         src = root / rel
         dst = ws / rel
         if not src.is_dir():
