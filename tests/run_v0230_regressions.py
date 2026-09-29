@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v0.22.0 回歸：投稿檔案的後端——衍生規則模組 submission_package_common.derive()、打包 CLI
+"""v0.23.0 回歸：投稿檔案的後端——衍生規則模組 submission_package_common.derive()、打包 CLI
 build_submission_package.py、清單增刪 CLI package_edit.py（使用者 2026-09-29 需求：PROGRESS 要有一個
 分頁看「投稿時要上傳的檔案」，看過沒問題按鈕打包，並能手動增刪；入口範圍＝圖表＋現行結果鍵）。
 
@@ -62,7 +62,7 @@ import submission_package_common as S  # noqa: E402
 import run_v0160_regressions as T0  # noqa: E402
 import run_v0161_regressions as T1  # noqa: E402
 
-V = '0.22.0'
+V = '0.23.0'
 BUILD = 'skills/submission-prep/scripts/build_submission_package.py'
 EDIT = 'skills/submission-prep/scripts/package_edit.py'
 REPRO = 'skills/submission-prep/scripts/build_repro_package.py'
@@ -92,7 +92,7 @@ def variant(tmp: Path, name: str) -> Path:
     sib.mkdir(parents=True, exist_ok=True)
     (sib / 'x.csv').write_text('a,b\n1,2\n', encoding='utf-8')
     if FAR is None:
-        FAR = Path(tempfile.mkdtemp(prefix='v0220-far-'))
+        FAR = Path(tempfile.mkdtemp(prefix='v0230-far-'))
         (FAR / 'far.csv').write_text('c,d\n3,4\n', encoding='utf-8')
 
     a = root / 'analysis/runs/RUN_A'
@@ -716,7 +716,7 @@ def test_existing_suites() -> None:
 
 def main() -> int:
     print(f'=== v{V} 回歸：投稿檔案後端 ===')
-    tmp = Path(tempfile.mkdtemp(prefix='v0220-'))
+    tmp = Path(tempfile.mkdtemp(prefix='v0230-'))
     try:
         for fn in (test_entries, test_bands, test_free_text, test_runs, test_external_and_kinds,
                    test_dedup, test_build, test_edit, test_existing, test_tab):
