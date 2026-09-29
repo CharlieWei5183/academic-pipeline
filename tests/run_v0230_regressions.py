@@ -841,6 +841,18 @@ def test_action_kinds(tmp: Path) -> None:
             PE.token_of(root, {'op': PE.parse_op(ns)}, 'IN-007'), payload
     v = S.derive(root)
     assert C.action_token(root, 'package_build', {}, 'IN-008') == S.package_token(root, S.package_files(v))
+    # derive() 的快取不得只看 package.yaml：manifest／results 改了（入口來源變了）也要重算，
+    # 否則 server 一開好幾天、期間多一張圖，package_build 的 token 會一直對不起來 → 預覽 409 死迴圈
+    tok0 = C.action_token(root, 'package_build', {}, 'IN-008')
+    man = root / 'analysis/figures/manifest.json'
+    doc = json.loads(man.read_text(encoding='utf-8'))
+    figs = doc['figures'] if isinstance(doc, dict) and 'figures' in doc else doc
+    figs.append({'id': 'G_late', 'role': 'main', 'status': 'final', 'caption': '回歸測試：中途多的一張圖',
+                 'files': ['analysis/figures/g_supp.svg']})
+    man.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding='utf-8')
+    tok1 = C.action_token(root, 'package_build', {}, 'IN-008')
+    assert tok1 != tok0, 'manifest 改了 token 卻沒變＝快取沒失效'
+    assert tok1 == S.package_token(root, S.package_files(S.derive(root))), '改完之後仍要與腳本現算的相同'
     print('  規格 12 兩種動作 kind 的登記與 validator ok')
 
 

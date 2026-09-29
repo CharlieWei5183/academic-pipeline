@@ -2128,13 +2128,20 @@ _SUB_VIEW_CACHE: dict[str, Any] = {}
 def _sub_view(S, root: Path) -> dict:
     """同一個 process 內重用 derive() 的結果（驗證與 token 各要一次，真實 overlay 一次要幾秒）。
 
-    key 帶 package.yaml 的 hash：清單改了就重算。檔案本身的變動不在 key 裡，靠 package_token 擋。
+    key 要同時帶 SSOT token 與 package.yaml 的 hash，兩者缺一不可：清單改了要重算，**manifest.json 或
+    results.json 改了也要重算**——那兩個檔是入口來源，改了整份清單就不一樣。只看 package.yaml 的話，
+    server 一開好幾天、使用者在期間加了一張圖，`package_build` 會拿舊 view 算 token、跟腳本現算的對不起來，
+    變成預覽→409→再預覽的死迴圈，直到重開 server 為止。`decisions.yaml` 也在 `TOKEN_FILES` 裡，
+    每次 apply 都會變，所以套用完一定重算；剩下「預覽到套用之間什麼都沒動」才命中快取，正好是安全的那種。
     """
-    key = f'{root.resolve()}\0{S.package_yaml_hash(root)}'
-    if key not in _SUB_VIEW_CACHE:
-        _SUB_VIEW_CACHE.clear()
-        _SUB_VIEW_CACHE[key] = S.derive(root)
-    return _SUB_VIEW_CACHE[key]
+    key = f'{root.resolve()}\0{ssot_token(root)}\0{S.package_yaml_hash(root)}'
+    hit = _SUB_VIEW_CACHE.get(key)
+    if hit is not None:
+        return hit
+    view = S.derive(root)          # 先算完再換掉整個快取：server 是多執行緒，不要讓別的請求撞到清空後的空窗
+    _SUB_VIEW_CACHE.clear()
+    _SUB_VIEW_CACHE[key] = view
+    return view
 
 
 def _argv_package_edit(p: dict) -> list[str]:
