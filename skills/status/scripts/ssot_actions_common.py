@@ -1970,6 +1970,217 @@ def _figures_of(p: dict) -> dict[str, str]:
     return p.get('figures') if isinstance(p.get('figures'), dict) else ({str(p.get('figure')): str(p.get('role') or '').lower()} if p.get('figure') else {})
 
 
+# ---------- 投稿檔案（0.23.0）：package_edit（清單增刪）與 package_build（打包） ----------
+# 這兩支腳本不在 skills/status/scripts 底下，用 script_dir 指過去（action_argv 照這個組路徑）。
+SUB_SCRIPT_DIR = PLUGIN_ROOT / 'skills/submission-prep/scripts'
+PKG_OPS = ('include', 'exclude', 'exclude_entry', 'restore')   # payload 的四個動作欄；一次只能填一個
+PKG_YAML_REL = 'submission/package.yaml'
+
+
+def _sub_common():
+    """延後 import submission_package_common：它會 import yaml，不在模組載入時就拉進來。"""
+    if str(SUB_SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SUB_SCRIPT_DIR))
+    import submission_package_common
+    return submission_package_common
+
+
+def _pkg_list(payload: dict, name: str) -> list:
+    v = payload.get(name)
+    if v is None or v == '':
+        return []
+    return v if isinstance(v, list) else [v]
+
+
+def pkg_op_of(payload: dict) -> tuple[str, str]:
+    """package_edit 的 payload → (op 名稱, target 字串)；與 package_edit.py 的 parse_op／token_of 同一套字面。
+
+    op 名稱照腳本那邊的寫法（`exclude-entry` 是連字號，不是底線），target 就是 stale guard 拿去雜湊的
+    那個字串。兩邊必須逐字相同，否則每次套用都會 409。
+    """
+    inc = _pkg_list(payload, 'include')
+    if inc:
+        return 'include', str((inc[0] or {}).get('path') or '')
+    paths = [str(x) for x in _pkg_list(payload, 'exclude')]
+    if paths:
+        uniq: list[str] = []
+        for one in paths:      # parse_op 也是保留順序去重後才 '、'.join
+            if one not in uniq:
+                uniq.append(one)
+        return 'exclude', '、'.join(uniq)
+    ent = _pkg_list(payload, 'exclude_entry')
+    if ent:
+        return 'exclude-entry', str(ent[0])
+    res = _pkg_list(payload, 'restore')
+    if res:
+        return 'restore', str(res[0])
+    return '', ''
+
+
+def _pkg_path_ok(root: Path, path: str) -> str:
+    """include 的路徑由 server 端先驗：必須存在，而且在 root 之內或 root 的上一層之內。回錯誤訊息（空＝通過）。"""
+    root = root.resolve()
+    p = Path(os.path.normpath(path if os.path.isabs(path) else str(root / path)))
+    if not p.exists():
+        return f'{path} 不存在（相對 root 或絕對路徑都找不到）：手動加入的檔案必須存在'
+    real = os.path.realpath(p)
+    for base in (root, root.parent):
+        if real == os.path.realpath(base) or real.startswith(os.path.realpath(base).rstrip('/') + '/'):
+            return ''
+    return (f'{path} 在專案根 {root} 與其上一層之外，不接受手動加入：'
+            '投稿包只收 root 內或 root 上一層的檔（再外面的請先複製進來再加）')
+
+
+def _validate_package_edit(root: Path, payload) -> tuple[dict | None, str]:
+    """一筆 package_edit ＝ 一個動作（腳本一次 apply 記一筆 D#）。exclude 可以多個路徑，其餘三種各一筆。
+
+    要一次做好幾種增刪就放進 batch，一筆一個 package_edit——不把多個動作塞進同一個 payload，因為
+    package_edit.py 的 `--tier`／`--kind`／`--attach-to` 是單筆欄位，硬塞會對不起來。
+    """
+    if not isinstance(payload, dict):
+        return None, 'package_edit 需要 payload object'
+    S = _sub_common()
+    given = [n for n in PKG_OPS if _pkg_list(payload, n)]
+    if len(given) != 1:
+        return None, ('payload 須且只須填一個動作欄：include／exclude／exclude_entry／restore'
+                      + (f'（現在填了 {"、".join(given)}；一次要做多種請改用 batch，一筆一個 package_edit）'
+                         if given else '（四個都是空的）'))
+    out: dict[str, Any] = {}
+    if given[0] == 'include':
+        items = _pkg_list(payload, 'include')
+        if len(items) != 1:
+            return None, 'include 一次只能一筆（package_edit.py 的 tier／kind／attach_to 是單筆欄位）；多筆請放進 batch'
+        item = items[0]
+        if not isinstance(item, dict):
+            return None, 'include 的項目須為 {path, tier, kind, attach_to?, note?}'
+        path = str(item.get('path') or '').strip()
+        tier = str(item.get('tier') or '').strip().lower()
+        kind = str(item.get('kind') or '').strip().lower()
+        if not path:
+            return None, 'include 的 path 不得為空'
+        if tier not in S.TIERS:
+            return None, f'include 的 tier 須為 {"／".join(S.TIERS)}（現值 {tier!r}）'
+        if kind not in S.KINDS:
+            return None, f'include 的 kind 須為 {"／".join(S.KINDS)}（現值 {kind!r}）'
+        err = _pkg_path_ok(root, path)
+        if err:
+            return None, err
+        one: dict[str, Any] = {'path': path, 'tier': tier, 'kind': kind}
+        for fld in ('attach_to', 'note'):
+            if item.get(fld):
+                one[fld] = str(item[fld]).strip()[:500]
+        out['include'] = [one]
+    elif given[0] == 'exclude':
+        paths: list[str] = []
+        for raw in _pkg_list(payload, 'exclude'):
+            if not isinstance(raw, str) or not raw.strip():
+                return None, 'exclude 的每一項須為非空字串（相對 root 的路徑，root 外的用絕對路徑）'
+            if raw.strip() not in paths:
+                paths.append(raw.strip())
+        out['exclude'] = paths
+    else:
+        items = _pkg_list(payload, given[0])
+        if len(items) != 1:
+            return None, f'{given[0]} 一次只能一筆（package_edit.py 是單筆旗標）；多筆請放進 batch'
+        one_s = items[0]
+        if not isinstance(one_s, str) or not one_s.strip():
+            return None, f'{given[0]} 須為非空字串'
+        out[given[0]] = [one_s.strip()]
+    reason = payload.get('reason')
+    if reason is not None and not isinstance(reason, str):
+        return None, 'reason 須為字串'
+    if reason and reason.strip():
+        out['reason'] = reason.strip()[:2000]
+    return out, ''
+
+
+def _validate_package_build(root: Path, payload) -> tuple[dict | None, str]:
+    """打包本身沒有參數（只有 no_zip）。有擋打包的缺檔就在這裡先講清楚，不必等 dry-run 跑完。"""
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return None, 'package_build 需要 payload object（可為空物件）'
+    extra = [k for k in payload if k not in ('no_zip', 'reason')]
+    if extra:
+        return None, f'package_build 的 payload 只接受 no_zip 與 reason（多了 {"、".join(sorted(extra))}）'
+    if payload.get('no_zip') is not None and not isinstance(payload.get('no_zip'), bool):
+        return None, 'no_zip 須為 true 或 false'
+    reason = payload.get('reason')
+    if reason is not None and not isinstance(reason, str):
+        return None, 'reason 須為字串'
+    S = _sub_common()
+    blocking = _sub_view(S, root).get('blocking_missing') or []
+    if blocking:
+        head = '、'.join(blocking[:3]) + ('…' if len(blocking) > 3 else '')
+        return None, (f'有 {len(blocking)} 個納入中的缺檔會擋住打包（{head}）：'
+                      '先用 package_edit 移除那些節點，或補上替代檔，再打包')
+    out: dict[str, Any] = {}
+    if payload.get('no_zip'):
+        out['no_zip'] = True
+    if reason and reason.strip():
+        out['reason'] = reason.strip()[:2000]
+    return out, ''
+
+
+_SUB_VIEW_CACHE: dict[str, Any] = {}
+
+
+def _sub_view(S, root: Path) -> dict:
+    """同一個 process 內重用 derive() 的結果（驗證與 token 各要一次，真實 overlay 一次要幾秒）。
+
+    key 帶 package.yaml 的 hash：清單改了就重算。檔案本身的變動不在 key 裡，靠 package_token 擋。
+    """
+    key = f'{root.resolve()}\0{S.package_yaml_hash(root)}'
+    if key not in _SUB_VIEW_CACHE:
+        _SUB_VIEW_CACHE.clear()
+        _SUB_VIEW_CACHE[key] = S.derive(root)
+    return _SUB_VIEW_CACHE[key]
+
+
+def _argv_package_edit(p: dict) -> list[str]:
+    out: list[str] = []
+    inc = _pkg_list(p, 'include')
+    if inc:
+        item = inc[0]
+        out += ['--include', item['path'], '--tier', item['tier'], '--kind', item['kind']]
+        if item.get('attach_to'):
+            out += ['--attach-to', item['attach_to']]
+        if item.get('note'):
+            out += ['--note', item['note']]
+    for one in _pkg_list(p, 'exclude'):
+        out += ['--exclude', str(one)]
+    for one in _pkg_list(p, 'exclude_entry'):
+        out += ['--exclude-entry', str(one)]
+    for one in _pkg_list(p, 'restore'):
+        out += ['--restore', str(one)]
+    if p.get('reason'):
+        out += ['--reason', str(p['reason'])]
+    return out
+
+
+def _title_package_edit(p: dict) -> tuple[str, str, str]:
+    op, target = pkg_op_of(p)
+    label = {'include': '加入檔案', 'exclude': '移出投稿包', 'exclude-entry': '移除整個入口', 'restore': '還原'}.get(op, op)
+    n = len(_pkg_list(p, 'exclude'))
+    title = f'投稿清單：{label} {target}'[:180] + (f'（{n} 筆）' if op == 'exclude' and n > 1 else '')
+    body = {
+        'include': f'{PKG_YAML_REL} 的 include 加一筆 {target}（手動加入，衍生規則不會自己收這個檔）',
+        'exclude': f'{PKG_YAML_REL} 的 exclude 加 {n} 筆：{target}。被移除的節點仍列在分頁上，隨時可以還原',
+        'exclude-entry': f'{PKG_YAML_REL} 的 exclude 加一筆入口 {target}：該入口與只被它引用的檔案一起不打包',
+        'restore': f'把 {target} 從 {PKG_YAML_REL} 的 include／exclude 移掉，回到衍生規則算出來的狀態',
+    }.get(op, f'投稿清單改定：{op} {target}')
+    goto = f'f:{target}' if op in ('exclude', 'restore', 'include') else (f'e:{target}' if op == 'exclude-entry' else '')
+    return title, body, goto
+
+
+def _title_package_build(p: dict) -> tuple[str, str, str]:
+    return (('打包投稿檔案（不壓 zip）' if p.get('no_zip') else '打包投稿檔案'),
+            '把清單上的檔案複製到 submission/package_<日期>/，一併產生 MANIFEST（逐檔 sha256）、README、'
+            'results_subset.json 與依賴清單'
+            + ('；這次不壓 zip' if p.get('no_zip') else '，並壓成 zip'),
+            '')
+
+
 ACTIONS: dict[str, dict[str, Any]] = {
     'reassign': {
         'script': 'reassign_question.py', 'label': '降階', 'stage': 'evaluate',
@@ -2052,6 +2263,23 @@ ACTIONS: dict[str, dict[str, Any]] = {
                              f'{p.get("node")} 從 {EXTENDED_DATA_REL} 移除，回推導區帶（跟著它進 ED 的節點一起回去）'),
                             str(p.get('node') or '')),
     },
+    'package_edit': {   # 0.23.0：投稿打包清單的手動增刪（submission/package.yaml 的 include／exclude 差量）
+        'script': 'package_edit.py', 'script_dir': SUB_SCRIPT_DIR, 'label': '投稿清單', 'stage': 'submission-prep',
+        'validate': _validate_package_edit, 'argv': _argv_package_edit,
+        # token 的 extra 必須與 package_edit.py 的 token_of() 逐字相同（含 package.yaml 內容的 hash），否則套用一定 409
+        'extra': lambda p, iid: (lambda op: f'package_edit:{op[0]}:{op[1]}:{iid}')(pkg_op_of(p)),
+        'extra_pkg_yaml': True,
+        'title': _title_package_edit,
+    },
+    'package_build': {   # 0.23.0：把清單上的檔案打成一包（不可進 batch——它要讀其他動作都套用完之後的清單）
+        'script': 'build_submission_package.py', 'script_dir': SUB_SCRIPT_DIR, 'label': '打包投稿檔案',
+        'stage': 'submission-prep',
+        'validate': _validate_package_build, 'argv': lambda p: (['--no-zip'] if p.get('no_zip') else []),
+        'extra': lambda p, iid: f'package_build:{"no_zip" if p.get("no_zip") else "zip"}:{iid}',
+        'token': lambda root, p, iid: (lambda S: S.package_token(root, S.package_files(_sub_view(S, root))))(_sub_common()),
+        'title': _title_package_build,
+        'no_batch': '打包要讀「其他動作都套用完之後」的清單，不能排在批次裡；請先把增刪套用完，再單獨打包',
+    },
 }
 # ---------- 批次（0.17.0）：kind batch，payload {actions: [{kind, payload}, …]}，腳本 run_batch.py ----------
 
@@ -2069,6 +2297,7 @@ BATCH_SHAPE: dict[str, dict[str, tuple[str, ...]]] = {
     'nest_result': {'key': ('key',), 'opt': ('under',)},
     'demote_plan': {'plan': ('plan', 'to_plan')},
     'set_tier': {},   # 0.20.0：node 的 plan 部分可經版本接力（_validate_loose 另判）
+    'package_edit': {},   # 0.23.0：路徑與入口 id 不受版本接力影響，一律嚴格（_validate_loose 直接退回嚴格錯誤）
 }
 
 
@@ -2188,8 +2417,8 @@ def _validate_loose(root: Path, kind: str, payload, pred: _Predicted) -> tuple[d
             return None, f'{err}；且 {fld} 須為字串'
         if payload.get(fld):
             out[fld] = str(payload[fld]).strip()
-    if kind == 'set_role':
-        return None, err   # 圖表 id 與 role 不受版本接力影響，一律嚴格
+    if kind in ('set_role', 'package_edit'):
+        return None, err   # 圖表 id／role、投稿清單的路徑與入口 id 都不受版本接力影響，一律嚴格
     elif kind == 'set_tier':   # 0.20.0：只有 p:<pid>／p:<pid>#R<k> 的 pid 可能是前面步驟會封的新版；結果鍵與驗證 id 不接力
         node = str(payload.get('node') or '').strip()
         tier = str(payload.get('tier') or '').strip().lower()
@@ -2228,8 +2457,11 @@ def _validate_batch(root: Path, payload) -> tuple[dict | None, str]:
         if not isinstance(a, dict):
             return None, f'actions[{i}] 須為 {{kind, payload}}'
         kind = str(a.get('kind') or '')
+        if kind in ACTIONS and ACTIONS[kind].get('no_batch'):
+            return None, f'actions[{i}]（{kind}）不能放進批次：{ACTIONS[kind]["no_batch"]}'
         if kind not in ACTIONS or kind == 'batch':
-            return None, f'actions[{i}] kind 須為 {"／".join(k for k in ACTIONS if k != "batch")} 之一（現值 {kind!r}）'
+            allowed = '／'.join(k for k in ACTIONS if k != 'batch' and not ACTIONS[k].get('no_batch'))
+            return None, f'actions[{i}] kind 須為 {allowed} 之一（現值 {kind!r}）'
         if i == 0:
             norm, err = ACTIONS[kind]['validate'](root, a.get('payload'))
         else:
@@ -2283,10 +2515,15 @@ def validate_payload(root: Path, kind: str, payload) -> tuple[dict | None, str]:
     return ACTIONS[kind]['validate'](root, payload)
 
 
+def action_script(kind: str) -> Path:
+    """該 kind 的腳本絕對路徑；0.23.0 起有兩支不在 skills/status/scripts 底下（見 script_dir）。"""
+    return ACTIONS[kind].get('script_dir', SCRIPT_DIR) / ACTIONS[kind]['script']
+
+
 def action_argv(root: Path, kind: str, payload: dict, inbox_id: str, mode: str, daily_log: str = '', token: str = '') -> list[str] | None:
     if kind not in ACTIONS:
         return None
-    argv = [sys.executable, str(SCRIPT_DIR / ACTIONS[kind]['script']), str(root)] + ACTIONS[kind]['argv'](payload)
+    argv = [sys.executable, str(action_script(kind)), str(root)] + ACTIONS[kind]['argv'](payload)
     if inbox_id:
         argv += ['--inbox', inbox_id]
     if mode == 'apply':
@@ -2300,3 +2537,25 @@ def action_argv(root: Path, kind: str, payload: dict, inbox_id: str, mode: str, 
 
 def action_token_extra(kind: str, payload: dict, inbox_id: str) -> str:
     return ACTIONS[kind]['extra'](payload or {}, inbox_id)
+
+
+def action_token(root: Path, kind: str, payload: dict, inbox_id: str) -> str:
+    """該 kind 的 stale guard token，必須與腳本自己算的那個逐字相同。
+
+    三種算法：
+    - 預設（十一種既有動作）：`ssot_token(root, extra)`。
+    - `extra_pkg_yaml`（package_edit）：extra 後面再接一個 NUL 與 package.yaml 內容的 hash，
+      與 `package_edit.token_of()` 同一套——那支腳本改的是 package.yaml，而它不在 TOKEN_FILES 裡。
+    - `token`（package_build）：整份打包清單的 token（逐列 path／size／mtime ＋ package.yaml），
+      與 `build_submission_package.py` 比的那個同一套；SSOT 沒變但來源檔變了也要重新預覽。
+    """
+    payload = payload or {}
+    spec = ACTIONS.get(kind)
+    if spec is None:
+        return ssot_token(root)
+    if spec.get('token'):
+        return spec['token'](root, payload, inbox_id)
+    extra = spec['extra'](payload, inbox_id)
+    if spec.get('extra_pkg_yaml'):
+        extra += '\0' + _sub_common().package_yaml_hash(root)
+    return ssot_token(root, extra)

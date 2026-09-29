@@ -1128,8 +1128,9 @@ IMAGE_MIME = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 MD_MARK_RE = re.compile(r'\*{1,2}')
 INBOX_KINDS = {'new_question': '新問題', 'new_analysis': '新分析', 'comment': '意見', 'reassign': '降階', 'promote': '升回主問題',
                'set_role': '圖表 role', 'move_plan': '搬方法', 'move_sensitivity': '搬敏感性子分析', 'reorder': '調順序', 'move_result': '搬結果',
-               'nest_result': '掛到主結果下', 'demote_plan': '降為敏感性子分析', 'set_tier': 'Extended Data 歸屬', 'batch': '批次'}
-INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）、demote_plan（0.18.0）、batch（0.17.0）
+               'nest_result': '掛到主結果下', 'demote_plan': '降為敏感性子分析', 'set_tier': 'Extended Data 歸屬',
+               'package_edit': '投稿清單', 'package_build': '打包投稿檔案', 'batch': '批次'}
+INBOX_ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'package_edit', 'package_build', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）、demote_plan（0.18.0）、package_edit／package_build（0.23.0）、batch（0.17.0）
 INBOX_STATUSES = ('pending', 'done', 'dismissed')
 INBOX_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'status', 'resolved_by', 'resolved_at', 'note')
 DECISION_ID_RE = re.compile(r'D-\d{3}')

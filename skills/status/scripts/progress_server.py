@@ -95,7 +95,7 @@ except ImportError:
 INBOX_NAME = 'PROGRESS.inbox.yaml'
 IR_NAME = 'PROGRESS.ir.json'
 HTML_NAME = 'PROGRESS.html'
-ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）＝set_tier.py；batch（0.17.0）＝run_batch.py
+ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'package_edit', 'package_build', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）＝set_tier.py；package_edit／package_build（0.23.0）＝submission-prep 的兩支；batch（0.17.0）＝run_batch.py
 KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
 STATUSES = ('pending', 'done', 'dismissed')
@@ -306,10 +306,14 @@ def action_command(root: Path, item: dict, mode: str, daily_log: str = '', token
 
 
 def action_token(root: Path, item: dict) -> str:
-    """與腳本同一套 token：SSOT 檔內容 hash ＋ 該筆的參數（由 dispatch 表的 extra 生成）。"""
+    """與腳本同一套 token：預設是 SSOT 檔內容 hash ＋ 該筆的參數（dispatch 表的 extra 生成）。
+
+    0.23.0 起由 `_C.action_token()` 分派：package_edit 另外把 package.yaml 的內容算進去，
+    package_build 換成整份打包清單的 token（那支腳本比的是這個）。
+    """
     kind = str(item.get('kind') or '')
     payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
-    return _C.ssot_token(root, _C.action_token_extra(kind, payload, str(item.get('id') or '')))
+    return _C.action_token(root, kind, payload, str(item.get('id') or ''))
 
 
 def validate_submission(root: Path, payload) -> tuple[dict | None, str]:

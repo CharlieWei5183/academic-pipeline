@@ -533,7 +533,9 @@ def test_set_tier_script(tmp: Path) -> None:
 
 def test_server_and_batch(tmp: Path) -> None:
     root = variant(tmp, 'server')
-    assert C.ACTION_KINDS == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'batch')
+    # 0.20.0 的十一種仍在、相對順序不變、batch 仍在最後；0.23.0 在 set_tier 與 batch 之間插了 package_edit／package_build
+    assert C.ACTION_KINDS[:10] == ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier')
+    assert C.ACTION_KINDS[-1] == 'batch'
     assert ps.ACTION_KINDS == C.ACTION_KINDS and rp.INBOX_ACTION_KINDS == C.ACTION_KINDS and rp.INBOX_KINDS['set_tier'] == 'Extended Data 歸屬'
     assert C.ACTIONS['set_tier']['script'] == 'set_tier.py' and C.ACTIONS['set_tier']['stage'] == 'figure-design' and C.ACTIONS['set_tier']['argv']({'node': 'p:SQ1-v1#R2', 'tier': 'extended'}) == ['--node', 'p:SQ1-v1#R2=extended']
     assert C.ACTIONS['set_tier']['argv']({'node': 'r:m1', 'tier': ''}) == ['--node', 'r:m1=']
