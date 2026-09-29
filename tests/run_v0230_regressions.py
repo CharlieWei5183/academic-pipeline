@@ -770,6 +770,8 @@ def test_tab(tmp: Path) -> None:
         assert az not in c['cols']['script'], (c['id'], '共用檔不該再出現在卡內')
     users = [c['id'] for c in ana['cards'] if az in c['shared']['script']]
     assert set(users) == set(shared[az]['cards']), (users, shared[az]['cards'])
+    for r in ana['shared']:      # 「用於」清單不得重覆（落卡的那張幾乎一定也在引用清單裡）
+        assert len(r['cards']) == len(set(r['cards'])), r
     chip = rp._sub_shared_chip(sub, cards['RUN_C']['shared']['script'])
     assert f'共用 {len(cards["RUN_C"]["shared"]["script"])} 個' in chip and 'data-sgoto="f:' in chip, chip[:200]
     # 群組的成員清單扣掉共用檔與另有標籤的檔
@@ -828,7 +830,7 @@ def test_tab(tmp: Path) -> None:
     for cmd_txt in ('python3 ', '--dry-run', '--apply', '--exclude', '--include', '--restore',
                     'package_edit.py', 'build_submission_package.py', '等效命令'):
         assert cmd_txt not in vis, f'頁面上還看得到命令字樣 {cmd_txt!r}'
-    assert 'data-cmd' not in sec and 'data-plugin' not in sec
+    assert 'data-cmd' not in sec and 'data-plugin' not in sec and 'data-root' not in sec
     # 不用完整路徑：可見文字不得有絕對路徑（DOM 屬性照原樣留，那是 package.yaml 的 exclude 識別）
     abs_hits = re.findall(r'(?<![\w.…-])/(?:home|tmp|mnt|Users|var|opt)/[^\s、，。）)"\']*', vis)
     assert not abs_hits, abs_hits[:3]
@@ -840,10 +842,22 @@ def test_tab(tmp: Path) -> None:
     c_ent = collections.Counter(re.findall(r'data-snode="(e[fr]:(?:[^"\\]|\\.)*)"', sec))
     assert not [k for k, n in c_ent.items() if n > 1], [k for k, n in c_ent.items() if n > 1][:5]
     # 「移除這個分析」＝對這張卡的每個入口各一筆 exclude-entry
+    live_a = [e['id'] for e in sub['entries'] if e['id'] in cards['RUN_A']['entries'] and not e['excluded']]
     m = re.search(r'data-saction="exclude-analysis" data-ref="RUN_A" data-entries="([^"]*)"', sec)
-    assert m and set(m.group(1).split('|')) == set(cards['RUN_A']['entries']), (m and m.group(1))
-    norm, err = C.validate_payload(root, 'package_edit', {'exclude_entry': cards['RUN_A']['entries']})
-    assert not err and norm['exclude_entry'] == cards['RUN_A']['entries'], err
+    assert m and set(m.group(1).split('|')) == set(live_a), (m and m.group(1), live_a)
+    norm, err = C.validate_payload(root, 'package_edit', {'exclude_entry': live_a})
+    assert not err and norm['exclude_entry'] == live_a, err
+    # 已經移除過的入口不再送進 data-entries（再送一次會讓 package_edit 整批拒絕）
+    sub_gone = json.loads(json.dumps(sub))
+    gone_eid = cards['RUN_A']['entries'][0]
+    next(e for e in sub_gone['entries'] if e['id'] == gone_eid)['excluded'] = True
+    card_gone = next(c for c in sub_gone['analyses']['cards'] if c['id'] == 'RUN_A')
+    body_gone = '\n'.join(rp._sub_card_html(sub_gone, card_gone))
+    m2 = re.search(r'data-entries="([^"]*)"', body_gone)
+    assert m2 and gone_eid not in m2.group(1).split('|'), m2 and m2.group(1)
+    # 移除／還原的 title 由 Python 寫好，JS 先備份到 data-title 再拿 why 覆蓋，回線後才回得來
+    assert 'title="移除" aria-label="移除"' in sec and 'title="還原" aria-label="還原"' in sec
+    assert "b.setAttribute('data-title',b.title||'')" in html, 'refreshButtons 會把 title 蓋掉且回不來'
     assert C.pkg_op_of({'exclude_entry': ['A', 'B']}) == ('exclude-entry', 'A、B')
     assert '臂' not in html, '中文不得使用「臂」'
     # 打包對話框預設收起來：`display:flex` 會蓋過 hidden 屬性的 UA 預設 display:none，一定要自己寫回來

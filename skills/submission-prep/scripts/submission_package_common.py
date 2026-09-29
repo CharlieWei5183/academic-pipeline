@@ -1077,6 +1077,15 @@ def fig_formats(nids: Iterable[str]) -> list[str]:
     return known + sorted(fmts - set(known))
 
 
+def _uniq(seq: Iterable[str]) -> list[str]:
+    """保留順序去重。"""
+    out: list[str] = []
+    for x in seq:
+        if x not in out:
+            out.append(x)
+    return out
+
+
 def _mode_pick(counts: dict[str, int], order_of) -> str:
     """出現最多者；平手取 `order_of` 最小的（頁面順序在前）。空字串（未歸屬）只在沒有任何實體 run 時才會勝出。"""
     real = {k: c for k, c in counts.items() if k}
@@ -1423,9 +1432,8 @@ def build_analyses(v: _View, out: dict) -> dict:
     ordered = [c for c in ordered if c['kind'] != 'manual'] + manual      # 手動加入卡固定在頁尾
     return {
         'cards': ordered,
-        'shared': [{'node': nid, 'col': col[nid],
-                    'cards': [x for x in [home[nid]] + using[nid] if x in cards] if home[nid] in cards
-                    else list(using[nid])} for nid in shared],
+        'shared': [{'node': nid, 'col': col[nid], 'cards': _uniq(
+            [x for x in [home[nid]] + using[nid] if x in cards])} for nid in shared],
         'group_unique': group_unique,
         'home': home,
         'stats': {

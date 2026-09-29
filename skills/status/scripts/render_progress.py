@@ -3551,6 +3551,8 @@ def _validate_submission(sub) -> list[str]:
                 errors.append(f'IR-17 submission.analyses.shared[{i}]')
             elif s['node'] in placed:
                 errors.append(f'IR-17 submission.analyses.shared[{i}] {s["node"]} 也落在 {placed[s["node"]]}')
+            elif not isinstance(s.get('cards'), list) or len(s['cards']) != len(set(s['cards'])):
+                errors.append(f'IR-17 submission.analyses.shared[{i}].cards 有重覆')
             else:
                 placed[s['node']] = '共用檔案區'
         # 群組展開出來的成員也不能與別處重覆（同一個檔在整頁只出現一次）
@@ -6670,11 +6672,13 @@ def _sub_card_html(sub: dict, card: dict) -> list[str]:
            f'<span class="sub-meta">{_h(" ｜ ".join(meta))}</span>']
     out += [f'<span class="bsw b-{SUB_BADGE_CLASS.get(SUB_BADGE_SHORT.get(b, b), "other")}">'
             f'{_h(SUB_BADGE_SHORT.get(b, b))}</span>' for b in card['badges']]
-    if card['entries']:
+    # 已經移除過的入口再送一次會讓 package_edit 整批拒絕（「已有入口 X，沒有要改的東西」），先濾掉
+    live = [e['id'] for e in sub['entries'] if e['id'] in card['entries'] and not e['excluded']]
+    if live:
         out.append('<span class="sub-card-act">'
                    f'<button type="button" data-saction="exclude-analysis" data-ref="{_h(card["id"])}" '
-                   f'data-entries="{_h("|".join(card["entries"]))}" '
-                   f'title="對這張卡的 {len(card["entries"])} 個入口各寫一筆移除，一次套用、一筆 D#" '
+                   f'data-entries="{_h("|".join(live))}" '
+                   f'title="對這張卡的 {len(live)} 個入口各寫一筆移除，一次套用、一筆 D#" '
                    'disabled>移除這個分析</button></span>')
     out.append('</header>')
     cols = []
@@ -6760,7 +6764,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     """
     sub = ir.get('submission') or _sub_empty()
     root = ir['project_root']
-    lines = [f'<section id="tab-submission" hidden data-root="{_h(root)}">']
+    lines = ['<section id="tab-submission" hidden>']
     if sub['error']:
         lines += [f'<p class="sub-empty">投稿檔案清單這次算不出來：{_h(sub["error"])}。'
                   f'其他分頁不受影響；修好 <code>{_h(sub["source"])}</code> 後重跑本頁即可。</p>', '</section>']
@@ -7317,6 +7321,8 @@ SUB_JS = r"""
     var blocked=buildBlockedBy();
     Array.prototype.forEach.call(section.querySelectorAll('[data-saction]'),function(b){
       var isBuild=b.getAttribute('data-saction')==='build';
+      /* Python 端寫好的 title（「移除」「還原」…）先備份一次，否則離線時被 why 蓋掉就回不來了 */
+      if(!b.hasAttribute('data-title'))b.setAttribute('data-title',b.title||'');
       b.disabled=!actOk||(isBuild&&blocked>0);
       /* tooltip 只說「為什麼不能按」，不再顯示任何命令；Python 端已經給了「移除」／「還原」這些 title */
       if(isBuild&&blocked>0)
