@@ -3278,7 +3278,10 @@ SUB_TIER_LABEL = {'main': '正式文章', 'extended': '延伸資料', 'supplemen
 SUB_TIER_BAND = {'main': 'main', 'extended': 'ext', 'supplementary': 'supp'}
 SUB_KIND_LABEL = {'data': '資料', 'code': '程式碼', 'result': '結果', 'figure': '圖表', 'other': '其他'}
 SUB_NODE_FIELDS = ('id', 'path', 'kind', 'tier', 'exists', 'missing', 'external', 'is_dir', 'n_files', 'bytes',
-                   'packaged_path', 'entries', 'via', 'origin', 'note', 'badges', 'excluded', 'exclude_reason', 'counted')
+                   'packaged_path', 'entries', 'via', 'origin', 'note', 'badges', 'excluded', 'exclude_reason',
+                   'counted', 'groups', 'itemized', 'under')
+SUB_GROUP_FIELDS = ('id', 'run_id', 'label', 'tier', 'scripts', 'entries', 'members', 'n_files', 'bytes',
+                    'missing', 'excluded')
 SUB_ENTRY_FIELDS = ('id', 'kind', 'tier', 'label', 'type', 'figure_number', 'role', 'caption_first', 'status',
                     'plan_id', 'run_id', 'result_keys', 'badges', 'run_missing', 'excluded', 'exclude_reason', 'source')
 SUB_ENTRY_PREFIX = {'figure': 'ef:', 'result': 'er:'}   # 入口 id 在 manifest 與 results.json 之間可能撞名，圖上的節點 id 加前綴
@@ -3293,8 +3296,23 @@ def _sub_stats_zero() -> dict:
             'blocking_missing': 0, 'external': 0, 'added': 0}
 
 
+def _sub_own_node(n: dict) -> bool:
+    """這個檔案節點在圖上有沒有自己的節點（節點粒度＝SSOT 的宣告粒度）。
+
+    缺檔與已移除一律保留自己的節點——擋打包的清單要點得到、要還原也要點得到。其餘兩種情形收進上層：
+    落在某個資料夾節點之下（`under`，例如 run 的 `scripts/` 裡被 script 欄點名的腳本）；
+    只從某個 run 的輸入群組追到、沒有任何逐條宣告（`groups` 有值而 `itemized` 為 False）。
+    JS 端讀 IR 的 `own` 欄，不重算這個判斷。
+    """
+    if n['missing'] or n['excluded']:
+        return True
+    if n['under']:
+        return False
+    return not (n['groups'] and not n['itemized'])
+
+
 def _sub_empty(error: str = '', present: bool = False) -> dict:
-    return {'source': SUB_MODULE, 'present': present, 'error': error, 'entries': [], 'nodes': {}, 'refs': [],
+    return {'source': SUB_MODULE, 'present': present, 'error': error, 'entries': [], 'nodes': {}, 'groups': {}, 'refs': [],
             'missing': [], 'blocking_missing': [], 'excluded': [], 'added': [], 'run_missing': {},
             'warnings': [], 'stats': _sub_stats_zero()}
 
@@ -3321,7 +3339,9 @@ def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
             'entries': [dict({k: e.get(k, '') if k not in ('result_keys', 'badges', 'run_missing') else e.get(k) or []
                               for k in SUB_ENTRY_FIELDS},
                              node_id=SUB_ENTRY_PREFIX[e['kind']] + e['id']) for e in view['entries']],
-            'nodes': {nid: {k: n[k] for k in SUB_NODE_FIELDS} for nid, n in view['nodes'].items()},
+            'nodes': {nid: dict({k: n[k] for k in SUB_NODE_FIELDS},
+                                own=_sub_own_node(n)) for nid, n in view['nodes'].items()},
+            'groups': {gid: {k: g[k] for k in SUB_GROUP_FIELDS} for gid, g in (view.get('groups') or {}).items()},
             'refs': [{'from': r['from'], 'to': r['to'], 'via': r['via']} for r in view['edges']],
             'missing': list(view['missing']),
             'blocking_missing': list(view['blocking_missing']),
@@ -3349,7 +3369,7 @@ def _validate_submission(sub) -> list[str]:
     for key in ('entries', 'refs', 'missing', 'blocking_missing', 'excluded', 'added', 'warnings'):
         if not isinstance(sub.get(key), list):
             errors.append(f'IR-17 submission.{key}')
-    for key in ('nodes', 'run_missing', 'stats'):
+    for key in ('nodes', 'groups', 'run_missing', 'stats'):
         if not isinstance(sub.get(key), dict):
             errors.append(f'IR-17 submission.{key}')
     if errors:
@@ -3405,6 +3425,29 @@ def _validate_submission(sub) -> list[str]:
             errors.append(f'{pre}.entries 指到不存在的入口')
         if n.get('origin') not in ('derived', 'added'):
             errors.append(f'{pre}.origin')
+        if not isinstance(n.get('groups'), list) or any(x not in (sub.get('groups') or {}) for x in n.get('groups') or []):
+            errors.append(f'{pre}.groups')
+        for key in ('itemized', 'own'):
+            if not isinstance(n.get(key), bool):
+                errors.append(f'{pre}.{key}')
+        if not isinstance(n.get('under'), str) or (n.get('under') and n['under'] not in sub['nodes']):
+            errors.append(f'{pre}.under')
+    for gid, g in (sub.get('groups') or {}).items():
+        pre = f'IR-17 submission.groups[{gid}]'
+        if not isinstance(g, dict) or g.get('id') != gid or not g.get('run_id') or not g.get('label'):
+            errors.append(f'{pre}.id／run_id／label')
+            continue
+        if g.get('tier') not in SUB_TIERS:
+            errors.append(f'{pre}.tier')
+        if not isinstance(g.get('members'), list) or not g['members'] or any(x not in sub['nodes'] for x in g['members']):
+            errors.append(f'{pre}.members')
+        if not isinstance(g.get('entries'), list) or any(x not in eids for x in g['entries']):
+            errors.append(f'{pre}.entries')
+        if not isinstance(g.get('scripts'), str) or (g.get('scripts') and g['scripts'] not in sub['nodes']):
+            errors.append(f'{pre}.scripts')
+        for key in ('n_files', 'bytes', 'missing', 'excluded'):
+            if not isinstance(g.get(key), int) or isinstance(g.get(key), bool):
+                errors.append(f'{pre}.{key}')
     for i, r in enumerate(sub['refs']):
         if not isinstance(r, dict) or r.get('from') not in eids or r.get('to') not in sub['nodes']:
             errors.append(f'IR-17 submission.refs[{i}]')
@@ -6062,7 +6105,8 @@ def _group_crossing_pairs(r_lines: list[dict], cross_pair) -> list[tuple[int, in
     return found
 
 
-def crossing_stats(by_id: dict[str, dict], shown: set[str], lines: list[dict], count_overlaps: bool = True) -> tuple[int, list[str], int]:
+def crossing_stats(by_id: dict[str, dict], shown: set[str], lines: list[dict], count_overlaps: bool = True,
+                   pair_limit: int = 10) -> tuple[int, list[str], int]:
     """(C5) 精確線段相交計數：共端點不算、同一條邊自己的段不算、同一幹線的段彼此不算、只在端點相碰不算。
     另算線段穿過可見節點矩形的次數（對照短垂線刻意從中間節點底下經過，不計）。回傳 (交叉數, 前 10 對的描述, 穿過節點數)。
     候選對由 _group_crossing_pairs 以索引產生（不再逐對比較）；跨區域的線段與每個區域的線段比、彼此只在第一個區域比一次，
@@ -6097,13 +6141,13 @@ def crossing_stats(by_id: dict[str, dict], shown: set[str], lines: list[dict], c
             found = [(a, b) for a, b in found if a < n_reg]
         first = False
         crossings += len(found)
-        if len(pairs) < 10:
-            for a, b in sorted(found)[:10 - len(pairs)]:
+        if len(pairs) < pair_limit:
+            for a, b in sorted(found)[:pair_limit - len(pairs)]:
                 pairs.append(f'{desc(r_lines[a])} × {desc(r_lines[b])}')
     found = _group_crossing_pairs(spanning, cross_pair)
     crossings += len(found)
-    if len(pairs) < 10:
-        for a, b in sorted(found)[:10 - len(pairs)]:
+    if len(pairs) < pair_limit:
+        for a, b in sorted(found)[:pair_limit - len(pairs)]:
             pairs.append(f'{desc(spanning[a])} × {desc(spanning[b])}')
     overlaps = 0
     if count_overlaps:
@@ -6404,12 +6448,25 @@ def _sub_graph(sub: dict) -> dict:
                   'path': e['source'], 'tier': e['tier']})
         nodes[n['id']] = n
 
+    # ---- run 輸入群組節點（宣告粒度＝「這個 run 的輸入」一個宣告單位，收成一個節點）----
+    groups = sub.get('groups') or {}
+    for gid, g in sorted(groups.items()):
+        mem = [sub['nodes'][m] for m in g['members'] if m in sub['nodes']]
+        badges = ([SUB_BADGE_SHORT['缺檔']] if any(x['missing'] for x in mem) else []) \
+            + ([SUB_BADGE_SHORT['root 外']] if any(x['external'] for x in mem) else []) \
+            + ([SUB_BADGE_SHORT['已移除']] if mem and all(x['excluded'] for x in mem) else [])
+        n = _sub_node(f'g:{gid}', 'data', 0, SUB_TIER_BAND[g['tier']], g['label'], ref=gid)
+        n.update({'group': True, 'members': list(g['members']), 'entries': list(g['entries']),
+                  'path': f'{RUNS_DIR_PREFIX}{g["run_id"]}/input_snapshot', 'tier': g['tier'],
+                  'is_dir': False, 'bytes': g['bytes'], 'n_files': g['n_files'], 'missing': False,
+                  'excluded': bool(mem) and all(x['excluded'] for x in mem), 'external': False,
+                  'origin': 'derived', 'packaged_path': '', 'via': [], 'counted': True, 'badges': badges,
+                  'note': f'{len(g["members"])} 個檔案節點收在這一組；大小只算沒被資料夾節點收走的部分'})
+        nodes[n['id']] = n
+
     # ---- 檔案節點 ----
-    for nid, fn in sorted(sub['nodes'].items()):
+    def make_file_node(nid: str, fn: dict) -> None:
         owners = [x for x in fn['entries'] if x in by_id]
-        fig_owners = [x for x in owners if has_kind(x, 'figure')]
-        if fn['kind'] == 'figure' and fig_owners:
-            continue        # 圖表自己的 svg／pdf／png：面板逐檔列，不另開節點
         band = SUB_TIER_BAND[fn['tier']]
         parent = ''
         if fn['kind'] in ('result', 'other'):
@@ -6426,6 +6483,27 @@ def _sub_graph(sub: dict) -> dict:
         n['badges'] = _sub_badges(fn, via_hist and not via_cur)
         n['label'] = _sub_label(n)
         nodes[n['id']] = n
+
+    taken: dict[str, dict] = {}     # 沒有自己節點的檔案 → 還沒解析的收納目標
+    for nid, fn in sorted(sub['nodes'].items()):
+        owners = [x for x in fn['entries'] if x in by_id]
+        if fn['kind'] == 'figure' and any(has_kind(x, 'figure') for x in owners):
+            continue        # 圖表自己的 svg／pdf／png：面板逐檔列，不另開節點
+        if fn['own']:
+            make_file_node(nid, fn)
+        else:
+            taken[nid] = fn
+    # 被收走的檔案：把它的入口聯集進收它的節點，否則「圖表 → 那支被點名的腳本」這類邊會整條消失
+    collapsed: dict[str, str] = {}
+    for nid, fn in sorted(taken.items()):
+        host = f'f:{fn["under"]}' if fn['under'] else (f'g:{fn["groups"][0]}' if fn['groups'] else '')
+        if host not in nodes:
+            make_file_node(nid, fn)     # 收納目標自己也沒上圖（理論上不會發生）：退回獨立節點，不讓檔案消失
+            continue
+        collapsed[nid] = host
+        for eid in fn['entries']:
+            if eid not in nodes[host]['entries']:
+                nodes[host]['entries'].append(eid)
     for n in nodes.values():
         if n['parent'] and n['parent'] not in nodes:
             n['parent'] = ''
@@ -6444,6 +6522,8 @@ def _sub_graph(sub: dict) -> dict:
 
     by_entry: dict[str, list[str]] = {}
     for nid, n in nodes.items():
+        if n.get('group'):
+            continue        # 群組節點只有一條邊（群組 → 該 run 的 scripts/），不進入口的逐檔連線
         for eid in n.get('entries') or []:
             by_entry.setdefault(eid, []).append(nid)
     for e in entries:
@@ -6483,6 +6563,16 @@ def _sub_graph(sub: dict) -> dict:
             for it in e['result_keys']:
                 if it['is_entry'] and has_kind(it['key'], 'result'):
                     add('er:' + it['key'], target, 'depicts')
+    # 群組 → 該 run 的 scripts/ 節點，一條。run 沒有 scripts/ 節點時退而連到引用它的入口（列序最前的那個）
+    for gid, g in sorted(groups.items()):
+        tgt = f'f:{g["scripts"]}' if g['scripts'] and f'f:{g["scripts"]}' in nodes else ''
+        if not tgt:
+            # run 沒有 scripts/ 節點：接到引用它的入口，優先結果鍵入口（run 是它產出的，而且欄位較近），再依列序
+            cands = sorted((0 if y['kind'] == 'result' else 1, eorder.get(x, 10 ** 6), y['node_id'])
+                           for x in g['entries'] if x in by_id for y in by_id[x])
+            tgt = cands[0][2] if cands else ''
+        if tgt:
+            add(f'g:{gid}', tgt, 'feeds')
 
     # ---- 列序：同一入口的檔案排在一起，再以 barycenter 往返掃描（只在同帶同欄內重排）----
     blocks: dict[tuple[str, int], list[list[str]]] = {}
@@ -6598,7 +6688,12 @@ def _sub_graph(sub: dict) -> dict:
     fan = _sub_fan(nodes, edges)
     route = route_edges(nodes, [(i, e) for i, e in enumerate(edges) if i not in fan['handled']])
     shown = set(nodes)
-    crossings, pairs, overlaps = crossing_stats(nodes, shown, route['lines'] + fan['lines'])
+    crossings, pairs, overlaps = crossing_stats(nodes, shown, route['lines'] + fan['lines'], pair_limit=10 ** 6)
+    # 交叉來源分桶：pairs 的描述是 `邊索引:type:kind`，按兩端的 type 配對統計，找出主要是哪一類邊在打架
+    by_type: dict[str, int] = {}
+    for one in pairs:
+        parts = [x.split(':')[1] if x.count(':') >= 2 else '?' for x in one.split(' × ')]
+        by_type['×'.join(sorted(parts))] = by_type.get('×'.join(sorted(parts)), 0) + 1
     dummy_rows: dict[str, list[float]] = {}
     for d in dummies.values():
         dummy_rows.setdefault(d['band'], []).append(d['y'])
@@ -6610,6 +6705,8 @@ def _sub_graph(sub: dict) -> dict:
             'stats': {'graph_nodes': len(nodes), 'graph_edges': len(edges) + len(l_edges),
                       'crossings': crossings, 'edge_node_overlaps': overlaps, 'dummy_rows': len(dummies),
                       'fans': len([s for s in fan['spines'] if not s.get('head')]), 'fan_edges': len(fan['handled']),
+                      'groups': len(groups), 'collapsed': len(collapsed),
+                      'crossings_by_type': dict(sorted(by_type.items(), key=lambda kv: -kv[1])[:6]),
                       'crossing_pairs': pairs[:5], 'lane_overflow': list(route['overflow'])}}
 
 
@@ -6645,7 +6742,8 @@ def _sub_node_svg(n: dict) -> str:
     bw = [_tw(b, 10) + 6 for b in badges]
     label = _fit(n['label'], w - 22 - size_w - sum(bw) - 6 * len(bw) - 8, 11 if n['parent'] else 12)
     parts = [f'<g class="subnode k-{n["kind"]}{" sub" if n["parent"] else ""}{" is-miss" if n["missing"] else ""}'
-             f'{" is-gone" if n["excluded"] else ""}" data-snode="{_h(n["id"])}" data-kind="{n["kind"]}" '
+             f'{" is-gone" if n["excluded"] else ""}{" is-group" if n.get("group") else ""}" '
+             f'data-snode="{_h(n["id"])}" data-kind="{n["kind"]}" '
              f'data-band="{n["band"]}" data-col="{n["col"]}" data-order="{n["order"]}" '
              f'transform="translate({n["x"]:g},{n["y"]:g})" tabindex="0" role="button">'
              f'<rect class="box" width="{w}" height="{NODE_H}" rx="6"></rect>'
@@ -6658,7 +6756,8 @@ def _sub_node_svg(n: dict) -> str:
         x -= 4
     if size:
         parts.append(f'<text class="sz" x="{w - 8}" y="23" text-anchor="end">{_h(size)}</text>')
-    title = f'{n["label"]}（{SUB_KIND_LABEL.get(n["kind"], n["kind"])}）\n{n["path"]}'
+    title = (f'{n["label"]}（run 輸入群組）\n{n["path"]}\n{n["note"]}' if n.get('group')
+             else f'{n["label"]}（{SUB_KIND_LABEL.get(n["kind"], n["kind"])}）\n{n["path"]}')
     if n['badges']:
         title += '\n' + '、'.join(n['badges'])
     parts.append(f'<title>{_h(title)}</title></g>')
@@ -6786,6 +6885,11 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span><span class="ksw k-entry_result"></span>結果鍵入口</span>',
         '<span><span class="ksw k-entry_figure"></span>圖表／表格入口</span>',
         '<span>縮排＝該結果鍵 run 的輸出檔（report.md、status.json、快照表…），以 L 形線連回入口</span>',
+        '<span><span class="ksw k-data" style="outline:2px solid var(--t-validation);outline-offset:1px"></span>'
+        'run 輸入群組：一個 run 的 <code>input_snapshot/</code>（實體檔＋hash 表追到的來源）是一個宣告單位，'
+        '收成一個節點、一條線接到該 run 的 <code>scripts/</code>；面板逐筆列成員並可單獨移除</span>',
+        '<span>被 <code>script</code> 欄點名、又落在某個 run 的 <code>scripts/</code> 之下的腳本收進那個資料夾節點，'
+        '不另開節點（缺檔與已移除的一律保留自己的節點）</span>',
         '<span>徽章：<span class="bsw b-miss">缺檔</span>擋打包・<span class="bsw b-runmiss">run 缺</span>run 資料夾不存在'
         '（不擋）・<span class="bsw b-ext">root 外</span>・<span class="bsw b-add">手動</span>手動加入・'
         '<span class="bsw b-gone">已移除</span>整個節點變灰但仍列出・<span class="bsw b-hist">historical</span>只被歷史鍵引用</span>',
@@ -6795,8 +6899,9 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<div id="sub-wrap">',
         _svg_submission(g),
         '</div>',
-        f'<p class="notice">投稿檔案圖：節點 {gs["graph_nodes"]}（入口 {st["entries"] + st["entries_excluded"]}、檔案節點'
-        f' {len(sub["nodes"])}，其中圖表自己的 files 不另開節點）、邊 {gs["graph_edges"]}、跳欄借用的空列'
+        f'<p class="notice">投稿檔案圖：節點 {gs["graph_nodes"]}（入口 {st["entries"] + st["entries_excluded"]}、'
+        f'run 輸入群組 {gs["groups"]}、檔案節點 {len(sub["nodes"]) - gs["collapsed"]}；另有 {gs["collapsed"]} 個檔案'
+        f'收進群組或資料夾節點、圖表自己的 files 在入口面板逐檔列）、邊 {gs["graph_edges"]}、跳欄借用的空列'
         f' {gs["dummy_rows"]}；線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
         f'清單與帶的規則來自 <code>{_h(sub["source"])}</code>（derive()），歸帶沿用關聯圖同一套；本頁只讀不改 SSOT。</p>',
         '<aside id="sub-detail" hidden><button type="button" class="close" id="sub-detail-close">關閉（Esc）</button>',
@@ -6880,6 +6985,8 @@ SUB_CSS = """
 .subnode.k-entry_result .kbar{fill:var(--t-result)}
 .subnode.k-entry_figure .kbar{fill:var(--t-figure)}
 .subnode.k-entry_result .box,.subnode.k-entry_figure .box{stroke:var(--current);stroke-width:1.8;fill:var(--proj)}
+.subnode.is-group .box{stroke:var(--t-validation);stroke-width:1.8}
+.subnode.is-group .kbar{width:9px}
 .subnode.is-miss .box{stroke:var(--badge-blocked);stroke-dasharray:5 3}
 .subnode.is-gone{opacity:.45}
 .subnode.is-gone .box{stroke-dasharray:3 3}
@@ -6907,6 +7014,7 @@ path.subedge.dim,path.subtrunk.dim{stroke:var(--edge-faint)}
 #sub-detail button[data-saction]{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:1px 8px;font-size:12px}
 #sub-detail button[disabled]{opacity:.55;cursor:not-allowed}
 #sub-detail .goto{color:var(--current);cursor:pointer;text-decoration:underline dotted}
+#sub-detail .mk{font-size:11px;color:var(--muted)}
 #sub-detail .sub-form{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
 #sub-detail .sub-form label{display:block;font-size:12px;margin:4px 0;color:var(--muted)}
 #sub-detail .sub-form input,#sub-detail .sub-form select{font:inherit;font-size:12px;padding:2px 4px;max-width:100%;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
@@ -6957,6 +7065,45 @@ SUB_JS = r"""
     return '<li><div class="row"><span><code>'+h(n.path)+'</code> '+(n.missing?'<span class="bsw b-miss">缺檔</span>':h(human(n.bytes)))+'</span>'+
       '<span>'+btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --dry-run')+
       btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div></li>';}
+  /* 沒有自己節點的檔案 → 收它的那個節點（資料夾節點或 run 輸入群組）。IR 的 own 欄已經算好，這裡只查表。 */
+  function hostOf(nid){var n=nodes[nid]; if(!n||n.own) return '';
+    if(n.under) return 'f:'+n.under;
+    return (n.groups&&n.groups.length)?'g:'+n.groups[0]:'';}
+  function memberRow(nid,extra){var n=nodes[nid]; if(!n) return '';
+    var marks=[];
+    if(n.own) marks.push('另有獨立節點');
+    if(extra) marks.push(extra);
+    if(n.missing) marks.push('缺檔');
+    if(n.excluded) marks.push('已移除');
+    if(n.external) marks.push('root 外');
+    return '<li><div class="row"><span><code>'+h(n.path)+'</code> '+
+      (n.missing?'—':h(human(n.bytes)))+' <span class="mk">'+h(KIND[n.kind]||n.kind)+
+      (marks.length?'・'+marks.join('・'):'')+'</span></span><span>'+
+      (n.own?gotoLink( 'f:'+nid,'看節點'):'')+
+      btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --dry-run')+
+      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div></li>';}
+  function groupPanel(id){
+    var g=(sub.groups||{})[id.slice(2)]; if(!g) return '';
+    var ms=g.members||[];
+    var paths=ms.map(function(x){return (nodes[x]||{}).path||x;});
+    var cmd=EDIT+' '+paths.map(function(x){return '--exclude '+x;}).join(' ')+' --reason <理由> --dry-run';
+    var refs=(g.entries||[]).map(function(x){
+      var nid=(byId[x]||[])[0];
+      return nid?gotoLink(nid,x):h(x);}).join('、');
+    var out='<h3>'+h(g.label)+'</h3>'+
+      dl([['這是什麼','一個 run 的 <code>input_snapshot/</code>（實體檔＋hash 表追到的來源）是 SSOT 的一個宣告單位，'+
+           '所以收成一個節點；組內每個檔案在打包清單裡仍各自是一筆'],
+          ['run','<code>'+h(g.run_id)+'</code>'],
+          ['帶',h(TIER[g.tier]||g.tier)+'（引用它的入口中最高者）'],
+          ['成員',ms.length+' 個檔案節點（缺檔 '+(g.missing||0)+'、已移除 '+(g.excluded||0)+'）'],
+          ['大小',human(g.bytes)+'（'+g.n_files+' 個檔；已被資料夾節點收走的不重複計）'],
+          ['引用它的入口',refs||'（無）'],
+          ['接到哪支程式碼',g.scripts?'<code>'+h(g.scripts)+'</code>':'這個 run 沒有 scripts/ 節點，線改接到引用它的入口']]);
+    out+='<div class="row"><span>整組移除＝對每個成員各寫一筆 exclude（同一個 D#）</span><span>'+
+      btn('exclude-group',g.run_id,'整組移除（'+ms.length+' 筆）',cmd,' data-group="'+h(g.id)+'"')+'</span></div>'+
+      cmdline(cmd);
+    out+='<h4>成員（'+ms.length+'）</h4><ul>'+ms.map(function(x){return memberRow(x,'');}).join('')+'</ul>';
+    return out;}
   function nodePanel(id){
     var n=nodes[id.slice(2)]; if(!n) return '';
     var refs=[];(n.entries||[]).forEach(function(x){
@@ -6977,6 +7124,16 @@ SUB_JS = r"""
       btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --reason <理由> --dry-run')+
       btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div>'+
       cmdline(EDIT+' --exclude '+n.path+' --dry-run');
+    if(n.is_dir){
+      /* 收進這個資料夾節點的檔案：宣告粒度＝資料夾，所以它們不另開節點。被 script 欄點名的那幾支標出來。 */
+      var inside=Object.keys(nodes).filter(function(k){return nodes[k].under===n.id;}).sort();
+      if(inside.length)
+        out+='<h4>收在這個資料夾節點裡（'+inside.length+'）</h4><ul>'+inside.map(function(k){
+          var named=(nodes[k].via||[]).some(function(v){return v==='script'||/\.script$/.test(v);});
+          return memberRow(k, named?'script 欄點名':'');}).join('')+'</ul>';}
+    if((n.groups||[]).length)
+      out+='<h4>也是 run 輸入群組的成員</h4><ul>'+n.groups.map(function(gid){
+        var g=(sub.groups||{})[gid]; return '<li>'+(g?gotoLink('g:'+gid,g.label):h(gid))+'</li>';}).join('')+'</ul>';
     return out;}
   function entryPanel(id){
     var e=entries[id]; if(!e) return '';
@@ -7017,7 +7174,7 @@ SUB_JS = r"""
     Array.prototype.forEach.call(svg.querySelectorAll('.subtrunk'),function(p){p.classList.add('dim');});
     Array.prototype.forEach.call(svg.querySelectorAll('.subnode'),function(x){
       if(!near[x.getAttribute('data-snode')])x.classList.add('dim');});
-    body.innerHTML=(id.indexOf('f:')===0?nodePanel(id):entryPanel(id));
+    body.innerHTML=(id.indexOf('g:')===0?groupPanel(id):id.indexOf('f:')===0?nodePanel(id):entryPanel(id));
     detail.hidden=false;
     if(scroll&&g.getBoundingClientRect){var r=g.getBoundingClientRect(),w=wrap.getBoundingClientRect();
       wrap.scrollLeft+=r.left-w.left-w.width/3;wrap.scrollTop+=r.top-w.top-w.height/3;}
@@ -7030,7 +7187,10 @@ SUB_JS = r"""
     if(g&&(ev.key==='Enter'||ev.key===' ')){ev.preventDefault();select(g.getAttribute('data-snode'),false);}});
   section.addEventListener('click',function(ev){
     var t=ev.target.closest('[data-sgoto]');
-    if(t){ev.preventDefault();select(t.getAttribute('data-sgoto'),true);}});
+    if(t){ev.preventDefault();
+      /* 缺檔清單指到的節點如果被收進資料夾節點或群組，圖上沒有它自己的節點：退到收它的那個節點 */
+      var want=t.getAttribute('data-sgoto'),host=(want.indexOf('f:')===0)?hostOf(want.slice(2)):'';
+      select(host||want,true);}});
   var close=document.getElementById('sub-detail-close');
   if(close)close.addEventListener('click',clear);
   document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!detail.hidden&&!section.hidden)clear();});
