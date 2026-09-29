@@ -930,6 +930,23 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
     rows = package_files(out)
     out['stats']['files'] = len(rows)
     out['stats']['bytes'] = sum(r['bytes'] for r in rows)
+    # 逐入口與逐節點的檔數／位元組：同一趟 rows 加總，不再走第二次目錄。分頁的列卡標頭就用這個——
+    # 共用檔照實計入每一個引用它的入口（一張列卡一份），所以各入口相加會大於 stats 的總數，那是刻意的。
+    # 沒有任何入口引用的列（手動加入但沒填 attach_to）記在空字串那一格。
+    entry_files: dict[str, int] = {}
+    entry_bytes: dict[str, int] = {}
+    node_files: dict[str, int] = {}
+    node_bytes: dict[str, int] = {}
+    for row in rows:
+        node_files[row['node']] = node_files.get(row['node'], 0) + 1
+        node_bytes[row['node']] = node_bytes.get(row['node'], 0) + row['bytes']
+        for eid in row['entries'] or ['']:
+            entry_files[eid] = entry_files.get(eid, 0) + 1
+            entry_bytes[eid] = entry_bytes.get(eid, 0) + row['bytes']
+    out['entry_files'] = entry_files
+    out['entry_bytes'] = entry_bytes
+    out['node_files'] = node_files
+    out['node_bytes'] = node_bytes
     return out
 
 
