@@ -568,6 +568,11 @@ def test_edit(tmp: Path) -> None:
     assert entry(v, 'G_supp')['excluded'] and entry(v, 'G_supp')['exclude_reason'] == '這張表改放正文'
     assert v['nodes']['analysis/figures/g_supp.svg']['excluded']
     assert not v['nodes']['analysis/scripts/analyze.py']['excluded'], '還有別的入口引用它，不算移除'
+    # excluded 紀錄的 via＝差量裡真的寫了的那個識別；連帶移除（唯一引用它的入口被移除）沒有自己的差量
+    ex_by = {(x['kind'], x['id']): x for x in v['excluded']}
+    assert ex_by[('entry', 'G_supp')]['via'] == 'G_supp', ex_by[('entry', 'G_supp')]
+    assert ex_by[('node', 'analysis/figures/g_supp.svg')]['via'] == '', '連帶移除的節點沒有自己的差量'
+    assert ex_by[('node', 'analysis/runs/RUN_NOPE')]['via'] == 'analysis/runs/RUN_NOPE'
 
     # restore
     run(EDIT, root, '--restore', 'G_supp', '--apply')
@@ -627,8 +632,28 @@ def test_edit(tmp: Path) -> None:
     assert all(entry(v, x)['excluded'] for x in ents), '兩個入口都標 excluded'
     assert 'BLOCKER' in run(EDIT, root, '--exclude-entry', 'G_main', '--exclude-entry', 'NOPE',
                             '--dry-run', expect=2), '任一筆不是現有入口就整批拒絕'
-    for x in ents:
-        run(EDIT, root, '--restore', x, '--apply')
+
+    # 重複 --restore：分頁的「還原這個分析」＝對已移除的每個入口各還原一筆，同一個 D# 一次 apply 完
+    n_before = len(C.decisions_list(root))
+    ex_before = len(C.load_yaml(root / 'submission/package.yaml')['exclude'])
+    out = run(EDIT, root, '--restore', ents[0], '--restore', ents[1], '--dry-run')
+    assert '還原 2 筆' in out, out
+    run(EDIT, root, '--restore', ents[0], '--restore', ents[1], '--apply')
+    doc = C.load_yaml(root / 'submission/package.yaml')
+    assert len(doc['exclude']) == ex_before - 2, doc['exclude']
+    assert not [it for it in doc['exclude'] if it.get('entry') in ents], doc['exclude']
+    ds = C.decisions_list(root)
+    assert len(ds) == n_before + 1, f'兩筆還原只記一個 D#（{len(ds) - n_before}）'
+    assert all(x in ds[-1]['links'] for x in ents), ds[-1]['links']
+    v = view_of(root)
+    assert not any(entry(v, x)['excluded'] for x in ents), '兩個入口都回到納入'
+    assert 'BLOCKER' in run(EDIT, root, '--restore', 'analysis/runs/RUN_NOPE', '--restore', 'NOPE',
+                            '--dry-run', expect=2), '任一筆沒有差量可還原就整批拒絕'
+    # 一次 apply 只改一個清單：還原目標跨 include 與 exclude 就拒絕
+    run(EDIT, root, '--include', 'extra_note.md', '--tier', 'main', '--kind', 'result', '--apply')
+    assert 'BLOCKER' in run(EDIT, root, '--restore', 'extra_note.md', '--restore', 'analysis/runs/RUN_NOPE',
+                            '--dry-run', expect=2), '還原目標跨兩個清單就拒絕'
+    run(EDIT, root, '--restore', 'extra_note.md', '--apply')
     print('  規格 8 package_edit ok')
 
 
@@ -772,6 +797,12 @@ def test_tab(tmp: Path) -> None:
     assert set(users) == set(shared[az]['cards']), (users, shared[az]['cards'])
     for r in ana['shared']:      # 「用於」清單不得重覆（落卡的那張幾乎一定也在引用清單裡）
         assert len(r['cards']) == len(set(r['cards'])), r
+    # 「也用於」只算這張卡自己的檔：共用檔不算。analyze.py 被好幾張卡引用，而 F_a／F_b 這兩張圖表只透過它
+    # 跟那些卡有關係；共用檔若算進「也用於」，這些圖表就會掛到每一張用了 analyze.py 的卡上（誤連）
+    via_shared_only = [fid for fid in ('F_a', 'F_b') if fid in nodes[az]['entries']]
+    assert len(via_shared_only) == 2, (via_shared_only, nodes[az]['entries'])
+    assert not (set(via_shared_only) & {a['entry'] for c in ana['cards'] for a in c['also_figures']}), \
+        '共用檔不得讓圖表掛上別的分析卡'
     chip = rp._sub_shared_chip(sub, cards['RUN_C']['shared']['script'])
     assert f'共用 {len(cards["RUN_C"]["shared"]["script"])} 個' in chip and 'data-sgoto="f:' in chip, chip[:200]
     # 群組的成員清單扣掉共用檔與另有標籤的檔
@@ -830,6 +861,10 @@ def test_tab(tmp: Path) -> None:
     for cmd_txt in ('python3 ', '--dry-run', '--apply', '--exclude', '--include', '--restore',
                     'package_edit.py', 'build_submission_package.py', '等效命令'):
         assert cmd_txt not in vis, f'頁面上還看得到命令字樣 {cmd_txt!r}'
+    # 頁尾備註不放實作路徑（規則指到 skill，不指到檔）
+    assert '分卡與歸帶規則見 submission-prep skill' in sec, '頁尾備註的說法'
+    for path_txt in (sub['source'], 'submission_package_common.py', 'skills/', 'derive()'):
+        assert path_txt not in vis, f'投稿分頁的可見文字不得出現 {path_txt!r}'
     assert 'data-cmd' not in sec and 'data-plugin' not in sec and 'data-root' not in sec
     # 不用完整路徑：可見文字不得有絕對路徑（DOM 屬性照原樣留，那是 package.yaml 的 exclude 識別）
     abs_hits = re.findall(r'(?<![\w.…-])/(?:home|tmp|mnt|Users|var|opt)/[^\s、，。）)"\']*', vis)
@@ -855,6 +890,43 @@ def test_tab(tmp: Path) -> None:
     body_gone = '\n'.join(rp._sub_card_html(sub_gone, card_gone))
     m2 = re.search(r'data-entries="([^"]*)"', body_gone)
     assert m2 and gone_eid not in m2.group(1).split('|'), m2 and m2.group(1)
+    # ---- 移除／還原的圖示依狀態只顯示一個：還在的只有 ×，已移除的只有 ↺ ----
+    cas = re.findall(r'<span class="ca">(.*?)</span>', sec, re.S)
+    assert cas, '標籤上要有動作鈕'
+    for one in cas:
+        assert one.count('<button') == 1, one
+        assert ('×' in one) != ('↺' in one), one
+    assert any('×' in x for x in cas) and any('↺' in x for x in cas), 'fixture 要同時有納入與已移除的標籤'
+    gone_nid = 'analysis/figures/vals.tsv'
+    assert nodes[gone_nid]['excluded'], 'fixture 的 package.yaml 移除了這個檔'
+    chip_gone = rp._sub_file_chip(sub, gone_nid)
+    assert 'data-saction="restore"' in chip_gone and 'data-saction="exclude"' not in chip_gone, chip_gone
+    live_nid = next(k for k, n in nodes.items() if not n['excluded'] and not n['is_dir'])
+    chip_live = rp._sub_file_chip(sub, live_nid)
+    assert 'data-saction="exclude"' in chip_live and 'data-saction="restore"' not in chip_live, chip_live
+    # run 輸入群組：整組還在只有「整組移除」，整組已移除改成「整組還原」
+    gid = 'runinput:RUN_A'
+    gchip = rp._sub_group_chip(sub, gid)
+    assert 'data-saction="exclude-group"' in gchip and '↺' not in gchip, gchip[:200]
+    sub_ggone = json.loads(json.dumps(sub))
+    for mem in sub_ggone['analyses']['group_unique'][gid]:
+        sub_ggone['nodes'][mem]['excluded'] = True
+    gchip2 = rp._sub_group_chip(sub_ggone, gid)
+    assert 'data-saction="restore-group"' in gchip2 and '×' not in gchip2 and 'is-gone' in gchip2, gchip2[:200]
+    # 卡片：入口全部移除後，「移除這個分析」改成「還原這個分析」（對已移除的入口各一筆 restore）
+    sub_all = json.loads(json.dumps(sub))
+    for e in sub_all['entries']:
+        if e['id'] in cards['RUN_A']['entries']:
+            e['excluded'] = True
+    card_all = next(c for c in sub_all['analyses']['cards'] if c['id'] == 'RUN_A')
+    body_res = '\n'.join(rp._sub_card_html(sub_all, card_all))
+    assert '還原這個分析' in body_res and '移除這個分析' not in body_res, body_res[:300]
+    m3 = re.search(r'data-saction="restore-analysis" data-ref="RUN_A" data-entries="([^"]*)"', body_res)
+    assert m3 and set(m3.group(1).split('|')) == set(cards['RUN_A']['entries']), m3 and m3.group(1)
+    norm_r, err_r = C.validate_payload(root, 'package_edit', {'restore': list(cards['RUN_A']['entries'])})
+    assert not err_r and norm_r['restore'] == list(cards['RUN_A']['entries']), err_r
+    for js_anchor in ("act==='restore-analysis'", "act==='restore-group'"):
+        assert js_anchor in html, f'SUB_JS 缺 {js_anchor}'
     # 移除／還原的 title 由 Python 寫好，JS 先備份到 data-title 再拿 why 覆蓋，回線後才回得來
     assert 'title="移除" aria-label="移除"' in sec and 'title="還原" aria-label="還原"' in sec
     assert "b.setAttribute('data-title',b.title||'')" in html, 'refreshButtons 會把 title 蓋掉且回不來'
@@ -980,9 +1052,14 @@ def test_action_kinds(tmp: Path) -> None:
     bad('package_edit', {'include': [{'path': 'a', 'tier': 'main', 'kind': 'data'},
                                      {'path': 'b', 'tier': 'main', 'kind': 'data'}]}, '一次只能一筆')
     bad('package_edit', {'exclude': ['a', '']}, '非空字串')
-    bad('package_edit', {'restore': ['a', 'b']}, '一次只能一筆')
+    bad('package_edit', {'restore': ['a', '']}, '非空字串')
     bad('package_edit', {'exclude': ['a'], 'reason': 5}, 'reason 須為字串')
     assert good('package_edit', {'exclude': ['a', 'b', 'a']})['exclude'] == ['a', 'b'], '保留順序去重'
+    # 還原也可以多筆（分頁的「還原這個分析」＝對已移除的每個入口各還原一筆，同一個 D#）
+    assert good('package_edit', {'restore': ['a', 'b', 'a']})['restore'] == ['a', 'b'], '還原多筆、保留順序去重'
+    assert C.pkg_op_of({'restore': ['a', 'b', 'a']}) == ('restore', 'a、b'), 'token 的 target 要與腳本逐字相同'
+    assert C.ACTIONS['package_edit']['argv']({'restore': ['a', 'b']}) == ['--restore', 'a', '--restore', 'b']
+    assert '2 筆' in C.ACTIONS['package_edit']['title']({'restore': ['a', 'b']})[0]
     inc = good('package_edit', {'include': [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'data', 'note': 'n'}]})
     assert inc['include'] == [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'data', 'note': 'n'}]
     # root 上一層的檔可以加入（投稿包收 root 與 root.parent）
@@ -1029,10 +1106,15 @@ def test_action_kinds(tmp: Path) -> None:
     import package_edit as PE
     for payload, ns in (
             ({'exclude': ['data/raw.csv']},
-             argparse.Namespace(include='', exclude=['data/raw.csv'], exclude_entry='', restore='',
+             argparse.Namespace(include='', exclude=['data/raw.csv'], exclude_entry='', restore=[],
                                 tier='', kind='', attach_to='', note='', reason='', inbox='IN-007')),
             ({'restore': ['G_main']},
-             argparse.Namespace(include='', exclude=[], exclude_entry='', restore='G_main',
+             argparse.Namespace(include='', exclude=[], exclude_entry='', restore=['G_main'],
+                                tier='', kind='', attach_to='', note='', reason='', inbox='IN-007')),
+            # 多筆還原：兩邊的 target 都是保留順序去重後 '、'.join，否則每次套用都 409
+            ({'restore': ['G_main', 'cur_a', 'G_main']},
+             argparse.Namespace(include='', exclude=[], exclude_entry='',
+                                restore=['G_main', 'cur_a', 'G_main'],
                                 tier='', kind='', attach_to='', note='', reason='', inbox='IN-007'))):
         assert C.action_token(root, 'package_edit', payload, 'IN-007') == \
             PE.token_of(root, {'op': PE.parse_op(ns)}, 'IN-007'), payload

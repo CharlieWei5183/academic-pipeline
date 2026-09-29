@@ -6533,13 +6533,17 @@ def _sub_tip(node: dict, extra: str = '') -> str:
     return '\n'.join(parts)
 
 
-def _sub_acts(remove: str, ref: str, restore_ref: str = '') -> str:
-    """標籤上的小圖示鈕：× 移除、↺ 還原（hover 才明顯）。不再顯示任何等效命令。"""
+def _sub_acts(remove: str, ref: str, excluded: bool = False, restore_ref: str = '') -> str:
+    """標籤上的小圖示鈕（hover 才明顯）：依狀態只給一個——還在清單上就只有「×」（移除），
+    已移除的就只有「↺」（還原）。兩個並排會讓人以為兩邊都可按，而其中一個對當下狀態一定是無效的。
+    不顯示任何等效命令。"""
+    if excluded:
+        return ('<span class="ca">'
+                f'<button type="button" class="ib" data-saction="restore" data-ref="{_h(restore_ref or ref)}" '
+                'title="還原" aria-label="還原" disabled>↺</button></span>')
     return ('<span class="ca">'
             f'<button type="button" class="ib" data-saction="{remove}" data-ref="{_h(ref)}" '
-            'title="移除" aria-label="移除" disabled>×</button>'
-            f'<button type="button" class="ib" data-saction="restore" data-ref="{_h(restore_ref or ref)}" '
-            'title="還原" aria-label="還原" disabled>↺</button></span>')
+            'title="移除" aria-label="移除" disabled>×</button></span>')
 
 
 def _sub_member_row(sub: dict, nid: str, mark: str = '') -> str:
@@ -6554,7 +6558,7 @@ def _sub_member_row(sub: dict, nid: str, mark: str = '') -> str:
             f'<span class="cs">{_h(_sub_chip_size(n))}</span> '
             f'<span class="mk">{_h(SUB_KIND_LABEL.get(n["kind"], n["kind"]))}'
             + (('・' + '・'.join(marks)) if marks else '') + '</span>'
-            + _sub_acts('exclude', n['path']) + '</li>')
+            + _sub_acts('exclude', n['path'], n['excluded']) + '</li>')
 
 
 def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '') -> str:
@@ -6566,7 +6570,7 @@ def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '') -> str:
             f'<span class="cs">{_h(_sub_chip_size(n))}</span>'
             + _sub_bhtml(_sub_badges(n))
             + (f'<span class="tag">{_h(tag)}</span>' if tag else '')
-            + _sub_acts('exclude', n['path']))
+            + _sub_acts('exclude', n['path'], n['excluded']))
     if n['is_dir'] and not n['missing']:
         inside = sorted(k for k, m in sub['nodes'].items() if m['under'] == nid and not m['own'])
         named = {k for k in inside
@@ -6596,13 +6600,15 @@ def _sub_group_chip(sub: dict, gid: str) -> str:
         + (['專案外'] if any(x['external'] for x in mem) else []) \
         + (['已移除'] if mem and all(x['excluded'] for x in mem) else [])
     gone = bool(mem) and all(x['excluded'] for x in mem)
+    # 依狀態只給一個圖示鈕：整組還在就只有「×」（整組移除），整組已移除就只有「↺」（整組還原）。
+    act = (('restore-group', '整組還原', '↺') if gone else ('exclude-group', '整組移除', '×'))
     head = (f'<span class="cl">{_h(g["run_id"])} 的輸入</span>'
             f'<span class="cs">{len(members)} 檔 {_sub_human(size)}</span>'
             + _sub_bhtml(badges)
             + ('<span class="ca">'
-               f'<button type="button" class="ib" data-saction="exclude-group" data-group="{_h(gid)}" '
-               f'data-ref="{_h(g["run_id"])}" title="整組移除（{len(members)} 筆）" '
-               f'aria-label="整組移除" disabled>×</button></span>'))
+               f'<button type="button" class="ib" data-saction="{act[0]}" data-group="{_h(gid)}" '
+               f'data-ref="{_h(g["run_id"])}" title="{act[1]}（{len(members)} 筆）" '
+               f'aria-label="{act[1]}" disabled>{act[2]}</button></span>'))
     tip = (f'{RUNS_DIR_PREFIX}{g["run_id"]}/input_snapshot\n'
            f'這個 run 的輸入是 SSOT 的一個宣告單位：{len(members)} 個檔案節點（{n_files} 檔不重複計）')
     return (f'<details class="sub-chip is-group{" is-gone" if gone else ""}" data-snode="g:{_h(gid)}" '
@@ -6630,7 +6636,7 @@ def _sub_fig_item(sub: dict, fig: dict, names: dict[str, str] | None = None) -> 
             f'<span class="cs">{_h(fmt)}</span>'
             f'<span class="bsw b-band">{_h(SUB_TIER_SHORT.get(fig["tier"], fig["tier"]))}</span>'
             + _sub_bhtml(badges)
-            + _sub_acts('exclude-entry', fig['entry']))
+            + _sub_acts('exclude-entry', fig['entry'], fig['excluded']))
     tip = '\n'.join(x for x in (fig['caption_first'], f'檔案格式：{fmt}',
                                 f'所屬帶：{SUB_TIER_LABEL.get(fig["tier"], fig["tier"])}') if x)
     vals = [n for n in fig['values'] if n in sub['nodes']]
@@ -6650,7 +6656,7 @@ def _sub_key_chip(sub: dict, item: dict) -> str:
             f'title="{_h(item.get("caption_first") or "")}">'
             f'<span class="kb">鍵</span><span class="cl">{_h(item["key"])}</span>'
             + _sub_bhtml(badges)
-            + _sub_acts('exclude-entry', item['key']) + '</span>')
+            + _sub_acts('exclude-entry', item['key'], item['excluded']) + '</span>')
 
 
 def _sub_card_html(sub: dict, card: dict) -> list[str]:
@@ -6672,14 +6678,22 @@ def _sub_card_html(sub: dict, card: dict) -> list[str]:
            f'<span class="sub-meta">{_h(" ｜ ".join(meta))}</span>']
     out += [f'<span class="bsw b-{SUB_BADGE_CLASS.get(SUB_BADGE_SHORT.get(b, b), "other")}">'
             f'{_h(SUB_BADGE_SHORT.get(b, b))}</span>' for b in card['badges']]
-    # 已經移除過的入口再送一次會讓 package_edit 整批拒絕（「已有入口 X，沒有要改的東西」），先濾掉
+    # 已經移除過的入口再送一次會讓 package_edit 整批拒絕（「已有入口 X，沒有要改的東西」），先濾掉。
+    # 整張卡的入口都移除掉之後，這個鈕改成「還原這個分析」——對已移除的每個入口各還原一筆。
     live = [e['id'] for e in sub['entries'] if e['id'] in card['entries'] and not e['excluded']]
+    gone_ents = [e['id'] for e in sub['entries'] if e['id'] in card['entries'] and e['excluded']]
     if live:
         out.append('<span class="sub-card-act">'
                    f'<button type="button" data-saction="exclude-analysis" data-ref="{_h(card["id"])}" '
                    f'data-entries="{_h("|".join(live))}" '
                    f'title="對這張卡的 {len(live)} 個入口各寫一筆移除，一次套用、一筆 D#" '
                    'disabled>移除這個分析</button></span>')
+    elif gone_ents:
+        out.append('<span class="sub-card-act">'
+                   f'<button type="button" data-saction="restore-analysis" data-ref="{_h(card["id"])}" '
+                   f'data-entries="{_h("|".join(gone_ents))}" '
+                   f'title="對這張卡已移除的 {len(gone_ents)} 個入口各還原一筆，一次套用、一筆 D#" '
+                   'disabled>還原這個分析</button></span>')
     out.append('</header>')
     cols = []
     dual, figdata = set(card['dual']), set(card['figdata'])
@@ -6757,7 +6771,8 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     """第四個分頁「投稿檔案」：摘要列、依分析分卡（三段）、共用檔案區、側面板、加入表單與打包對話框。
 
     按鈕的 data 屬性就是接線契約，SUB_JS 用事件委派抓 `[data-saction]`：data-saction（動作種類，
-    exclude／exclude-entry／exclude-group／exclude-analysis／restore／include／build）、
+    exclude／exclude-entry／exclude-group／exclude-analysis／restore／restore-group／restore-analysis／
+    include／build；移除與還原依當下狀態只出現一個）、
     data-snode（標籤對應的節點 id）、data-ref（SSOT 的識別：入口 id 或相對 root 的路徑，root 外是絕對路徑
     ——那是 package.yaml 的 exclude 識別，只進屬性不顯示）、data-group、data-entries。
     連上 `progress_server.py --allow-apply` 才啟用；否則維持 disabled，摘要列顯示一行說明。
@@ -6767,7 +6782,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     lines = ['<section id="tab-submission" hidden>']
     if sub['error']:
         lines += [f'<p class="sub-empty">投稿檔案清單這次算不出來：{_h(sub["error"])}。'
-                  f'其他分頁不受影響；修好 <code>{_h(sub["source"])}</code> 後重跑本頁即可。</p>', '</section>']
+                  '其他分頁不受影響；修好 submission-prep 的衍生規則後重跑本頁即可。</p>', '</section>']
         return lines
     st = sub['stats']
     ana = sub.get('analyses') or {}
@@ -6856,7 +6871,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         + '、'.join(f'{SUB_TIER_LABEL[t]} {(ast.get("cards_by_tier") or {}).get(t, 0)}' for t in SUB_TIERS)
         + f'）、圖表 {ast.get("figures", 0)}、結果鍵 {ast.get("result_keys", 0)}、共用檔 {ast.get("shared", 0)}；'
         f'各卡與共用區的檔數相加＝總計 {st["files"]} 個檔，與打包同一套算法。'
-        f'分卡與歸帶的規則來自 <code>{_h(sub["source"])}</code>（derive()），歸帶沿用關聯圖同一套；本頁只讀不改 SSOT。</p>',
+        '分卡與歸帶規則見 submission-prep skill，歸帶沿用關聯圖同一套；本頁只讀、不改 SSOT。</p>',
         '<form id="sub-include-form" class="sub-form">',
         '<h4>加入檔案</h4>',
         '<label>路徑 <input type="text" name="path" placeholder="相對 root；root 外用絕對路徑" disabled></label>',
@@ -7403,10 +7418,26 @@ SUB_JS = r"""
       var paths=g?(g.members||[]).map(function(m){return (nodes[m]||{}).path||m;}):[];
       if(!paths.length){AP.toast('找不到這個 run 輸入群組的成員：'+(ref||gid));return;}
       stageEdit({exclude:paths},'整組移除 '+g.run_id+' 的輸入（'+paths.length+' 筆）');return;}
+    if(act==='restore-group'){
+      /* 整組還原＝把差量裡真的寫到的那些識別各還原一筆（`via`）。因為唯一引用它的入口被移除而連帶
+         變灰的成員沒有自己的差量（via 空），還原它要回去還原那個入口，這裡不送。 */
+      var gid2=String(b.getAttribute('data-group')||'').replace(/^g:/,'');
+      var g2=(sub.groups||{})[gid2]||(sub.groups||{})['runinput:'+ref];
+      var mem=g2?(g2.members||[]):[],vias=[];
+      (sub.excluded||[]).forEach(function(x){
+        if(x.kind!=='node'||!x.via)return;
+        if(mem.indexOf(x.id)<0)return;
+        if(vias.indexOf(x.via)<0)vias.push(x.via);});
+      if(!vias.length){AP.toast('這組沒有可以直接還原的差量：它是因為引用它的入口被移除才變灰，請還原那個入口');return;}
+      stageEdit({restore:vias},'整組還原 '+g2.run_id+' 的輸入（'+vias.length+' 筆）');return;}
     if(act==='exclude-analysis'){
       var ids=String(b.getAttribute('data-entries')||'').split('|').filter(function(x){return x;});
       if(!ids.length){AP.toast('這張分析卡沒有可移除的入口');return;}
       stageEdit({exclude_entry:ids},'移除分析 '+ref+' 的 '+ids.length+' 個入口');return;}
+    if(act==='restore-analysis'){
+      var rids=String(b.getAttribute('data-entries')||'').split('|').filter(function(x){return x;});
+      if(!rids.length){AP.toast('這張分析卡沒有已移除的入口');return;}
+      stageEdit({restore:rids},'還原分析 '+ref+' 已移除的 '+rids.length+' 個入口');return;}
     if(act==='exclude'){stageEdit({exclude:[ref]},'');return;}
     if(act==='exclude-entry'){stageEdit({exclude_entry:[ref]},'');return;}
     if(act==='restore'){stageEdit({restore:[ref]},'');return;}});
