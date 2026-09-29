@@ -229,6 +229,9 @@ LIT_SCHEMA = 'academic-pipeline/citation-graph@1'
 LIT_NODE_KINDS = {'question': 1, 'literature': 0}       # kind → 節點是不是問題點
 LIT_EDGE_KINDS = {'cited_for': 'lq', 'cites': 'll'}     # kind → 畫線類別（文獻—問題／文獻引用文獻）
 LIT_STR_FIELDS = ('authors', 'title', 'journal', 'doi')
+# 0.22.0：文獻點的顏色＝圈內被引數（in-degree，只算 cites 邊）；global_citations 是向下相容的選填欄位
+LIT_GC_FIELDS = ('count', 'source', 'retrieved')
+LIT_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
 # ---------- 讀檔（唯讀） ----------
@@ -3062,7 +3065,79 @@ def build_inbox(src: Sources, graph: dict) -> dict:
 
 def _lit_empty(source: str, present: bool = False) -> dict:
     return {'source': source, 'present': present, 'demo': False, 'nodes': 0, 'edges': {},
-            'data': {'nodes': [], 'edges': []}}
+            'max_cin': 0, 'data': {'nodes': [], 'edges': []}}
+
+
+def _lit_global_citations(raw, nid: str, rel: str, warnings: list[str]) -> dict | None:
+    """選填欄位 `global_citations` 的驗證：{count:int≥0, source:非空字串, retrieved:"YYYY-MM-DD"}。
+
+    缺欄位＝常態，回 None 不記話。欄位在但不合格（型別不對、bool 當成 int、負數、缺鍵、日期寫錯）
+    記一句 WARNING 並整個丟掉，不讓整張圖失敗——這是向下相容的選填欄位，schema 仍是 @1。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations 不是 object，丟掉這個欄位')
+        return None
+    missing = [k for k in LIT_GC_FIELDS if k not in raw]
+    if missing:
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations 缺 {"、".join(missing)}，丟掉這個欄位')
+        return None
+    count = raw.get('count')
+    if isinstance(count, bool) or not isinstance(count, int):
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations.count 不是整數，丟掉這個欄位')
+        return None
+    if count < 0:
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations.count 是負數（{count}），丟掉這個欄位')
+        return None
+    source = raw.get('source')
+    if not isinstance(source, str) or not source.strip():
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations.source 不是非空字串，丟掉這個欄位')
+        return None
+    retrieved = raw.get('retrieved')
+    ok_date = isinstance(retrieved, str) and LIT_DATE_RE.match(retrieved) is not None
+    if ok_date:
+        try:
+            dt.date.fromisoformat(retrieved)
+        except ValueError:
+            ok_date = False
+    if not ok_date:
+        warnings.append(f'{rel} 節點 {nid} 的 global_citations.retrieved 不是 YYYY-MM-DD 的日期，丟掉這個欄位')
+        return None
+    return {'count': count, 'source': source.strip(), 'retrieved': retrieved}
+
+
+def _lit_indegree_counts(nodes: list[dict], edges: list[dict]) -> list[int]:
+    """每個節點的圈內被引數：有 `cites` 邊指向它的**不同 literature 來源節點**數。
+
+    只數 `k == 'll'`（cites）的邊，兩端都要是文獻點；自我引用、指向不存在節點的邊、重複的邊在建
+    `out_edges` 時就已經排掉，所以這裡直接數。問題點一律 0。跨專案同一條規則，不設門檻。
+    """
+    counts = [0] * len(nodes)
+    for e in edges:
+        s, t = e.get('s'), e.get('t')
+        if e.get('k') != 'll':
+            continue
+        if isinstance(s, bool) or isinstance(t, bool) or not isinstance(s, int) or not isinstance(t, int):
+            continue
+        if not (0 <= s < len(nodes) and 0 <= t < len(nodes)) or s == t:
+            continue
+        if not isinstance(nodes[s], dict) or not isinstance(nodes[t], dict):
+            continue                                   # 驗證時可能收到壞資料，這裡只數得出來的
+        if nodes[s].get('q') == 0 and nodes[t].get('q') == 0:
+            counts[t] += 1
+    return counts
+
+
+def _lit_indegree(nodes: list[dict], edges: list[dict]) -> int:
+    """把圈內被引數寫進每個文獻點的 `cin`，回傳整張圖的最大值（沒有文獻點時 0）。"""
+    counts = _lit_indegree_counts(nodes, edges)
+    max_cin = 0
+    for i, node in enumerate(nodes):
+        if node.get('q') == 0:
+            node['cin'] = counts[i]
+            max_cin = max(max_cin, counts[i])
+    return max_cin
 
 
 def _lit_num(value) -> float | None:
@@ -3146,11 +3221,16 @@ def build_literature(src: Sources, path: Path | None = None) -> dict:
             else:
                 node['note'] = ''
                 src.warnings.append(f'{rel} 問題點 {nid} 不在 project.yaml 的 goals，只顯示 id')
+            if raw.get('global_citations') is not None:
+                src.warnings.append(f'{rel} 問題點 {nid} 帶了 global_citations（只有文獻點能有），丟掉這個欄位')
         else:
             for f in LIT_STR_FIELDS:
                 node[f] = _text(raw.get(f))
             year = raw.get('year')
             node['year'] = _text(year) if year is not None else ''
+            gc = _lit_global_citations(raw.get('global_citations'), nid, rel, src.warnings)
+            if gc is not None:
+                node['gc'] = gc
         index[nid] = len(out_nodes)
         out_nodes.append(node)
 
@@ -3179,8 +3259,9 @@ def build_literature(src: Sources, path: Path | None = None) -> dict:
         out_edges.append({'s': key[0], 't': key[1], 'k': key[2]})
         counts[kind] = counts.get(kind, 0) + 1
 
+    max_cin = _lit_indegree(out_nodes, out_edges)
     return {'source': rel, 'present': True, 'demo': bool(doc.get('demo')),
-            'nodes': len(out_nodes), 'edges': counts,
+            'nodes': len(out_nodes), 'edges': counts, 'max_cin': max_cin,
             'data': {'nodes': out_nodes, 'edges': out_edges}}
 
 
@@ -3333,6 +3414,18 @@ def validate_ir(ir) -> list[str]:
     return errors
 
 
+def _lit_gc_ok(gc) -> bool:
+    """IR 裡的 `gc`（全球被引數）形狀是否合格。"""
+    if not isinstance(gc, dict) or set(gc) != set(LIT_GC_FIELDS):
+        return False
+    count, source, retrieved = gc.get('count'), gc.get('source'), gc.get('retrieved')
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return False
+    if not isinstance(source, str) or not source:
+        return False
+    return isinstance(retrieved, str) and LIT_DATE_RE.match(retrieved) is not None
+
+
 def _validate_literature(lit) -> list[str]:
     """IR-16：文獻引用 3D 圖的資料。缺檔＝空狀態也要通過（present False、0 點 0 線）。"""
     errors: list[str] = []
@@ -3358,6 +3451,11 @@ def _validate_literature(lit) -> list[str]:
         errors.append('IR-16 literature.edges 總數')
     elif any(k not in LIT_EDGE_KINDS for k in counts):
         errors.append('IR-16 literature.edges kind')
+    max_cin = lit.get('max_cin')
+    if isinstance(max_cin, bool) or not isinstance(max_cin, int) or max_cin < 0:
+        errors.append('IR-16 literature.max_cin')
+        max_cin = None
+    want_cin = _lit_indegree_counts(nodes, edges)   # 顏色靠 cin，和邊對不上就是 BLOCKER，不讓它靜靜畫錯
     seen: set[str] = set()
     for i, n in enumerate(nodes):
         sub = f'literature.data.nodes[{i}]'
@@ -3374,9 +3472,24 @@ def _validate_literature(lit) -> list[str]:
         if n.get('q') == 1:
             if not isinstance(n.get('note'), str):
                 errors.append(f'IR-16 {sub}.note')
+            if 'cin' in n or 'gc' in n:
+                errors.append(f'IR-16 {sub} 問題點不該有 cin／gc')
         else:
             if any(not isinstance(n.get(k), str) for k in LIT_STR_FIELDS + ('year',)):
                 errors.append(f'IR-16 {sub} 書目欄位')
+            cin = n.get('cin')
+            if isinstance(cin, bool) or not isinstance(cin, int) or cin < 0:
+                errors.append(f'IR-16 {sub}.cin')
+            elif cin != want_cin[i]:
+                errors.append(f'IR-16 {sub}.cin 與邊不符')
+            if 'gc' in n and not _lit_gc_ok(n['gc']):
+                errors.append(f'IR-16 {sub}.gc')
+    if max_cin is not None:
+        got = max((n.get('cin', 0) for n in nodes
+                   if isinstance(n, dict) and isinstance(n.get('cin'), int) and not isinstance(n.get('cin'), bool)),
+                  default=0)
+        if got != max_cin:
+            errors.append('IR-16 literature.max_cin 不是最大值')
     for i, e in enumerate(edges):
         sub = f'literature.data.edges[{i}]'
         if not isinstance(e, dict):
@@ -3398,9 +3511,13 @@ CSS = """
 :root{--bg:#fafaf8;--fg:#1f2328;--muted:#5b6470;--line:#d5d9de;--card:#ffffff;--proj:#eef3f7;--panel:#ffffff;
 --done:#009e73;--expired:#e69f00;--blocked:#cc79a7;--pending:#8c939b;--unknown:#8c939b;--current:#0072b2;
 --badge-blocked:#c2185b;--badge-addressed:#1b7f5c;--badge-open:#6b7280;--badge-dropped:#4b5563;
+/* 文獻點的連續色階（0.22.0）：低＝淺、高＝深，每一階對 --card 的對比都 ≥ 3:1；換色只改這一組 */
+--lit-ramp-0:#b0842a;--lit-ramp-1:#9a701d;--lit-ramp-2:#845c15;--lit-ramp-3:#6d4811;--lit-ramp-4:#57350e;--lit-ramp-5:#41240a;
 --t-question:#4477aa;--t-method:#ccbb44;--t-validation:#228833;--t-result:#ee6677;--t-figure:#aa3377;--t-decision:#bbbbbb;--t-report:#66ccee;--t-lit:#a8751b;--up:#d55e00;--down:#0072b2;--path:#aa3377;--edge:#9aa3ad;--edge-thin:#b9c0c7;--edge-faint:#d3d8dd;--bg-none:#ffffff;--bg-done:#e2f4ee;--bg-expired:#fdf0d5;--bg-blocked:#f9e1ec;--bg-pending:#f2f3f4;--bg-sub:#f7f8f9;--bg-sub-done:#f0f9f5;--bg-sub-expired:#fef8ea;}
 @media (prefers-color-scheme: dark){:root{--bg:#14171a;--fg:#e6e9ec;--muted:#a0a8b1;--line:#3a4048;--card:#1c2025;--proj:#1f2a33;--panel:#1c2025;
 --done:#2ec4a0;--expired:#f2b134;--blocked:#e38fc4;--pending:#8d949c;--unknown:#8d949c;--current:#56b4e9;
+/* 暗色主題反過來：低＝暗、高＝亮，每一階對暗色 --card 的對比一樣 ≥ 3:1 */
+--lit-ramp-0:#9a7024;--lit-ramp-1:#b4872c;--lit-ramp-2:#cca03a;--lit-ramp-3:#e0b955;--lit-ramp-4:#eed27f;--lit-ramp-5:#f7e7ae;
 --t-question:#6699cc;--t-method:#ddcc66;--t-validation:#44aa66;--t-result:#ee6677;--t-figure:#cc77aa;--t-decision:#888888;--t-report:#66ccee;--t-lit:#ddaa33;--up:#f08c3a;--down:#56b4e9;--path:#d88bbf;--edge:#6b7480;--edge-thin:#565e68;--edge-faint:#3e454d;--bg-none:#1c2025;--bg-done:#173a30;--bg-expired:#3f3418;--bg-blocked:#3f2233;--bg-pending:#262a2e;--bg-sub:#20252a;--bg-sub-done:#1b2f28;--bg-sub-expired:#302b1a;}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px 20px 40px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
@@ -4729,7 +4846,9 @@ LIT_CSS = """
 .lit3d-legend li{display:flex;align-items:center;gap:6px}
 .lit3d-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
 .lit3d-dot.is-q{background:var(--t-question)}
-.lit3d-dot.is-l{width:7px;height:7px;background:var(--t-lit)}
+.lit3d-ramp{width:82px;height:9px;border-radius:5px;flex:0 0 auto;border:1px solid var(--line);
+background:linear-gradient(90deg,var(--lit-ramp-0),var(--lit-ramp-1),var(--lit-ramp-2),var(--lit-ramp-3),var(--lit-ramp-4),var(--lit-ramp-5))}
+.lit3d-ramp-end{font-variant-numeric:tabular-nums}
 .lit3d-bar{width:20px;height:2px;border-radius:1px;flex:0 0 auto}
 .lit3d-bar.is-q{background:var(--t-question);opacity:.6}
 .lit3d-bar.is-c{background:var(--edge)}
@@ -4761,7 +4880,9 @@ LIT_JS = """
   var section = document.getElementById("tab-literature");
   var canvas = document.getElementById("lit3d-canvas");
   if (!raw || !section || !canvas) return;
-  var DATA = (JSON.parse(raw.textContent).literature || {}).data || {nodes:[], edges:[]};
+  var LIT = JSON.parse(raw.textContent).literature || {};
+  var DATA = LIT.data || {nodes:[], edges:[]};
+  var MAXCIN = (typeof LIT.max_cin === "number" && LIT.max_cin > 0) ? LIT.max_cin : 0;
   var NODES = DATA.nodes || [], EDGES = DATA.edges || [], N = NODES.length;
   if (!N) return;
   var stage = document.getElementById("lit3d-stage");
@@ -4771,12 +4892,13 @@ LIT_JS = """
   var FONT = 'system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif';
 
   /* ---- 相鄰關係 ---- */
-  var nbr = [], cites = [], cited = [], qOf = [], litCount = {};
-  for (var i = 0; i < N; i++){ nbr.push({}); cites.push(0); cited.push(0); qOf.push([]); }
+  /* 被引數不在這裡算：IR 的 nd.cin 已經是圈內被引數（只算 cites、去重、排掉自我引用與懸空邊） */
+  var nbr = [], cites = [], qOf = [], litCount = {};
+  for (var i = 0; i < N; i++){ nbr.push({}); cites.push(0); qOf.push([]); }
   for (var ei = 0; ei < EDGES.length; ei++){
     var e = EDGES[ei], s = e.s, t = e.t;
     nbr[s][t] = 1; nbr[t][s] = 1;
-    if (e.k === "ll"){ cites[s]++; cited[t]++; }
+    if (e.k === "ll"){ cites[s]++; }
     else { qOf[s].push(NODES[t].id); litCount[t] = (litCount[t] || 0) + 1; }
   }
 
@@ -4802,11 +4924,39 @@ LIT_JS = """
     C.q = hex2rgb(g("--t-question"), [68,119,170]);
     C.lit = hex2rgb(g("--t-lit"), [168,117,27]);
     C.cur = hex2rgb(g("--current"), [0,114,178]);
+    C.ramp = readRamp(g);
   }
-  readTheme();
+  /* 色階只定義在 CSS 的 --lit-ramp-0…N（亮暗各一組），這裡讀到沒有為止，JS 不寫死階數 */
+  function readRamp(g){
+    var stops = [];
+    for (var i = 0; i < 64; i++){
+      var v = (g("--lit-ramp-" + i) || "").trim();
+      if (!v) break;
+      var c = hex2rgb(v, null);
+      if (c) stops.push(c);
+    }
+    return stops.length ? stops : [C.lit];
+  }
+  /* 文獻點的顏色＝圈內被引數線性對到色階（最大值 0 時全部用最低那一端，不除以零） */
+  function litColor(cin){
+    var st = C.ramp, n = st.length - 1;
+    if (n <= 0) return st[0];
+    var t = MAXCIN > 0 ? Math.min(1, Math.max(0, cin / MAXCIN)) : 0;
+    var p = t * n, i = Math.min(n - 1, Math.floor(p)), f = p - i;
+    var a = st[i], b = st[i + 1];
+    return [Math.round(a[0] + (b[0] - a[0]) * f),
+            Math.round(a[1] + (b[1] - a[1]) * f),
+            Math.round(a[2] + (b[2] - a[2]) * f)];
+  }
+  var litRGB = new Array(N);
+  function refreshTheme(){
+    readTheme();
+    for (var i = 0; i < N; i++) litRGB[i] = NODES[i].q ? C.q : litColor(NODES[i].cin || 0);
+  }
+  refreshTheme();
   var mqDark = window.matchMedia("(prefers-color-scheme: dark)");
-  if (mqDark.addEventListener) mqDark.addEventListener("change", readTheme);
-  else if (mqDark.addListener) mqDark.addListener(readTheme);
+  if (mqDark.addEventListener) mqDark.addEventListener("change", refreshTheme);
+  else if (mqDark.addListener) mqDark.addListener(refreshTheme);
 
   /* ---- 取景半徑：座標已歸一化到半徑 1，但少數離群點會讓整團縮太小，
          改用第 95 百分位半徑取景，離群點超出邊界時由 stage 裁掉，縮小即可看全 ---- */
@@ -4918,7 +5068,7 @@ LIT_JS = """
       var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15);
       var rr = sr[j];
       if (j === act) rr *= 1.45;
-      ctx.fillStyle = rgba(node.q ? C.q : C.lit, alpha);
+      ctx.fillStyle = rgba(litRGB[j] || (node.q ? C.q : C.lit), alpha);
       ctx.beginPath();
       ctx.arc(sx[j], sy[j], rr, 0, 6.283185307179586);
       ctx.fill();
@@ -4978,6 +5128,7 @@ LIT_JS = """
   function esc(s){
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
+  function thousands(n){ return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ","); }
   function tipHTML(i){
     var nd = NODES[i];
     if (nd.q){
@@ -4988,11 +5139,14 @@ LIT_JS = """
     }
     var qs = qOf[i].length ? qOf[i].join("、") : "（無）";
     var head = [esc(nd.authors), nd.year ? "（" + esc(nd.year) + "）" : ""].join("");
+    var gc = nd.gc;
+    var world = gc ? '<br>' + esc(gc.source) + ' 被引 ' + thousands(gc.count) + ' 次（' + esc(gc.retrieved) + ' 取得）' : '';
     return '<div class="lit3d-tip-sub">' + (head || esc(nd.id)) + '</div>' +
            '<div class="lit3d-tip-title">' + esc(nd.title || nd.id) + '</div>' +
            '<div class="lit3d-tip-sub">' + esc(nd.journal) + '　' + esc(nd.doi) + '</div>' +
            '<div class="lit3d-tip-meta">連到問題：' + esc(qs) +
-           '<br>引用 ' + cites[i] + ' 篇・被引用 ' + cited[i] + ' 篇</div>';
+           '<br>引用 ' + cites[i] + ' 篇' +
+           '<br>本圖內被引 ' + (nd.cin || 0) + ' 次' + world + '</div>';
   }
   function placeTip(px, py){
     var sw = stage.clientWidth, sh = stage.clientHeight;
@@ -5141,23 +5295,28 @@ def _literature_tab(ir: dict) -> list[str]:
         lines += [f'<p class="lit3d-empty">尚無文獻引用資料（{source} {why}）</p>', '</div>', '</section>']
         return lines
     counts = lit.get('edges') or {}
+    max_cin = lit.get('max_cin', 0)
     if lit.get('demo'):
         lines.append('<p class="lit3d-demo">示範資料：點與連線都是隨機產生的</p>')
     lines += [
         '<ul class="lit3d-legend">',
         '<li><span class="lit3d-dot is-q"></span>問題點</li>',
-        '<li><span class="lit3d-dot is-l"></span>文獻點</li>',
+        '<li>文獻點・被本圖其他文獻引用次數'
+        f'<span class="lit3d-ramp-end">0</span><span class="lit3d-ramp"></span>'
+        f'<span class="lit3d-ramp-end">{max_cin}</span></li>',
         '<li><span class="lit3d-bar is-q"></span>文獻—問題</li>',
         '<li><span class="lit3d-bar is-c"></span>文獻引用文獻</li>',
         '</ul>',
         '<p class="lit3d-hint">拖曳旋轉・滾輪或雙指縮放・指到點看文獻・方向鍵旋轉、加減號縮放、Esc 取消選取</p>',
         '<div class="lit3d-stage" id="lit3d-stage">',
         '<canvas id="lit3d-canvas" class="lit3d-canvas" tabindex="0" role="img" '
-        'aria-label="文獻引用 3D 圖。方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
+        f'aria-label="文獻引用 3D 圖。文獻點的顏色越醒目，代表被本圖其他文獻引用越多次，'
+        f'從 0 次到 {max_cin} 次。方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
         '<div class="lit3d-tip" id="lit3d-tip" hidden></div>',
         '</div>',
         f'<p class="notice">來源：<code>{source}</code>；節點 {lit.get("nodes", 0)}、'
-        f'文獻—問題 {counts.get("cited_for", 0)} 條、文獻引用文獻 {counts.get("cites", 0)} 條。'
+        f'文獻—問題 {counts.get("cited_for", 0)} 條、文獻引用文獻 {counts.get("cites", 0)} 條；'
+        f'文獻點的顏色是圈內被引數（被本圖其他文獻引用的次數，最多 {max_cin} 次）。'
         f'版面座標由產生資料的腳本算好寫在 layout，本頁只讀不重算。</p>',
         '</div>',
         '</section>',
