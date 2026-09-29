@@ -322,7 +322,7 @@ def test_frontend(tmp: Path) -> None:
                    "kind:'batch',payload:{actions:actions,reason:stagedReason()}", '虛線外框＝已暫存', '批次'):
         assert anchor in html, anchor
     assert html.count('function actPreview(') == 1 and html.count('function actApply(') == 1 and html.count("actPost('/api/actions/dry-run'") == 1 and html.count("actPost('/api/actions/apply'") == 1
-    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下／降為敏感性子分析／Extended Data 歸屬／批次；由腳本確定性執行）' in html   # 0.18.0 多 demote_plan；0.20.0 多 set_tier
+    assert '待套用動作 1 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果／掛到主結果下／降為敏感性子分析／Extended Data 歸屬／投稿清單／打包投稿檔案／批次；由腳本確定性執行）' in html   # 0.18.0 多 demote_plan；0.20.0 多 set_tier；0.23.0 多投稿那兩種
     assert 'http://' not in html
     js = _js_of(html)
     node = shutil.which('node')

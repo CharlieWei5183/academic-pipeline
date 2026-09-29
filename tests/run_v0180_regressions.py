@@ -107,7 +107,7 @@ def test_ir_groups(tmp: Path) -> None:
     assert 'class="edge e-supplements' not in html and "'<dt>敏感性對照</dt>" not in html
     for token in ('Supplementary ｜ 補充：附錄問題與補充圖表', '每組敏感性分析群縮排在所屬分析之下、區帶跟它走', 'plan 徽章「敏感性 n」', '收合敏感性分析',
                   'active plan 拖到另一個問題的 active plan 上＝降為它的敏感性子分析', "demote_plan:'降為敏感性子分析'", 'act-demote-plan-fields',
-                  '掛到主結果下／降為敏感性子分析／Extended Data 歸屬／批次'):   # 0.20.0 多 set_tier
+                  '掛到主結果下／降為敏感性子分析／Extended Data 歸屬／投稿清單／打包投稿檔案／批次'):   # 0.20.0 多 set_tier、0.23.0 多投稿那兩種
         assert token in html, f'HTML 缺 {token}'
     # validate_ir 新規則
     ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
