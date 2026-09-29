@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA = 'academic-pipeline/submission-package-view@1'
-VERSION = '0.23.0'
+VERSION = '0.23.1'
 
 # ---------- 帶（tier） ----------
 
@@ -257,17 +257,48 @@ def result_key_bands(root: Path) -> tuple[dict[str, str], list[str]]:
 # 路徑解析與分類
 # =====================================================================================================
 
+def _origin_root(root: Path) -> Path:
+    """root 對應的原始專案根（dry-run 工作區回它複製自哪個根，真實專案根回自己）。
+
+    實作只有一份，在 `ssot_actions_common`；這裡延後 import，維持本檔對 status 那邊沒有 module-level 相依。
+    取不到（獨立使用本檔、status 腳本不在）就退回 root 自己，行為同 0.23.0。
+    """
+    import sys
+    scripts_dir = Path(__file__).resolve().parents[2] / 'status' / 'scripts'
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    try:
+        import ssot_actions_common
+        return ssot_actions_common.origin_root(root)
+    except Exception:
+        return Path(root).resolve()
+
+
 class Resolver:
     """把「相對 root 或絕對」的路徑字串變成節點所需的欄位；同一個實體檔只認一個 id。"""
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self.parent = self.root.parent
+        # 0.23.1：「專案根的上一層」一律以原根為準。在 dry-run 工作區裡 self.root 是 /tmp/ssot-dryrun-xxx，
+        # 上一層是 /tmp，SSOT 散文裡以專案根上一層寫的來源路徑整批 resolve 不到，節點不存在，移除動作被判成
+        # 「沒有這個節點可移除」。origin 另外拿來把解到原根底下的路徑折回工作區（見 locate()），這樣工作區與
+        # 原根對同一份 SSOT 衍生出來的節點 id、打包落點與統計完全相同。
+        self.origin = _origin_root(self.root)
+        self.parent = self.origin.parent
         self.ids: dict[str, str] = {}       # realpath → node id（處理同一檔被兩條 symlink 路徑指到）
+
+    def fold(self, p: Path) -> Path:
+        """解到原根底下的路徑折回工作區的同一個位置；不是工作區、或不在原根底下，原樣回傳。"""
+        if self.origin == self.root:
+            return p
+        try:
+            return self.root / p.relative_to(self.origin)
+        except ValueError:
+            return p
 
     def locate(self, raw: str) -> tuple[str, Path]:
         """回 (node id, 絕對路徑)。id 為相對 root 的正規化路徑；root 外則用絕對路徑。"""
-        p = Path(os.path.normpath(raw if os.path.isabs(raw) else str(self.root / raw)))
+        p = self.fold(Path(os.path.normpath(raw if os.path.isabs(raw) else str(self.root / raw))))
         try:
             nid = p.relative_to(self.root).as_posix()
         except ValueError:
@@ -282,7 +313,7 @@ class Resolver:
     def placement(self, path: Path, kind: str) -> tuple[bool, str, str]:
         """回 (是否 root 外, 打包用的相對片段, warning)。"""
         try:
-            return False, path.relative_to(self.root).as_posix(), ''
+            return False, self.fold(path).relative_to(self.root).as_posix(), ''
         except ValueError:
             pass
         try:
@@ -459,18 +490,23 @@ def _resolve_token(token: str, resolver: Resolver, state: dict) -> tuple[list[Pa
         for base in bases:
             hits = _glob(base, token)
             if hits:
+                hits = [resolver.fold(h) for h in hits]
                 state['dir'] = hits[0].parent
                 return hits, [], []
         return [], [], [f'{token} 是 glob 但在專案內展不出任何檔案（前一個資料夾 {state.get("dir") or resolver.root}）']
     if os.path.isabs(token):
         p = Path(os.path.normpath(token))
         if p.exists():
+            p = resolver.fold(p)
             state['dir'] = p if p.is_dir() else p.parent
             return [p], [], []
         return [], ([token] if missing_worthy(token) else []), []
     for base in bases:
         p = Path(os.path.normpath(str(base / token)))
         if p.exists():
+            # 0.23.1：base 可能是原根的上一層，解出來的檔又剛好落在原根底下（散文以專案根上一層寫 root 內的檔）。
+            # 折回工作區，classify()／run_ref_dir()／後續的相對基準才會和在原根上跑出來的一樣。
+            p = resolver.fold(p)
             state['dir'] = p if p.is_dir() else p.parent
             return [p], [], []
     return [], ([token] if missing_worthy(token) else []), []
@@ -673,8 +709,8 @@ class _View:
             if sink is not None and nid not in sink:
                 sink.append(nid)
         for raw in missing:
-            k = kind or classify(Path(os.path.normpath(raw if os.path.isabs(raw) else str(self.root / raw))),
-                                 self.root, from_manifest_files)
+            k = kind or classify(self.res.fold(Path(os.path.normpath(
+                raw if os.path.isabs(raw) else str(self.root / raw)))), self.root, from_manifest_files)
             nid = self.node(Path(raw), k, entry_id, tier, via, missing=True, raw=raw,
                             note=f'{via} 引用，但檔案不存在')
             if sink is not None and nid not in sink:
@@ -875,7 +911,7 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         raw = item['path']
         tier = item.get('tier') or 'supplementary'
         attach = item.get('attach_to') or ''
-        path = Path(os.path.normpath(raw if os.path.isabs(raw) else str(root / raw)))
+        path = v.res.fold(Path(os.path.normpath(raw if os.path.isabs(raw) else str(root / raw))))
         kind = item.get('kind') or classify(path, root)
         if attach and not any(e['id'] == attach for e in v.entries):
             v.warnings.append(f'{PACKAGE_REL} 的 include {raw} 的 attach_to {attach!r} 不是現有入口：只當手動加入，不掛入口')

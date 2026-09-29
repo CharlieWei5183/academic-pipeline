@@ -46,7 +46,7 @@ import ssot_actions_common as C  # noqa: E402
 from build_repro_package import scan_scripts, write_dependency_files  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
-VERSION = '0.23.0'
+VERSION = '0.23.1'
 MANIFEST_NAME = 'MANIFEST.tsv'
 MANIFEST_COLS = ('packaged_path', 'source_path', 'sha256', 'bytes', 'kind', 'tier', 'entries', 'origin', 'note')
 REJECTED_TEMPLATE = ('不覆寫既有的打包資料夾（撞名一律加 _2、_3…）、不在有缺檔時硬打包、'
