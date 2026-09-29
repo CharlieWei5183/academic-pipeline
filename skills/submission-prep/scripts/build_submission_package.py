@@ -231,7 +231,7 @@ def write_package(root: Path, view: dict, rows: list[dict], out: Path, date: str
     (out / 'README.md').write_text(build_readme(view, rows, root, out.name, date), encoding='utf-8')
     zip_path = None
     if zip_it:
-        zip_path = out.with_suffix('.zip')
+        zip_path = Path(str(out) + '.zip')   # 不用 with_suffix：--out 帶點號時會被吃掉
         if zip_path.exists():
             raise ChainError(f'{zip_path} 已存在（永不覆寫）')
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -404,7 +404,7 @@ def run_apply(root: Path, args: argparse.Namespace, view: dict, rows: list[dict]
         removed = ''
         if out is not None and out.exists():
             shutil.rmtree(out, ignore_errors=True)
-            zp = out.with_suffix('.zip')
+            zp = Path(str(out) + '.zip')
             if zp.exists():
                 zp.unlink()
             removed = f'\n已刪除本次建立的 {out.relative_to(root).as_posix()}（與同名 .zip）'

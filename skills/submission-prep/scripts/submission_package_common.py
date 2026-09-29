@@ -780,9 +780,14 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
     blocking = sorted(nid for nid, n in v.nodes.items() if n['missing'] and not n['excluded'])
     kind_counts = {k: 0 for k in KINDS}
     tier_entries = {t: 0 for t in TIERS}
+    # 位元組與檔數不重複計：落在某個資料夾節點（例如 run 的 `scripts/`）底下的檔案節點，package_files() 會併成同一列
+    dir_prefixes = [nid.rstrip('/') + '/' for nid, n in v.nodes.items()
+                    if n['is_dir'] and not n['excluded'] and not n['missing']]
     for node in v.nodes.values():
         if not node['excluded']:
             kind_counts[node['kind']] = kind_counts.get(node['kind'], 0) + 1
+        node['counted'] = (not node['excluded'] and not node['missing']
+                           and not any(node['id'].startswith(p) for p in dir_prefixes))
     for entry in v.entries:
         if not entry['excluded']:
             tier_entries[entry['tier']] = tier_entries.get(entry['tier'], 0) + 1
@@ -808,8 +813,8 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
             'nodes': sum(1 for n in v.nodes.values() if not n['excluded']),
             'nodes_excluded': sum(1 for n in v.nodes.values() if n['excluded']),
             'nodes_by_kind': kind_counts,
-            'bytes': sum(n['bytes'] for n in v.nodes.values() if not n['excluded'] and not n['missing']),
-            'files': sum(n['n_files'] for n in v.nodes.values() if not n['excluded'] and not n['missing']),
+            'bytes': sum(n['bytes'] for n in v.nodes.values() if n['counted']),
+            'files': sum(n['n_files'] for n in v.nodes.values() if n['counted']),
             'missing': len(missing),
             'blocking_missing': len(blocking),
             'external': sum(1 for n in v.nodes.values() if n['external'] and not n['excluded']),

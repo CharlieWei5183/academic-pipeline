@@ -322,6 +322,11 @@ def test_dedup(tmp: Path) -> None:
     assert len(paths) == len(set(paths)), '落點相同的來源要併成一列，不重複複製'
     one = next(r for r in rows if r['packaged_path'] == 'code/analysis/runs/RUN_A/scripts/a.py')
     assert sorted(one['entries']) == ['G_main', 'cur_a'], one['entries']
+    # stats 的位元組與檔數不得重複計（分頁會顯示這兩個數字，要與實際要複製的檔一致）
+    assert v['stats']['bytes'] == sum(r['bytes'] for r in rows), (v['stats']['bytes'], sum(r['bytes'] for r in rows))
+    assert v['stats']['files'] == len(rows), (v['stats']['files'], len(rows))
+    assert not v['nodes']['analysis/runs/RUN_A/scripts/a.py']['counted'], '已落在 scripts/ 資料夾節點底下，不重複計'
+    assert v['nodes']['analysis/runs/RUN_A/scripts']['counted']
     print('  規格 6 去重與最高帶 ok')
 
 
