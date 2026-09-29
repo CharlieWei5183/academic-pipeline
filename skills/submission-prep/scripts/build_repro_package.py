@@ -87,6 +87,50 @@ def manifest_entries(value):
     return []
 
 
+def scan_scripts(items):
+    """掃描腳本的相依套件與隨機種子。items 每項是 Path，或 (顯示用標籤, Path)。
+
+    回 (py_pkgs, r_pkgs, seeded, unseeded)——後兩者裝標籤，順序照 items。這是 build_repro_package 與
+    build_submission_package 共用的唯一一份掃描規則（0.22.0 從 main() 原地抽出，規則本身未改）。
+    """
+    py_pkgs, r_pkgs, seeded, unseeded = set(), set(), [], []
+    for item in items:
+        label, path = item if isinstance(item, tuple) else (item, item)
+        path = Path(path)
+        try:
+            src = path.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        if path.suffix == '.py':
+            for mod in IMPORT_RE.findall(src):
+                if mod not in STDLIB:
+                    py_pkgs.add(PYPI_ALIAS.get(mod, mod))
+        elif path.suffix.lower() in ('.r', '.rmd'):
+            r_pkgs.update(R_LIB_RE.findall(src))
+        (seeded if SEED_RE.search(src) else unseeded).append(label)
+    return py_pkgs, r_pkgs, seeded, unseeded
+
+
+def write_dependency_files(out, py_pkgs, r_pkgs):
+    """寫 requirements.txt／r-packages.txt（與 scan_scripts 同一份規則，供兩支打包 CLI 共用）。"""
+    out = Path(out)
+    written = []
+    if py_pkgs:
+        lines = []
+        for p in sorted(py_pkgs):
+            v = pkg_version(p)
+            lines.append(f'{p}=={v}' if v else f'{p}  # 版本未偵測到，請人工鎖定')
+        (out / 'requirements.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        written.append('requirements.txt')
+    if r_pkgs:
+        (out / 'r-packages.txt').write_text(
+            '\n'.join(sorted(r_pkgs)) +
+            '\n# 建議以 renv::snapshot() 產生 renv.lock 鎖定版本\n',
+            encoding='utf-8')
+        written.append('r-packages.txt')
+    return written
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -273,20 +317,14 @@ def main():
         warnings.append(f'{scripts_dir} 不存在，未複製任何腳本')
 
     # 檢查引用的 script 是否存在；掃描相依與種子
-    py_pkgs, r_pkgs, seeded, unseeded = set(), set(), [], []
+    pairs = []
     for script in order:
         path = resolve(root, script)
         if path is None:
             blockers.append(f'{script} 被 results/manifest 引用但檔案不存在')
             continue
-        src = path.read_text(encoding='utf-8', errors='replace')
-        if path.suffix == '.py':
-            for mod in IMPORT_RE.findall(src):
-                if mod not in STDLIB:
-                    py_pkgs.add(PYPI_ALIAS.get(mod, mod))
-        elif path.suffix.lower() in ('.r', '.rmd'):
-            r_pkgs.update(R_LIB_RE.findall(src))
-        (seeded if SEED_RE.search(src) else unseeded).append(script)
+        pairs.append((script, path))
+    py_pkgs, r_pkgs, seeded, unseeded = scan_scripts(pairs)
     if unseeded and not seeded:
         warnings.append('所有腳本都未見顯式隨機種子設定——若含隨機成分，'
                         '結果將不可位元級重現')
@@ -294,18 +332,7 @@ def main():
         warnings.append('下列腳本未見顯式隨機種子: ' + ', '.join(unseeded))
 
     # requirements.txt / r-packages.txt
-    if py_pkgs:
-        lines = []
-        for p in sorted(py_pkgs):
-            v = pkg_version(p)
-            lines.append(f'{p}=={v}' if v else f'{p}  # 版本未偵測到，請人工鎖定')
-        (out / 'requirements.txt').write_text('\n'.join(lines) + '\n',
-                                              encoding='utf-8')
-    if r_pkgs:
-        (out / 'r-packages.txt').write_text(
-            '\n'.join(sorted(r_pkgs)) +
-            '\n# 建議以 renv::snapshot() 產生 renv.lock 鎖定版本\n',
-            encoding='utf-8')
+    write_dependency_files(out, py_pkgs, r_pkgs)
 
     try:
         import yaml
