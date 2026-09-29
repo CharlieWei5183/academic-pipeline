@@ -38,6 +38,10 @@ fixture 沿用 v0.16.1 的 build_fixture，再加 run 資料夾（scripts／repo
   徽章；HTML 有 tab-submission、分頁按鈕與 #submission 的 hash 路由，分頁內不得再有任何 SVG 或連線圖時期的
   class；渲染決定性。另含關聯分頁的不變量：crossing_stats 沒有多出參數、_lane_x 超量仍折回重用、#tab-relations
   與里程／文獻的 markup 與沒有投稿資料時逐字相同、build_submission 不得動到 graph。
+- 規格 14（run 參照）：自由文字 token resolve 到 run 資料夾本身時當成 run 參照——展開成 scripts/ 資料夾節點、
+  report.md／status.json 與 input_snapshot 群組（＝結果鍵 run_id 那一套），run 資料夾本身不成節點、run 內其餘
+  檔案不夾帶；run 內缺 report.md／status.json／input_snapshot 就各自跳過、不建群組也不報錯；token 指到 run 內
+  更深的路徑照舊逐條宣告；同一個實體檔不會同時落 code/ 與 results/。
 - 規格 9（既有回歸）：build_repro_package.py 抽出 scan_scripts／write_dependency_files 後行為不變；
   set_tier 相關的 v0.20.0 回歸與 ssot_actions_common 的工作區改動（COPY_FILES 加 submission/package.yaml）
   不影響既有動作。
@@ -1032,6 +1036,81 @@ def test_server_chain(tmp: Path) -> None:
     print('  規格 13 server POST 全鏈 ok')
 
 
+# =====================================================================================================
+# 規格 14：散文點名 run 資料夾本身＝run 參照
+# =====================================================================================================
+
+def test_run_reference(tmp: Path) -> None:
+    root = variant(tmp, 'runref')
+    ref = root / 'analysis/runs/RUN_REF'
+    (ref / 'scripts').mkdir(parents=True, exist_ok=True)
+    (ref / 'scripts/r1.R').write_text('library(mgcv)\nset.seed(42)\n', encoding='utf-8')
+    (ref / 'scripts/r2.R').write_text('library(mgcv)\nset.seed(42)\n', encoding='utf-8')
+    (ref / 'report.md').write_text('# RUN_REF 報告\n', encoding='utf-8')
+    (ref / 'status.json').write_text('{"status": "ok"}\n', encoding='utf-8')
+    (ref / 'reports').mkdir(parents=True, exist_ok=True)
+    (ref / 'reports/deep.tsv').write_text('v\n1\n', encoding='utf-8')
+    (ref / 'figures').mkdir(parents=True, exist_ok=True)
+    (ref / 'figures/inner.png').write_text('x\n', encoding='utf-8')     # 只有「整個資料夾一個節點」才會夾帶到的檔
+    (ref / 'input_snapshot').mkdir(parents=True, exist_ok=True)
+    (ref / 'input_snapshot/snap.csv').write_text('id\n1\n', encoding='utf-8')
+    (ref / 'input_snapshot/source_hashes.tsv').write_text(_hash_table(
+        'role source_abs sha256 bytes', [('data_input', str(root / 'data/raw.csv'), 'a' * 64, '10')]), encoding='utf-8')
+
+    bare = root / 'analysis/runs/RUN_BARE'      # 只有 scripts/：沒有 report.md／status.json／input_snapshot
+    (bare / 'scripts').mkdir(parents=True, exist_ok=True)
+    (bare / 'scripts/s.R').write_text('library(mgcv)\nset.seed(42)\n', encoding='utf-8')
+
+    figdir = root / 'analysis/figures'
+    (figdir / 'g_ref.svg').write_text('x\n', encoding='utf-8')
+    mpath = figdir / 'manifest.json'
+    man = json.loads(mpath.read_text(encoding='utf-8'))
+    man['figures'].append(
+        {'id': 'G_ref', 'files': ['analysis/figures/g_ref.svg'], 'type': 'figure', 'role': 'main',
+         'figure_number': 'Fig. 2', 'results_keys': [], 'status': 'registered_not_reviewed',
+         'caption': '散文點名整個 run 的圖。',
+         'unregistered_sources': [
+             '資料檔與舊 run analysis/runs/RUN_REF 逐位元相同（講出處，不是宣告整個資料夾都要上傳）',
+             '數值取自 analysis/runs/RUN_REF/reports/deep.tsv；另一個 analysis/runs/RUN_BARE 也一併點名']})
+    mpath.write_text(json.dumps(man, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+    v = view_of(root)
+    n = nodes(v)
+    # run 資料夾本身不成節點：點名整個 run 是 run 參照，不是「這幾百個檔都要上傳」
+    assert 'analysis/runs/RUN_REF' not in n, 'run 資料夾本身不該成為一個節點'
+    assert 'analysis/runs/RUN_BARE' not in n, 'run 資料夾本身不該成為一個節點'
+    assert 'analysis/runs/RUN_REF/figures/inner.png' not in n, 'run 參照只展開 run 規則的項目，不夾帶其餘檔案'
+    # 展開方式與結果鍵 run_id 完全相同
+    sd = n['analysis/runs/RUN_REF/scripts']
+    assert sd['kind'] == 'code' and sd['is_dir'] and sd['n_files'] == 2, sd
+    assert sd['packaged_path'] == 'code/analysis/runs/RUN_REF/scripts', sd['packaged_path']
+    assert n['analysis/runs/RUN_REF/report.md']['kind'] == 'result'
+    assert n['analysis/runs/RUN_REF/status.json']['kind'] == 'result'
+    assert n['analysis/runs/RUN_REF/input_snapshot/snap.csv']['kind'] == 'data'
+    g = v['groups']['runinput:RUN_REF']
+    assert g['entries'] == ['G_ref'] and g['tier'] == 'main', g
+    assert g['scripts'] == 'analysis/runs/RUN_REF/scripts', g['scripts']
+    for m in ('analysis/runs/RUN_REF/input_snapshot/snap.csv',
+              'analysis/runs/RUN_REF/input_snapshot/source_hashes.tsv', 'data/raw.csv'):
+        assert m in g['members'], (m, g['members'])
+    assert 'data/raw.csv' in n, 'hash 表的 cell 照樣往回追'
+    # run 內缺哪一項就跳過哪一項：RUN_BARE 只有 scripts/，不建群組、不報錯
+    assert 'runinput:RUN_BARE' not in v['groups'], v['groups'].keys()
+    assert n['analysis/runs/RUN_BARE/scripts']['kind'] == 'code'
+    assert 'analysis/runs/RUN_BARE/report.md' not in n and 'analysis/runs/RUN_BARE/status.json' not in n
+    # 指到 run 內更深的路徑照舊逐條宣告
+    deep = n['analysis/runs/RUN_REF/reports/deep.tsv']
+    assert deep['itemized'] and not deep['is_dir'] and 'G_ref' in deep['entries'], deep
+    assert 'analysis/runs/RUN_REF/reports' not in n, '深層檔案不會反過來把它的資料夾也收進來'
+    # 同一支腳本不會同時落 code/ 與 results/（run 參照修掉的正是這個重複）
+    rows = S.package_files(v)
+    assert len({r['packaged_path'] for r in rows}) == len(rows), '落點撞名'
+    srcs = [r['source_path'] for r in rows]
+    assert len(set(srcs)) == len(srcs), '同一個實體檔被複製成兩份'
+    assert not any(r['packaged_path'].startswith('results/analysis/runs/RUN_REF/scripts/') for r in rows), rows
+    print('  規格 14 run 參照 ok')
+
+
 def test_existing_suites() -> None:
     """set_tier 相關的既有回歸整份跑一次，確認 ssot_actions_common 的改動沒壞舊動作。"""
     for name in ('run_v0200_regressions.py', 'run_v0190_regressions.py', 'run_v0180_regressions.py'):
@@ -1050,7 +1129,7 @@ def main() -> int:
     try:
         for fn in (test_entries, test_bands, test_free_text, test_runs, test_external_and_kinds,
                    test_dedup, test_build, test_edit, test_existing, test_tab,
-                   test_stats_match_package, test_action_kinds, test_server_chain):
+                   test_stats_match_package, test_action_kinds, test_server_chain, test_run_reference):
             fn(tmp)
         test_existing_suites()
     finally:

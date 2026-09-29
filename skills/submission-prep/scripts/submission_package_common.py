@@ -23,6 +23,11 @@
   `input_snapshot/` 內除 hash 表以外的實體檔、`input_snapshot/` 內 `*hash*.tsv` 每個 cell 能 resolve
   成檔案者。這些輸入檔一律走 `input_kind()`：副檔名屬 CODE_SUFFIXES 或位於任一 `scripts/` 之下 → code
   （hash 表會把上游腳本一起列進來），其餘 → data。run 資料夾不存在 → 缺檔節點。
+- run 參照：自由文字欄位（`script`、`registered_sources`、`unregistered_sources`…）的 token resolve 到
+  **run 資料夾本身**（`analysis/runs/` 的直接子資料夾）時，當成 run 參照，展開方式與結果鍵的 `run_id`
+  完全相同（共用 `_expand_run()`），**不把整個 run 資料夾收成一個節點**——散文點名整個 run 多半是在講
+  出處或比對對象，不是宣告「這幾百個檔都要上傳」。token 指到 run 內更深的路徑
+  （`<run>/reports/x.tsv`、`<run>/reports/`）不受影響，照舊逐條宣告。
 - 資料只追一層（run 的直接輸入），不遞迴到上游 run 或 raw；要更多請用 `package_edit.py` 手動加。
 
 群組（`groups`；只影響呈現）：節點粒度跟著 SSOT 的宣告粒度走。一個 run 的 `input_snapshot/` 是「這個
@@ -321,6 +326,20 @@ def input_kind(path: Path) -> str:
     if path.suffix.lower() in CODE_SUFFIXES or 'scripts' in path.parts:
         return 'code'
     return 'data'
+
+
+def run_ref_dir(root: Path, path: Path) -> Path | None:
+    """resolve 到的是不是「run 資料夾本身」（`analysis/runs/` 的直接子資料夾）？是就回那個資料夾，不是回 None。
+
+    散文常順手點名整個 run（「資料檔與舊 run analysis/runs/<run_id> 逐位元相同」），抽路徑規則會 resolve 到
+    run 這一層。那句話是一個 run 參照，不是「這整個資料夾都要上傳」的宣告，所以呼叫端改照 run 規則展開
+    （見 `_expand_run()`）。指到 run 內更深的路徑（`<run>/reports/x.tsv`、`<run>/reports/`）不算 run 參照，
+    照舊逐條宣告。`analysis/runs` 這個慣例目錄與 `_trace_result_key()` 用的是同一個常數。
+    """
+    if not path.is_dir():
+        return None
+    runs = Path(os.path.normpath(str(root / RUNS_REL)))
+    return path if Path(os.path.normpath(str(path.parent))) == runs else None
 
 
 def dir_stat(path: Path) -> tuple[int, int, int]:
@@ -635,6 +654,11 @@ class _View:
         for w in warns:
             self.warnings.append(f'{entry_id} 的 {via}：{w}')
         for path in found:
+            run_dir = run_ref_dir(self.root, path)
+            if run_dir is not None:
+                # 散文點名 run 資料夾本身＝run 參照：照結果鍵 run_id 那一套展開，不把整個 run 收成一個節點
+                _expand_run(self, run_dir.name, run_dir, entry_id, tier, f'{via} 點名的 run')
+                continue
             self.node(path, kind or classify(path, self.root, from_manifest_files), entry_id, tier, via)
         for raw in missing:
             k = kind or classify(Path(os.path.normpath(raw if os.path.isabs(raw) else str(self.root / raw))),
@@ -642,6 +666,49 @@ class _View:
             self.node(Path(raw), k, entry_id, tier, via, missing=True, raw=raw,
                       note=f'{via} 引用，但檔案不存在')
         return len(found), len(missing)
+
+
+def _expand_run(v: _View, run_id: str, run_dir: Path, entry_id: str, tier: str, via: str) -> None:
+    """一個 run 的宣告粒度展開（run 資料夾存在才呼叫）。
+
+    展開的項目：`scripts/` 整個資料夾一個 code 節點、`report.md` 與 `status.json` 為 result、
+    `input_snapshot/` 內的實體檔與其 hash 表 cell 追到的來源檔收成 `runinput:<run_id>` 群組。
+    run 內缺哪一項就跳過哪一項。
+
+    結果鍵的 `run_id` 欄與「散文點名 run 資料夾本身」共用這一份規則，兩條路徑展出來的節點完全一樣。
+    """
+    scripts_dir = run_dir / 'scripts'
+    scripts_nid = ''
+    if scripts_dir.is_dir():
+        scripts_nid = v.node(scripts_dir, 'code', entry_id, tier, f'{via}.scripts',
+                             note='run 的腳本資料夾（宣告粒度＝run，整個資料夾一個節點）')
+    for name in ('report.md', 'status.json'):
+        p = run_dir / name
+        if p.is_file():
+            v.node(p, 'result', entry_id, tier, f'{via}.{name}')
+    snap = run_dir / 'input_snapshot'
+    if not snap.is_dir():
+        return
+    # 「這個 run 的輸入」是一個宣告單位 → 收成一個群組（組內各檔保留自己的 kind 與自己的節點）
+    gid = f'{GROUP_PREFIX}{run_id}'
+    v.group(gid, run_id, tier, entry_id, scripts_nid)
+    tables: list[Path] = []
+    for child in sorted(snap.rglob('*')):
+        if not child.is_file() or child.is_symlink():
+            continue
+        if HASH_TABLE_RE.search(child.name):
+            tables.append(child)
+        else:
+            v.node(child, input_kind(child), entry_id, tier, f'{via}.input_snapshot', group=gid)
+    for table in tables:
+        v.node(table, input_kind(table), entry_id, tier, f'{via}.input_snapshot', group=gid)
+        found, missing = hash_table_cells(table, v.res)
+        rel_table = table.relative_to(v.root).as_posix()
+        for path in found:
+            v.node(path, input_kind(path), entry_id, tier, f'{rel_table} 的 cell', group=gid)
+        for raw in missing:
+            v.node(Path(raw), input_kind(Path(raw)), entry_id, tier, f'{rel_table} 的 cell', missing=True, raw=raw,
+                   note=f'{rel_table} 列出的來源檔已不在原位', group=gid)
 
 
 def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, prefix: str) -> None:
@@ -664,38 +731,7 @@ def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, p
         v.node(Path(rel), 'result', entry_id, tier, f'{prefix}run_id', missing=True, raw=rel,
                note=f'results.json#{key}.run_id 指到 {rel}，但該資料夾不存在，script 欄也沒有指到任何實體檔')
         return
-    scripts_dir = run_dir / 'scripts'
-    scripts_nid = ''
-    if scripts_dir.is_dir():
-        scripts_nid = v.node(scripts_dir, 'code', entry_id, tier, f'{prefix}run_id.scripts',
-                             note='run 的腳本資料夾（宣告粒度＝run，整個資料夾一個節點）')
-    for name in ('report.md', 'status.json'):
-        p = run_dir / name
-        if p.is_file():
-            v.node(p, 'result', entry_id, tier, f'{prefix}run_id.{name}')
-    snap = run_dir / 'input_snapshot'
-    if not snap.is_dir():
-        return
-    # 「這個 run 的輸入」是一個宣告單位 → 收成一個群組（組內各檔保留自己的 kind 與自己的節點）
-    gid = f'{GROUP_PREFIX}{run_id}'
-    v.group(gid, run_id, tier, entry_id, scripts_nid)
-    tables: list[Path] = []
-    for child in sorted(snap.rglob('*')):
-        if not child.is_file() or child.is_symlink():
-            continue
-        if HASH_TABLE_RE.search(child.name):
-            tables.append(child)
-        else:
-            v.node(child, input_kind(child), entry_id, tier, f'{prefix}run_id.input_snapshot', group=gid)
-    for table in tables:
-        v.node(table, input_kind(table), entry_id, tier, f'{prefix}run_id.input_snapshot', group=gid)
-        found, missing = hash_table_cells(table, v.res)
-        rel_table = table.relative_to(v.root).as_posix()
-        for path in found:
-            v.node(path, input_kind(path), entry_id, tier, f'{rel_table} 的 cell', group=gid)
-        for raw in missing:
-            v.node(Path(raw), input_kind(Path(raw)), entry_id, tier, f'{rel_table} 的 cell', missing=True, raw=raw,
-                   note=f'{rel_table} 列出的來源檔已不在原位', group=gid)
+    _expand_run(v, run_id, run_dir, entry_id, tier, f'{prefix}run_id')
 
 
 def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str, list[dict]] | None = None) -> dict:
