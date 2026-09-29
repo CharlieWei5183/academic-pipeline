@@ -24,13 +24,14 @@
    當成專案檔。寫入前先 `unlink`，避免巢狀時寫穿符號連結改到上一層工作區的標記。
 4. **沒動到的**：`submission_preview.py` 的縮圖快取鍵本來就用 `path.resolve()`（符號連結已經解到原檔），
    工作區與原根算出同一把鍵，不必改。`build_submission_package.py` 走的是 `derive()` 的落點，跟著一起修好。
-5. **測試**：新增 `tests/run_v0231_regressions.py`（五項規格）。fixture 在 v0.23.0 的基礎上多一個**只**以
+5. **測試**：新增 `tests/run_v0231_regressions.py`（六項規格）。fixture 在 v0.23.0 的基礎上多一個**只**以
    專案根上一層寫的外部資料夾——v0.23.0 原有的 `ext_sib/x.csv` 另外被 hash 表以絕對路徑點名，絕對路徑在
    工作區裡照樣 resolve 得到，光靠它咬不到這個 bug。規格 1 比對工作區與原根的 `derive()` 逐節點相同
    （`abs` 與 `mtime_ns` 除外）；規格 2 用 `run_batch.py --dry-run` 送兩步 `package_edit` 重現使用者那串；
    規格 3 驗 include 的界線——`/tmp` 底下但在專案根上一層之外的檔**必須被拒**（這是會咬人的那一條，
-   0.23.0 在工作區會放行）；規格 4 驗標記檔不被當成專案檔、巢狀工作區指回最原始的根；規格 5 跑
-   `run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d`。既有斷言一條都沒改。
+   0.23.0 在工作區會放行）；規格 4 驗標記檔不被當成專案檔、巢狀工作區指回最原始的根；規格 5 驗登記（CHANGELOG、`plugin.json`、
+   三支腳本的 `VERSION`、`tests/README.md`）；規格 6 跑 `run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／
+   `run_literature3d`。既有斷言一條都沒改。
 6. **登記**：CHANGELOG、`tests/README.md`、`plugin.json` 0.23.1；三支 submission-prep 腳本的 `VERSION`。
 
 ## 0.23.0（2026-09-29）

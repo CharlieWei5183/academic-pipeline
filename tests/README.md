@@ -520,5 +520,5 @@ dry-run 工作區裡的「專案根上一層」——`.ssot-workspace-origin` �
 - 規格 2（批次預覽不再誤判）：`run_batch.py --dry-run` 送兩步 `package_edit`（移除一個只以上一層寫的外部資料夾＋移除一個 root 內的檔）rc=0，輸出不得出現「沒有這個節點可移除」；整份專案零寫入。
 - 規格 3（include 的界線以原根的上一層為準）：在工作區與在原根上都一樣——root 內的與 root 上一層的通過、再外面的（`/tmp` 底下但不在專案根上一層之下）**被拒**；`validate_payload('package_edit', …)` 走同一條界線。這是會咬人的那一條：0.23.0 在工作區會誤放行。
 - 規格 4（標記檔不是專案檔）：加不加標記檔，`rerun_all --fingerprint-only` 與 `check_validation` 的 rc 與輸出逐字相同；標記檔不出現在 PROGRESS 頁面，也不成為 `derive()` 的節點；工作區再開工作區時標記指回最原始那個根，且不是符號連結。
-- 規格 5（既有回歸）：`run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d` 完整跑一次。
-- 登記錨點：CHANGELOG `## 0.23.1`；本檔含 `run_v0231_regressions.py`；`plugin.json` ≥ 0.23.1；三支 submission-prep 腳本的 `VERSION` 為 0.23.1；相關檔不含 arm 的直譯字（U+81C2）。
+- 規格 5（登記）：CHANGELOG 開頭就是 `## 0.23.1`；`plugin.json` ≥ 0.23.1；三支 submission-prep 腳本的 `VERSION` 為 0.23.1；本檔含 `run_v0231_regressions.py`；相關檔不含 arm 的直譯字（U+81C2）。
+- 規格 6（既有回歸）：`run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d` 完整跑一次。
