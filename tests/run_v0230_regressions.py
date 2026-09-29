@@ -740,22 +740,25 @@ def test_tab(tmp: Path) -> None:
             seen_e[eid] = c['id']
     assert seen_e.keys() == {e['id'] for e in sub['entries']}, '每個入口都要落在某張卡上'
 
-    # ---- 五欄；後兩欄沒有就不顯示 ----
+    # ---- 五欄必在、空欄顯示「無」（2026-09-29 使用者裁定：跨卡欄位要對齊，沒東西就寫無）----
     for c in ana['cards']:
         assert set(c['cols']) == set(rp.SUB_ANA_COL_IDS), c['id']
+    for c in ana['cards']:
+        body_any = '\n'.join(rp._sub_card_html(sub, c))
+        assert body_any.count('class="sub-cell c-') == 5, (c['id'], '每張卡一律五欄')
+        for cid in rp.SUB_ANA_COL_IDS:
+            assert f'class="sub-cell c-{cid}"' in body_any, (c['id'], cid)
     body = '\n'.join(rp._sub_card_html(sub, cards['RUN_LBL']))
-    n_cells = body.count('class="sub-cell c-')      # 外層容器是 class="sub-cells"，別一起數進來
-    assert n_cells == int(re.search(r'data-cols="(\d+)"', body).group(1)) == 4, \
-        (n_cells, re.findall(r'class="sub-cell c-(\w+)"', body), cards['RUN_LBL']['cols'])
-    assert 'c-figscript' not in body, 'RUN_LBL 的作圖腳本就是它的分析腳本（兼作圖），不重列一欄'
     assert 'c-figure' in body, '有圖表就要有圖／表欄'
-    body_c = '\n'.join(rp._sub_card_html(sub, cards['RUN_C']))
-    assert body_c.count('class="sub-cell c-') == 5, '五欄都有內容時就是五欄'
+    # RUN_LBL 的作圖腳本就是它的分析腳本（兼作圖）：不重列，所以作圖／表腳本欄是空的、寫「無」
+    figscript_cell = re.search(r'<div class="sub-cell c-figscript">.*?</div></div>', body, re.S).group(0)
+    assert '<span class="sub-none">無</span>' in figscript_cell, figscript_cell[:200]
     no_fig = next((c for c in ana['cards'] if not c['figures'] and not c['cols']['figure']
                    and not c['cols']['figscript']), None)
     assert no_fig is not None, 'fixture 要有一張沒有圖表也沒有作圖腳本的卡'
     body_n = '\n'.join(rp._sub_card_html(sub, no_fig))
-    assert body_n.count('class="sub-cell c-') == 3 and 'c-figure' not in body_n, no_fig['id']
+    assert body_n.count('class="sub-cell c-') == 5, no_fig['id']
+    assert body_n.count('<span class="sub-none">無</span>') >= 2, (no_fig['id'], '空欄要寫「無」')
 
     # ---- 圖表的主要分析與「作圖腳本跟著圖表走」----
     def card_of(eid: str) -> str:
@@ -838,6 +841,15 @@ def test_tab(tmp: Path) -> None:
     html = rp.render_html(ir, root, [])
     i = html.index('<section id="tab-submission"')
     sec = html[i:html.index('<script', i)]      # 下一個 <script> 就是 IR JSON，投稿分頁到那裡為止
+    assert 'data-cols=' not in html, '欄寬不再依內容變，data-cols 這個開關要拿掉'
+    assert '.sub-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))' in html, \
+        '五欄一律等寬，跨卡的欄線才對得齊'
+    for cid in rp.SUB_ANA_COL_IDS:
+        assert f'class="sub-cell c-{cid}"' in sec, f'每張卡都要有 {cid} 欄'
+    assert '（無）' not in sec, '空欄一律寫「無」，不寫「（無）」'
+    # 段落標題與卡片標題要比內文大一級（使用者要求「顯眼一點」）
+    assert '.sub-band-head{' in html and 'font-size:1.4rem' in html, '段落標題要放大'
+    assert '.sub-card-head .sub-id{font-size:1.15rem' in html, '分析卡標題要放大'
     for anchor in ('data-tab="submission"', '>投稿檔案<',
                    "['milestones','relations','literature','submission']"):
         assert anchor in html, anchor

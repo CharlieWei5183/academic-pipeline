@@ -3289,6 +3289,8 @@ SUB_ENTRY_FIELDS = ('id', 'kind', 'tier', 'label', 'type', 'figure_number', 'rol
 SUB_ENTRY_PREFIX = {'figure': 'ef:', 'result': 'er:'}   # 入口 id 在 manifest 與 results.json 之間可能撞名，圖上的節點 id 加前綴
 SUB_STAT_KEYS = ('entries', 'entries_excluded', 'entries_by_tier', 'entries_by_kind', 'nodes', 'nodes_excluded',
                  'nodes_by_kind', 'bytes', 'files', 'missing', 'blocking_missing', 'external', 'added')
+# 圖表縮圖預覽走了哪條路徑（submission_preview.ROUTES；那支模組載不進來時 IR 驗證仍要認得這些值）
+SUB_PREVIEW_ROUTES = ('raster', 'svg', 'pdf', 'office', 'text', 'none')
 
 
 def _sub_stats_zero() -> dict:
@@ -3326,7 +3328,38 @@ def _sub_empty(error: str = '', present: bool = False) -> dict:
             'warnings': [], 'stats': _sub_stats_zero()}
 
 
-def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
+def attach_previews(root: Path, out: dict, write_cache: bool = True) -> None:
+    """給每個圖表項補一份 `preview`（縮圖）。**只是預覽，不進打包**：打包走 package_files()，看不到這裡。
+
+    `write_cache=False`（render 的 `--dry-run`）時連使用者層級快取都不寫，沒命中就在記憶體產生、用完即丟。
+    模組載不進來或整批出例外時每一項都給空預覽（頁面顯示「無預覽」），分頁照常。
+    """
+    figs = [f for c in ((out.get('analyses') or {}).get('cards') or []) for f in (c.get('figures') or [])]
+    if not figs:
+        return
+    try:
+        import submission_preview as PV
+    except Exception as exc:
+        for f in figs:
+            f['preview'] = {'route': 'none', 'source': '', 'mime': '', 'bytes': 0, 'data_uri': '', 'src': '',
+                            'embedded': False, 'cached': False, 'note': '', 'error': _one_line(exc)}
+        out['warnings'].append(f'圖表縮圖預覽的模組載不進來（{_one_line(exc)}）；「圖／表」欄改顯示「無預覽」，其餘不受影響')
+        return
+    nodes = out['nodes']
+    pv = PV.Previewer(root, write_cache=write_cache)
+    for f in figs:
+        try:
+            rels = [nodes[n]['path'] for n in (f.get('files') or []) if n in nodes and not nodes[n]['missing']]
+            f['preview'] = pv.preview(rels, kind=f.get('type') or 'figure',
+                                      label=(f.get('figure_number') or '') or f.get('label') or f.get('entry') or '')
+        except Exception as exc:
+            f['preview'] = PV.empty_preview()
+            f['preview']['error'] = _one_line(exc)
+    out['warnings'] += pv.warnings
+    out['preview_stats'] = dict(pv.stats)
+
+
+def build_submission(root: Path, graph_nodes: list[dict], write_cache: bool = True, previews: bool = True) -> dict:
     """投稿檔案分頁的資料（唯讀）：呼叫 derive()，歸帶沿用關聯圖已建好的節點，不重算也不重建 IR。
 
     模組載不進來、或 derive 出例外時回空狀態＋error：分頁照樣出現、只顯示錯誤訊息，不讓整頁渲染失敗。
@@ -3371,6 +3404,8 @@ def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
     except Exception as exc:      # derive 的 schema 與這裡的欄位對不上時同樣不讓整頁掛掉
         return _sub_empty(f'投稿清單的欄位與本頁預期不符（{_one_line(exc)}）')
     _sub_all_entries(out)
+    if previews:
+        attach_previews(root, out, write_cache)
     return out
 
 
@@ -3543,6 +3578,10 @@ def _validate_submission(sub) -> list[str]:
             for fig in c.get('figures') or []:
                 if not isinstance(fig, dict) or fig.get('entry') not in eids:
                     errors.append(f'{pre}.figures')
+                elif 'preview' in fig:
+                    pv = fig['preview']
+                    if not isinstance(pv, dict) or pv.get('route') not in SUB_PREVIEW_ROUTES:
+                        errors.append(f'{pre}.figures[{fig.get("entry")}].preview')
             for gid in c.get('groups') or []:
                 if gid not in (sub.get('groups') or {}):
                     errors.append(f'{pre}.groups {gid}')
@@ -3588,7 +3627,7 @@ def _validate_submission(sub) -> list[str]:
 # ---------- IR ----------
 
 def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False,
-             literature_path: Path | None = None) -> dict:
+             literature_path: Path | None = None, write_cache: bool = True, previews: bool = True) -> dict:
     proj = src.data('project') if src.status('project') == 'ok' else {}
     meta = _dict(proj.get('project'))
     title = _text(meta.get('title_zh')) or _text(meta.get('title_en')) or root.name or str(root)
@@ -3612,7 +3651,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
     graph = build_graph(src, lanes, embed_figures)
     inbox = build_inbox(src, graph)
     literature = build_literature(src, literature_path)
-    submission = build_submission(root, graph['nodes'])
+    submission = build_submission(root, graph['nodes'], write_cache, previews)
     if submission['error']:
         src.warnings.append(f'{submission["source"]}：{submission["error"]}；投稿檔案分頁會顯示錯誤訊息、其他分頁不受影響')
     return {
@@ -6453,7 +6492,6 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
 SUB_ANA_COLS = (('input', '輸入資料'), ('script', '分析腳本'), ('output', '輸出結果'),
                 ('figscript', '作圖／表腳本'), ('figure', '圖／表'))
 SUB_ANA_COL_IDS = tuple(cid for cid, _label in SUB_ANA_COLS)
-SUB_ANA_OPT_COLS = ('figscript', 'figure')      # 這張卡沒有就不顯示這一欄（卡片變三欄）
 SUB_BADGE_SHORT = {'缺檔': '缺檔', 'root 外': '專案外', '手動加入': '手動', '已移除': '已移除',
                    'historical': 'historical', 'run 資料夾不存在': 'run 缺'}
 SUB_BADGE_CLASS = {'缺檔': 'miss', '專案外': 'ext', '手動': 'add', '已移除': 'gone',
@@ -6533,20 +6571,96 @@ def _sub_tip(node: dict, extra: str = '') -> str:
     return '\n'.join(parts)
 
 
-def _sub_acts(remove: str, ref: str, excluded: bool = False, restore_ref: str = '') -> str:
+def _sub_card_of_node(sub: dict) -> dict[str, str]:
+    """檔案節點 → 它落在哪張分析卡（顯示名）。摘要列的缺檔清單只印檔名，所屬分析寫在旁邊。
+
+    共用檔同時屬於好幾張卡，全部列出來（用頓號隔開）；收在資料夾標籤或群組裡的檔跟著收它的那個走。
+    """
+    ana = sub.get('analyses') or {}
+    title_of = {c['id']: (c['run_id'] or SUB_CARD_TITLE.get(c['kind'], c['id'])) for c in (ana.get('cards') or [])}
+    out: dict[str, str] = {}
+    for c in ana.get('cards') or []:
+        ids = [nid for lst in (c.get('cols') or {}).values() for nid in lst]
+        ids += [n for f in (c.get('figures') or []) for n in (f.get('files') or []) + (f.get('values') or [])]
+        ids += [m for g in (c.get('groups') or []) for m in ((ana.get('group_unique') or {}).get(g) or [])]
+        for nid in ids:
+            out.setdefault(nid, title_of.get(c['id'], c['id']))
+    for s in ana.get('shared') or []:
+        out.setdefault(s['node'], '、'.join(title_of.get(a, a) for a in (s.get('cards') or [])))
+    nodes = sub['nodes']
+    for nid, n in sorted(nodes.items()):         # 被資料夾標籤收走的檔跟著收它的那個標籤
+        host, seen = n.get('under') or '', {nid}
+        while nid not in out and host and host in nodes and host not in seen:
+            seen.add(host)
+            if host in out:
+                out[nid] = out[host]
+            host = nodes[host].get('under') or ''
+    return out
+
+
+def _sub_gone_map(sub: dict) -> dict[str, dict]:
+    """已移除的檔案節點 → 它是「自己被移除」還是「隨上層一起移除」。
+
+    判斷只看 `derive()` 的 `excluded[].via`（差量裡真正寫了的那個識別）與群組是否整組移除：
+
+    - `via` 指到別的節點（整個資料夾被移除）→ 連帶，上層＝那個資料夾標籤。
+    - 這個檔所在的 run 輸入群組成員全都移除了 → 連帶，上層＝那個群組標籤（它自己有「整組還原」）。
+    - `via` 空（唯一引用它的入口已移除）→ 連帶，上層＝那個入口（圖表項或結果鍵，各自有「↺」）。
+    - 其餘＝自己被移除，照樣給「↺」；`ref` 用差量裡寫的那個識別，還原才送得出去。
+
+    連帶變灰的檔不給「↺」：按下去等於拿它自己的路徑去還原，差量裡根本沒有這筆，一定失敗。
+    """
+    nodes = sub['nodes']
+    ent = {e['id']: e for e in sub['entries']}
+    grp: dict[str, tuple[str, str]] = {}
+    for gid, members in ((sub.get('analyses') or {}).get('group_unique') or {}).items():
+        mem = [m for m in members if m in nodes]
+        if mem and all(nodes[m]['excluded'] for m in mem):
+            run_id = ((sub.get('groups') or {}).get(gid) or {}).get('run_id', '')
+            for m in mem:
+                grp[m] = (f'g:{gid}', f'{run_id} 的輸入')
+    out: dict[str, dict] = {}
+    for x in sub['excluded']:
+        if x.get('kind') != 'node' or x['id'] not in nodes:
+            continue
+        nid, via = x['id'], x.get('via') or ''
+        if via and via != nid and via in nodes:
+            out[nid] = {'dep': (f'f:{via}', _sub_label(nodes[via]))}
+        elif nid in grp:
+            out[nid] = {'dep': grp[nid]}
+        elif not via:
+            eid = next((e for e in nodes[nid]['entries'] if e in ent and ent[e]['excluded']), '')
+            if eid:
+                e = ent[eid]
+                lab = (e.get('figure_number') + ' ｜ ' if e.get('figure_number') else '') + (e.get('label') or eid)
+                out[nid] = {'dep': (SUB_ENTRY_PREFIX[e['kind']] + eid, lab)}
+        else:
+            out[nid] = {'ref': via}
+    return out
+
+
+def _sub_acts(remove: str, ref: str, excluded: bool = False, restore_ref: str = '', info: dict | None = None) -> str:
     """標籤上的小圖示鈕（hover 才明顯）：依狀態只給一個——還在清單上就只有「×」（移除），
     已移除的就只有「↺」（還原）。兩個並排會讓人以為兩邊都可按，而其中一個對當下狀態一定是無效的。
-    不顯示任何等效命令。"""
+    不顯示任何等效命令。
+
+    隨上層（資料夾、整組、唯一入口）一起變灰的檔連「↺」都不給：改成一行淡色小字「隨 X 移除」，
+    點得到那個上層；還原要在上層做。"""
+    if excluded and (info or {}).get('dep'):
+        goto, label = info['dep']
+        return ('<span class="sub-dep">隨 '
+                f'<span class="goto" data-sgoto="{_h(goto)}">{_h(label)}</span> 移除</span>')
     if excluded:
         return ('<span class="ca">'
-                f'<button type="button" class="ib" data-saction="restore" data-ref="{_h(restore_ref or ref)}" '
+                f'<button type="button" class="ib" data-saction="restore" '
+                f'data-ref="{_h(restore_ref or (info or {}).get("ref") or ref)}" '
                 'title="還原" aria-label="還原" disabled>↺</button></span>')
     return ('<span class="ca">'
             f'<button type="button" class="ib" data-saction="{remove}" data-ref="{_h(ref)}" '
             'title="移除" aria-label="移除" disabled>×</button></span>')
 
 
-def _sub_member_row(sub: dict, nid: str, mark: str = '') -> str:
+def _sub_member_row(sub: dict, nid: str, mark: str = '', gone: dict[str, dict] | None = None) -> str:
     """可展開標籤裡的一列成員：相對路徑、大小、分類與標記，各自有移除／還原。"""
     n = sub['nodes'].get(nid)
     if n is None:
@@ -6558,10 +6672,10 @@ def _sub_member_row(sub: dict, nid: str, mark: str = '') -> str:
             f'<span class="cs">{_h(_sub_chip_size(n))}</span> '
             f'<span class="mk">{_h(SUB_KIND_LABEL.get(n["kind"], n["kind"]))}'
             + (('・' + '・'.join(marks)) if marks else '') + '</span>'
-            + _sub_acts('exclude', n['path'], n['excluded']) + '</li>')
+            + _sub_acts('exclude', n['path'], n['excluded'], info=(gone or {}).get(nid)) + '</li>')
 
 
-def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '') -> str:
+def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '', gone: dict[str, dict] | None = None) -> str:
     """一個檔案標籤。資料夾一律收合成 `<details>`（收合與否只看型別，不看數量），單檔直接顯示。"""
     n = sub['nodes'][nid]
     cls = ('sub-chip k-' + n['kind'] + (' is-miss' if n['missing'] else '')
@@ -6570,20 +6684,20 @@ def _sub_file_chip(sub: dict, nid: str, tag: str = '', label: str = '') -> str:
             f'<span class="cs">{_h(_sub_chip_size(n))}</span>'
             + _sub_bhtml(_sub_badges(n))
             + (f'<span class="tag">{_h(tag)}</span>' if tag else '')
-            + _sub_acts('exclude', n['path'], n['excluded']))
+            + _sub_acts('exclude', n['path'], n['excluded'], info=(gone or {}).get(nid)))
     if n['is_dir'] and not n['missing']:
         inside = sorted(k for k, m in sub['nodes'].items() if m['under'] == nid and not m['own'])
         named = {k for k in inside
                  if any(v == 'script' or v.endswith('.script') for v in sub['nodes'][k]['via'])}
         return (f'<details class="{cls}" data-snode="f:{_h(nid)}" title="{_h(_sub_tip(n))}">'
                 f'<summary>{head}</summary><ul class="sub-members">'
-                + ''.join(_sub_member_row(sub, k, 'script 欄點名' if k in named else '') for k in inside)
+                + ''.join(_sub_member_row(sub, k, 'script 欄點名' if k in named else '', gone) for k in inside)
                 + '</ul></details>')
     return (f'<span class="{cls}" data-snode="f:{_h(nid)}" title="{_h(_sub_tip(n))}" tabindex="0" role="button">'
             f'{head}</span>')
 
 
-def _sub_group_chip(sub: dict, gid: str) -> str:
+def _sub_group_chip(sub: dict, gid: str, gone: dict[str, dict] | None = None) -> str:
     """run 的 `input_snapshot/` 群組：一個宣告單位一個可展開標籤。
 
     共用檔已移到頁首共用區、另有自己標籤的檔在同一欄已經列過（derive 的 `group_unique` 都扣掉了），
@@ -6599,9 +6713,9 @@ def _sub_group_chip(sub: dict, gid: str) -> str:
     badges = (['缺檔'] if any(x['missing'] for x in mem) else []) \
         + (['專案外'] if any(x['external'] for x in mem) else []) \
         + (['已移除'] if mem and all(x['excluded'] for x in mem) else [])
-    gone = bool(mem) and all(x['excluded'] for x in mem)
+    all_gone = bool(mem) and all(x['excluded'] for x in mem)
     # 依狀態只給一個圖示鈕：整組還在就只有「×」（整組移除），整組已移除就只有「↺」（整組還原）。
-    act = (('restore-group', '整組還原', '↺') if gone else ('exclude-group', '整組移除', '×'))
+    act = (('restore-group', '整組還原', '↺') if all_gone else ('exclude-group', '整組移除', '×'))
     head = (f'<span class="cl">{_h(g["run_id"])} 的輸入</span>'
             f'<span class="cs">{len(members)} 檔 {_sub_human(size)}</span>'
             + _sub_bhtml(badges)
@@ -6611,9 +6725,9 @@ def _sub_group_chip(sub: dict, gid: str) -> str:
                f'aria-label="{act[1]}" disabled>{act[2]}</button></span>'))
     tip = (f'{RUNS_DIR_PREFIX}{g["run_id"]}/input_snapshot\n'
            f'這個 run 的輸入是 SSOT 的一個宣告單位：{len(members)} 個檔案節點（{n_files} 檔不重複計）')
-    return (f'<details class="sub-chip is-group{" is-gone" if gone else ""}" data-snode="g:{_h(gid)}" '
+    return (f'<details class="sub-chip is-group{" is-gone" if all_gone else ""}" data-snode="g:{_h(gid)}" '
             f'title="{_h(tip)}"><summary>{head}</summary><ul class="sub-members">'
-            + ''.join(_sub_member_row(sub, m) for m in members) + '</ul></details>')
+            + ''.join(_sub_member_row(sub, m, '', gone) for m in members) + '</ul></details>')
 
 
 def _sub_shared_chip(sub: dict, nids: list[str]) -> str:
@@ -6627,8 +6741,29 @@ def _sub_shared_chip(sub: dict, nids: list[str]) -> str:
             f'<ul class="sub-members">{rows}</ul></details>')
 
 
-def _sub_fig_item(sub: dict, fig: dict, names: dict[str, str] | None = None) -> str:
-    """圖／表欄的一項：一張圖表一項（figure_number＋id、格式小字、所屬帶），數值快照收在底下。"""
+def _sub_thumb(fig: dict) -> str:
+    """圖表項最上面的縮圖。預覽只是預覽——打包永遠用原檔，所以縮圖旁邊標明它是從哪個格式轉出來的。
+
+    縮圖不掛 `data-snode`（那是檔案節點的標籤，整頁只能出現一次），點它開投稿分頁自己的 lightbox。
+    """
+    pv = fig.get('preview') or {}
+    src = pv.get('data_uri') or pv.get('src') or ''
+    if not src:
+        return '<div class="sub-thumb is-none" aria-hidden="true">無預覽</div>'
+    cap = (fig['figure_number'] + ' ｜ ' if fig['figure_number'] else '') + fig['label']
+    if fig.get('caption_first'):
+        cap += '：' + fig['caption_first']
+    table = (fig.get('type') or '').lower() == 'table'
+    return (f'<div class="sub-thumb{" is-table" if table else ""}">'
+            f'<img loading="lazy" src="{_h(src)}" alt="{_h(cap)}" data-cap="{_h(cap)}" '
+            f'title="點開看大圖（Esc 關閉）">'
+            + (f'<span class="tn">{_h(pv.get("note") or "")}</span>' if pv.get('note') else '')
+            + '</div>')
+
+
+def _sub_fig_item(sub: dict, fig: dict, names: dict[str, str] | None = None,
+                  gone: dict[str, dict] | None = None) -> str:
+    """圖／表欄的一項：縮圖＋一行標題（figure_number＋id、格式小字、所屬帶），數值快照收在底下。"""
     fmt = '・'.join(fig['formats']) or '（無檔）'
     badges = [SUB_BADGE_SHORT.get(b, b) for b in fig['badges']] + (['已移除'] if fig['excluded'] else [])
     head = (f'<span class="cl">{_h(fig["figure_number"] + " ｜ " if fig["figure_number"] else "")}'
@@ -6643,9 +6778,10 @@ def _sub_fig_item(sub: dict, fig: dict, names: dict[str, str] | None = None) -> 
     body = ''
     if vals:
         body = ('<div class="sub-vals"><span class="vl">數值快照</span>'
-                + ''.join(_sub_file_chip(sub, n, '', (names or {}).get(n, '')) for n in vals) + '</div>')
+                + ''.join(_sub_file_chip(sub, n, '', (names or {}).get(n, ''), gone) for n in vals) + '</div>')
     return (f'<div class="sub-fig-item{" is-gone" if fig["excluded"] else ""}" data-snode="ef:{_h(fig["entry"])}" '
-            f'title="{_h(tip)}"><div class="fh" tabindex="0" role="button">{head}</div>{body}</div>')
+            f'title="{_h(tip)}">' + _sub_thumb(fig)
+            + f'<div class="fh" tabindex="0" role="button">{head}</div>{body}</div>')
 
 
 def _sub_key_chip(sub: dict, item: dict) -> str:
@@ -6659,7 +6795,7 @@ def _sub_key_chip(sub: dict, item: dict) -> str:
             + _sub_acts('exclude-entry', item['key'], item['excluded']) + '</span>')
 
 
-def _sub_card_html(sub: dict, card: dict) -> list[str]:
+def _sub_card_html(sub: dict, card: dict, gone: dict[str, dict] | None = None) -> list[str]:
     """一張分析卡：標頭（分析名＋小字＋徽章＋「移除這個分析」）＋五欄＋「也用於」那一行。"""
     title = card['run_id'] or SUB_CARD_TITLE.get(card['kind'], card['id'])
     if card['kind'] == 'unassigned':
@@ -6702,25 +6838,24 @@ def _sub_card_html(sub: dict, card: dict) -> list[str]:
     for cid, label in SUB_ANA_COLS:
         items: list[str] = []
         if cid == 'input':
-            items += [x for x in (_sub_group_chip(sub, g) for g in card['groups']) if x]
+            items += [x for x in (_sub_group_chip(sub, g, gone) for g in card['groups']) if x]
         items += [_sub_file_chip(sub, nid,
                                  '兼作圖' if nid in dual else ('作圖用' if nid in figdata else ''),
-                                 names.get(nid, ''))
+                                 names.get(nid, ''), gone)
                   for nid in card['cols'][cid]]
         if cid == 'output':
             items = [_sub_key_chip(sub, it) for it in card['result_keys']] + items
         if cid == 'figure':
-            items = [_sub_fig_item(sub, f, names) for f in card['figures']] + items
+            items = [_sub_fig_item(sub, f, names, gone) for f in card['figures']] + items
         shared = card['shared'].get(cid) or []
         n_items = len(items) + (1 if shared else 0)
         if shared:
             items.append(_sub_shared_chip(sub, shared))
-        if not n_items and cid in SUB_ANA_OPT_COLS:
-            continue      # 這張卡沒有作圖腳本／圖表就不顯示那一欄
+        # 每張卡一律五欄、欄寬一致：欄線上下對得起來，掃一眼就知道哪張卡缺哪一段。空欄寫「無」。
         cols.append(f'<div class="sub-cell c-{cid}"><h5>{_h(label)} <span class="n">{n_items}</span></h5>'
-                    + '<div class="sub-chips">' + (''.join(items) or '<span class="sub-none">（無）</span>')
+                    + '<div class="sub-chips">' + (''.join(items) or '<span class="sub-none">無</span>')
                     + '</div></div>')
-    out.append(f'<div class="sub-cells" data-cols="{len(cols)}">' + ''.join(cols) + '</div>')
+    out.append('<div class="sub-cells">' + ''.join(cols) + '</div>')
     if card['also_figures']:
         out.append('<p class="sub-also">也用於：' + '、'.join(
             f'<span class="goto" data-sgoto="ef:{_h(a["entry"])}">'
@@ -6730,7 +6865,7 @@ def _sub_card_html(sub: dict, card: dict) -> list[str]:
     return out
 
 
-def _sub_shared_section(sub: dict) -> list[str]:
+def _sub_shared_section(sub: dict, gone: dict[str, dict] | None = None) -> list[str]:
     """頁首的共用檔案區：被兩個以上分析引用的輸入資料與分析腳本，各列一次，旁邊標引用它的分析。"""
     ana = sub.get('analyses') or {}
     rows = ana.get('shared') or []
@@ -6748,7 +6883,7 @@ def _sub_shared_section(sub: dict) -> list[str]:
         if nid not in sub['nodes']:
             continue
         out.append(f'<div class="sub-shared-row" data-scol="{r["col"]}">'
-                   + _sub_file_chip(sub, nid, '', names.get(nid, ''))
+                   + _sub_file_chip(sub, nid, '', names.get(nid, ''), gone)
                    + '<span class="sub-usedby">'
                    + '<span class="lb">用於</span>' + '、'.join(
                        f'<span class="goto" data-sgoto="card:{_h(aid)}">{_h(aid)}</span>' for aid in r['cards'])
@@ -6811,10 +6946,15 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     lines.append('</div>')
     if blocked:
         lines.append('<ul class="sub-missing" id="sub-missing">')
+        where = _sub_card_of_node(sub)
         for nid in sub['blocking_missing']:
             n = sub['nodes'].get(nid) or {}
-            lines.append(f'<li><span class="goto" data-sgoto="f:{_h(nid)}">'
-                         f'<code>{_h(n.get("disp") or nid)}</code></span></li>')
+            rel = n.get('disp') or nid
+            name = _sub_label(n) if n else rel.rstrip('/').rsplit('/', 1)[-1]
+            owner = where.get(nid, '')
+            lines.append(f'<li title="{_h(rel)}"><span class="goto" data-sgoto="f:{_h(nid)}">'
+                         f'<code>{_h(name)}</code></span>'
+                         + (f'<span class="mw">（{_h(owner)}）</span>' if owner else '') + '</li>')
         lines.append('</ul>')
     if sub['warnings']:
         lines.append(f'<details class="sub-warn"><summary>衍生時的提醒 {len(sub["warnings"])} 條</summary><ul>')
@@ -6828,9 +6968,9 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         return lines
     cards = ana.get('cards') or []
     lines += [
-        '<p class="sub-lede">一張卡＝一個分析（run），卡內五欄：'
+        '<p class="sub-lede">一張卡＝一個分析（run），卡內固定五欄：'
         + ' ｜ '.join(label for _cid, label in SUB_ANA_COLS)
-        + '；同一個檔在整頁只出現一次。</p>',
+        + '；欄寬一致、跨卡對齊，沒有東西的欄寫「無」。同一個檔在整頁只出現一次。</p>',
         '<p class="sub-legend">'
         + ''.join(f'<span><span class="ksw k-{cid}"></span>{label}</span>' for cid, label in SUB_ANA_COLS)
         + '<span><span class="bsw b-share">共用</span>兩個以上分析共用，列在頁首</span>'
@@ -6840,9 +6980,11 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         + '<span><span class="bsw b-add">手動</span></span>'
         + '<span><span class="bsw b-gone">已移除</span>可還原</span>'
         + '<span>▸ 資料夾與群組預設收合</span><span>× 移除・↺ 還原</span>'
+        + '<span>圖／表欄的縮圖只是預覽，打包一律用原檔；點縮圖看大圖</span>'
         + '<span>點標籤看細節，Esc 關面板</span></p>',
     ]
-    lines += _sub_shared_section(sub)
+    gone = _sub_gone_map(sub)
+    lines += _sub_shared_section(sub, gone)
     lines.append('<div id="sub-list">')
     for tier in SUB_TIERS:
         rows = [c for c in cards if c['tier'] == tier and c['kind'] != 'manual']
@@ -6855,7 +6997,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         if not rows:
             lines.append('<p class="sub-none">這一帶沒有分析。</p>')
         for card in rows:
-            lines += _sub_card_html(sub, card)
+            lines += _sub_card_html(sub, card, gone)
         lines.append('</section>')
     manual = [c for c in cards if c['kind'] == 'manual']
     if manual:
@@ -6863,7 +7005,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         lines.append('<h4 class="sub-band-head">手動加入 <span class="n">'
                      'submission/package.yaml 的 include 沒填 attach_to，沒掛在任何分析下</span></h4>')
         for card in manual:
-            lines += _sub_card_html(sub, card)
+            lines += _sub_card_html(sub, card, gone)
         lines.append('</section>')
     lines += [
         '</div>',
@@ -6888,6 +7030,9 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<aside id="sub-detail" hidden><button type="button" class="close" id="sub-detail-close">關閉（Esc）</button>',
         '<div id="sub-detail-body"></div>',
         '</aside>',
+        # 燈箱：點縮圖看大圖。關聯分頁的 #lightbox 長在那個 section 裡，切到本分頁時整段 hidden，顯示不出來，
+        # 所以本分頁自己放一個（外觀與行為一樣：點畫面或 Esc 關閉，圖說放下方）。
+        '<div id="sub-lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
         # 打包對話框：按「打包」先送一筆 package_build 進收件匣並跑 dry-run，摘要（入口數、檔數、總大小、
         # 輸出資料夾、未見種子的腳本數）顯示在這裡，確認後才 --apply。
         '<div id="sub-build-dialog" hidden><div class="sub-dlg-box" role="dialog" aria-modal="true" aria-labelledby="sub-dlg-title">',
@@ -6974,23 +7119,26 @@ SUB_CSS = """
 /* ---- 分析卡 ---- */
 #sub-list{margin:0 0 12px}
 .sub-band{margin:0 0 18px}
-.sub-band-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px;font-size:14px;
-  padding-bottom:4px;border-bottom:1px solid var(--line)}
+.sub-band-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px;font-size:1.4rem;
+  font-weight:700;letter-spacing:.01em;line-height:1.25;padding:2px 0 6px 10px;
+  border-bottom:2px solid var(--line);border-left:5px solid var(--t-result);border-radius:2px}
+.sub-band[data-tier="extended"] .sub-band-head{border-left-color:var(--t-method)}
+.sub-band[data-tier="supplementary"] .sub-band-head{border-left-color:var(--t-lit)}
+.sub-band[data-tier="manual"] .sub-band-head{border-left-color:var(--muted)}
 .sub-band-head .n{font-size:12px;font-weight:400;color:var(--muted)}
 button.sub-fold{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var(--line);border-radius:6px;
   background:var(--proj);color:inherit;cursor:pointer}
 .sub-card{border:1px solid var(--line);border-radius:8px;background:var(--card);margin:0 0 8px;padding:8px 10px}
-.sub-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;font-size:13px}
-.sub-card-head .sub-id{font-weight:600;word-break:break-all}
-.sub-card-head .sub-meta{font-size:11px;color:var(--muted)}
+.sub-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:13px}
+.sub-card-head .sub-id{font-size:1.15rem;font-weight:700;line-height:1.3;word-break:break-all}
+.sub-card-head .sub-meta{font-size:11px;color:var(--muted);margin-left:2px}
 .sub-card-act{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
 .sub-card-act button{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var(--line);border-radius:6px;
   background:var(--proj);color:inherit;cursor:pointer;opacity:.7}
 .sub-card:hover .sub-card-act button{opacity:1}
 .sub-card-act button[disabled]{opacity:.5;cursor:not-allowed}
-.sub-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px}
-.sub-cells[data-cols="4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
-.sub-cells[data-cols="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+/* 每張卡都是同一組欄寬（固定五等分，不依內容伸縮），跨卡的欄線才對得齊 */
+.sub-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px;align-items:start}
 .sub-cell{min-width:0;border-left:3px solid var(--line);padding-left:6px}
 .sub-cell.c-input{border-left-color:var(--t-validation)}
 .sub-cell.c-script{border-left-color:var(--t-method)}
@@ -7043,11 +7191,32 @@ button.sub-fold{font:inherit;font-size:11px;padding:1px 8px;border:1px solid var
 .sub-fig-item .cs{font-size:11px;color:var(--muted);margin-right:4px}
 .sub-fig-item.is-gone{opacity:.55}
 .sub-fig-item.is-gone .cl{text-decoration:line-through}
+/* ---- 圖／表縮圖（只是預覽，打包一律用原檔）---- */
+.sub-thumb{margin:2px 0 4px;text-align:center;min-width:0}
+.sub-thumb img{display:block;width:100%;height:auto;max-height:220px;object-fit:contain;object-position:center top;
+  border:1px solid var(--line);border-radius:4px;background:#fff;cursor:zoom-in}
+.sub-thumb.is-table img{padding:3px;background:#fff}
+.sub-thumb .tn{display:block;margin-top:2px;font-size:10px;line-height:1.3;color:var(--muted);text-align:left}
+.sub-thumb.is-none{font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:4px;padding:10px 0}
+.sub-fig-item.is-gone .sub-thumb img{filter:grayscale(1);opacity:.5}
+/* 隨上層一起變灰的檔：不給「↺」，只說明是跟著誰走的 */
+.sub-dep{font-size:10px;color:var(--muted);margin-left:4px;white-space:nowrap}
+.sub-dep .goto{white-space:normal}
+.sub-missing .mw{color:var(--muted);font-size:11px;margin-left:2px}
+/* 投稿分頁自己的燈箱：關聯分頁那個在 hidden 的 section 裡，切到本分頁就顯示不出來 */
+#sub-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:60;display:flex;align-items:center;
+  justify-content:center;cursor:zoom-out}
+#sub-lightbox[hidden]{display:none}
+#sub-lightbox img{max-width:96vw;max-height:88vh;background:#fff;border-radius:4px}
+#sub-lightbox .lb-cap{position:absolute;left:16px;right:16px;bottom:10px;color:#fff;font-size:12px;text-align:center}
 .sub-vals{margin:3px 0 1px 8px;font-size:11px}
 .sub-vals .vl{color:var(--muted);margin-right:4px}
 .sub-vals .sub-chip{font-size:11px}
 @media (max-width:760px){
-  .sub-cells,.sub-cells[data-cols="4"],.sub-cells[data-cols="3"]{grid-template-columns:minmax(0,1fr)}
+  .sub-cells{grid-template-columns:minmax(0,1fr)}
+  .sub-thumb img{max-height:260px}
+  .sub-band-head{font-size:1.2rem}
+  .sub-card-head .sub-id{font-size:1.05rem}
   .sub-card-act{margin-left:0}
   .sub-shared-list{grid-template-columns:minmax(0,1fr)}
 }
@@ -7247,6 +7416,18 @@ SUB_JS = r"""
       try{first.scrollIntoView({block:'center',inline:'nearest'});}catch(err){first.scrollIntoView();}}
     try{(first.tagName==='DETAILS'?first.querySelector('summary')||first:first).focus({preventScroll:true});}catch(err){}}
   function clear(){detail.hidden=true;cur='';unhl();}
+  /* ---- 縮圖燈箱：點「圖／表」欄的縮圖看大圖，點畫面或 Esc 關閉 ---- */
+  var lb=document.getElementById('sub-lightbox');
+  var lbImg=lb?lb.querySelector('img'):null,lbCap=lb?lb.querySelector('.lb-cap'):null;
+  function lbOpen(src,cap){if(!lb)return;lbImg.src=src;lbImg.alt=cap||'';lbCap.textContent=cap||'';lb.hidden=false;}
+  function lbClose(){if(!lb||lb.hidden)return;lb.hidden=true;lbImg.removeAttribute('src');}
+  if(lb)lb.addEventListener('click',lbClose);
+  section.addEventListener('click',function(ev){
+    var img=ev.target.closest?ev.target.closest('.sub-thumb img'):null;
+    if(!img)return;
+    ev.preventDefault();ev.stopPropagation();          /* 不要順便開側面板 */
+    lbOpen(img.getAttribute('src'),img.getAttribute('data-cap')||'');},true);
+  document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&lb&&!lb.hidden){lbClose();}});
   /* 捲到某張分析卡並高亮（共用檔案區的「用於」點過來） */
   function gotoCard(aid){
     var el=section.querySelector('article.sub-card[data-scard="'+q(aid)+'"]');
@@ -7255,7 +7436,11 @@ SUB_JS = r"""
     try{el.scrollIntoView({block:'center'});}catch(e4){el.scrollIntoView();}}
   var close=document.getElementById('sub-detail-close');
   if(close)close.addEventListener('click',clear);
-  document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!detail.hidden&&!section.hidden&&(!dlg||dlg.hidden))clear();});
+  document.addEventListener('keydown',function(ev){
+    if(ev.key!=='Escape'||detail.hidden||section.hidden)return;
+    if(dlg&&!dlg.hidden)return;
+    if(lb&&!lb.hidden)return;      /* 燈箱開著：這一下先關燈箱，側面板留著 */
+    clear();});
   /* 點標籤開面板；點連結標籤或缺檔清單跳到對應的列卡。按鈕（data-saction）交給下面那個 handler。 */
   section.addEventListener('click',function(ev){
     if(ev.target.closest('[data-saction]'))return;
@@ -7647,11 +7832,32 @@ def _current_label(stage_id: str, stage_label: dict) -> str:
     return f'{_h(label)}（{_h(stage_id)}）' if label else _h(stage_id)
 
 
+def ir_for_json(ir: dict) -> dict:
+    """序列化用的 IR：把圖表縮圖的 `data_uri` 清掉，只留走了哪條路徑與來源。
+
+    縮圖的 base64 只給 HTML 的 `<img src>` 用。留在 IR 裡會讓 PROGRESS.ir.json 與 HTML 內嵌的那份
+    `progress-ir` 各多背一份同樣的位元組（同一張圖在頁面上出現三次）。淺層複製到圖表項為止，不動原 IR。
+    """
+    sub = ir.get('submission')
+    ana = (sub or {}).get('analyses') if isinstance(sub, dict) else None
+    cards = (ana or {}).get('cards') if isinstance(ana, dict) else None
+    if not isinstance(cards, list):
+        return ir
+    new_cards = []
+    for c in cards:
+        figs = c.get('figures') if isinstance(c, dict) else None
+        if isinstance(figs, list) and any(isinstance(f, dict) and f.get('preview') for f in figs):
+            c = dict(c, figures=[dict(f, preview=dict(f['preview'], data_uri=''))
+                                 if isinstance(f, dict) and isinstance(f.get('preview'), dict) else f for f in figs])
+        new_cards.append(c)
+    return dict(ir, submission=dict(sub, analyses=dict(ana, cards=new_cards)))
+
+
 def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     p = ir['project']
     st = ir['stats']
     by = st['by_state']
-    payload = json.dumps(ir, ensure_ascii=False, indent=2).replace('<', '\\u003c')
+    payload = json.dumps(ir_for_json(ir), ensure_ascii=False, indent=2).replace('<', '\\u003c')
     stage_label = {s['id']: s['label'] for s in ir['stages']}
     lines = [
         f'<!DOCTYPE html>',
@@ -7763,6 +7969,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--ir-only', action='store_true', help='只寫 PROGRESS.ir.json、不寫 PROGRESS.html')
     parser.add_argument('--embed-figures', action='store_true',
                         help='把圖檔（svg／png，單檔 ≤ 5 MB）以 data URI 內嵌進圖表節點 meta.data_uri；預設不內嵌')
+    parser.add_argument('--no-previews', action='store_true',
+                        help='不產生「圖／表」欄的縮圖預覽（預設會產生；預覽只進 HTML，不影響打包）')
     parser.add_argument('--literature-graph', default=None, metavar='PATH',
                         help=f'文獻引用 3D 圖的資料檔；預設 <root>/{LIT_REL}。缺檔時分頁照出、顯示空狀態')
     args = parser.parse_args(argv)
@@ -7781,7 +7989,9 @@ def main(argv: list[str] | None = None) -> int:
     src = Sources(root)
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
     lit_path = Path(args.literature_graph).expanduser() if args.literature_graph else None
-    ir = build_ir(root, src, generated_at, args.embed_figures, lit_path)
+    # --dry-run 不寫任何檔，連縮圖快取也不寫（沒命中就在記憶體產生、用完即丟）
+    ir = build_ir(root, src, generated_at, args.embed_figures, lit_path,
+                  write_cache=not args.dry_run, previews=not args.no_previews)
     for w in src.warnings:
         print(f'WARNING {w}', file=diag)
     for i in src.infos:
@@ -7793,7 +8003,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f'BLOCKER IR 驗證失敗: {e}', file=diag)
         return 2
 
-    ir_text = json.dumps(ir, ensure_ascii=False, indent=2) + '\n'
+    ir_text = json.dumps(ir_for_json(ir), ensure_ascii=False, indent=2) + '\n'
     notes: list[str] = []
     html_text = render_html(ir, root, notes) if not (args.json and args.dry_run) else ''
     for note in notes:
