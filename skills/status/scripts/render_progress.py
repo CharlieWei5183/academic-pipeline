@@ -4172,7 +4172,9 @@ GRAPH_JS = """
   var LANE_GAP=8,CORNER_R=4,TRUNK_MAX_SIDE=Math.floor((0.8*GAP/2)/LANE_GAP),TRUNK_MAX_LANES=2*TRUNK_MAX_SIDE+1;
   function num(v){var r=Math.round(v*100)/100;return String(r);}
   function gapCenter(g){return GRAPH_PAD+g*COL_PITCH+NODE_W+GAP/2;}
-  function laneX(g,lane,nLanes){var n=Math.min(nLanes,TRUNK_MAX_LANES);return gapCenter(g)+((lane%TRUNK_MAX_LANES)-(n-1)/2)*LANE_GAP;}
+  /* 與 Python 的 _lane_x 同一套：超過上限不折回重用 x，改等比壓縮車道間距 */
+  function laneX(g,lane,nLanes){var pitch=(nLanes<=TRUNK_MAX_LANES)?LANE_GAP:TRUNK_MAX_LANES*LANE_GAP/nLanes;
+    return gapCenter(g)+(lane-(nLanes-1)/2)*pitch;}
   var SPINE_X=12,SPINE_LANE_GAP=4;  // 對照短垂線 x 偏移與分道間距；與 Python 端同名常數同值
   function spinePath(a,b,lane){var dx=SPINE_X-(lane||0)*SPINE_LANE_GAP,x0=a.x+dx,y0=a.y,x1=b.x+dx,y1=b.y+H;return x0===x1?'M'+num(x0)+','+num(y0)+' V'+num(y1):'M'+num(x0)+','+num(y0)+' L'+num(x1)+','+num(y1);}
   // 與 Python spine_lanes 同一套：L 形線區塊固定第 0 道，對照線依（群 y, idx）序取最小不重疊的一道
@@ -5701,9 +5703,15 @@ def _gap_center(gap: int) -> float:
 
 
 def _lane_x(gap: int, lane: int, n_lanes: int) -> float:
-    """車道 x：全部用到的車道（n_lanes 條、超過上限時折回成 TRUNK_MAX_LANES 條）以 LANE_GAP 等距、置中於走道，x 隨車道索引單調遞增。"""
-    n = min(n_lanes, TRUNK_MAX_LANES)
-    return _gap_center(gap) + (lane % TRUNK_MAX_LANES - (n - 1) / 2) * LANE_GAP
+    """車道 x：n_lanes 條車道置中於走道，x 隨車道索引單調遞增。
+
+    超過 TRUNK_MAX_LANES 時不折回重用同一條 x——那會讓不同的幹線疊在同一條垂直線上，憑空生出交叉；
+    改把車道間距按走道可用寬度等比壓縮，總跨度不變，每一束仍有自己的 x。
+    """
+    if n_lanes <= TRUNK_MAX_LANES:
+        return _gap_center(gap) + (lane - (n_lanes - 1) / 2) * LANE_GAP
+    pitch = TRUNK_MAX_LANES * LANE_GAP / n_lanes
+    return _gap_center(gap) + (lane - (n_lanes - 1) / 2) * pitch
 
 
 def _bend_path(sx: float, sy: float, tx: float, ty: float, ex: float) -> str:
@@ -6209,7 +6217,7 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     hidden_route = route_edges(by_id, [(i, dict(e, via=[])) for i, e in enumerate(graph['edges']) if i not in drawn_set])
     for gap in route['overflow']:
         if notes is not None:
-            notes.append(f'關聯圖走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，折回重用')
+            notes.append(f'關聯圖走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，車道間距等比壓縮')
     vis_nodes = [n for n in nodes if n['id'] in shown]
     dummy_rows: dict[str, list[float]] = {}
     for i in drawn:
@@ -6727,6 +6735,8 @@ def _sub_human(n: int) -> str:
 def _sub_size_text(n: dict) -> str:
     if n['kind'].startswith('entry_'):
         return ''
+    if n.get('group'):      # 群組：檔數與位元組都只算沒被資料夾節點收走的部分（標籤上的 N 檔才是宣告粒度的全數）
+        return f'{n["n_files"]} 檔 {_sub_human(n["bytes"])}'
     if n['missing']:
         return '—'
     if n.get('is_dir'):
@@ -6873,7 +6883,7 @@ def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     gs = g['stats']
     if notes is not None:
         for gap in gs['lane_overflow']:
-            notes.append(f'投稿檔案分頁走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，折回重用')
+            notes.append(f'投稿檔案分頁走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，車道間距等比壓縮')
     lines += [
         '<div class="sub-legend">',
         '<span>欄序由左到右：' + ' → '.join(label for _cid, label in SUB_COLS) + '</span>',
