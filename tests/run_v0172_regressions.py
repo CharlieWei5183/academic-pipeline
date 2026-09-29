@@ -68,7 +68,7 @@ def test_frontend(tmp: Path) -> None:
     html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function reorderStaged(', 'function anchorOf(', 'function snapOrder0(', 'function nodeMoved(', 'var stagedLayout=false;',
                    'function dummyActive(i){if(stagedLayout)return false;', 'applyOptimistic(kind,payload);reorderStaged();stageSave();renderStaged();relayout();',
-                   "try{applyOptimistic(it.kind,it.payload);}catch(e){}});reorderStaged();}", 'order:n.order,staged:', "p=p||{};snapOrder0();"):
+                   "try{applyOptimistic(it.kind,it.payload);}catch(e){}});reorderStaged();}", 'order:n.order,staged:', "p=p||{};\n    if(kind==='package_edit'||kind==='package_build')return marks;", 'snapOrder0();   //'):
         assert anchor in html, anchor
     assert html.count('function reorderStaged(') == 1 and html.count('reorderStaged();') == 3   # stageAdd、重新載入後的還原、0.19.0 stageMany（聚合節點整批暫存）三處呼叫
     assert 'http://' not in html
