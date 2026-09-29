@@ -20,8 +20,9 @@
   連 historical 鍵也追（標 historical 徽章，但 historical 鍵本身不當入口）。
 - 結果鍵：`script` 欄內的路徑；`run_id` → `analysis/runs/<run_id>/` 之下
   `scripts/`（整個資料夾算一個程式碼節點，宣告粒度＝run）、`report.md`、`status.json`（結果）、
-  `input_snapshot/` 內除 hash 表以外的實體檔（資料）、`input_snapshot/` 內 `*hash*.tsv`
-  每個 cell 能 resolve 成檔案者（資料）。run 資料夾不存在 → 缺檔節點。
+  `input_snapshot/` 內除 hash 表以外的實體檔、`input_snapshot/` 內 `*hash*.tsv` 每個 cell 能 resolve
+  成檔案者。這些輸入檔一律走 `input_kind()`：副檔名屬 CODE_SUFFIXES 或位於任一 `scripts/` 之下 → code
+  （hash 表會把上游腳本一起列進來），其餘 → data。run 資料夾不存在 → 缺檔節點。
 - 資料只追一層（run 的直接輸入），不遞迴到上游 run 或 raw；要更多請用 `package_edit.py` 手動加。
 
 分類（依 pipeline 慣例目錄與副檔名，不看專案）：副檔名屬 CODE_SUFFIXES 或位於任一
@@ -291,6 +292,19 @@ def classify(path: Path, root: Path, from_manifest_files: bool = False) -> str:
     if from_manifest_files:
         return 'figure'
     return 'result'
+
+
+def input_kind(path: Path) -> str:
+    """run 的直接輸入檔分類：程式碼副檔名或位於任一 `scripts/` 之下 → code，其餘一律 data。
+
+    `classify()` 的第一條規則（副檔名／`scripts/` → code）在這裡照樣優先——hash 表會把上游腳本一起列進來，
+    那些是程式碼，不是資料。但 `classify()` 後面的「root 的 `data/` 之下 → data、其餘 → result」不適用：
+    run 的輸入檔常常是別的 run 的輸出（`analysis/runs/<其他 run>/outputs/*.tsv`），對這個 run 而言仍是輸入資料，
+    不能算成 result（那會改掉打包落點、也與模組 docstring 的宣告不符）。
+    """
+    if path.suffix.lower() in CODE_SUFFIXES or 'scripts' in path.parts:
+        return 'code'
+    return 'data'
 
 
 def dir_stat(path: Path) -> tuple[int, int, int]:
@@ -627,15 +641,15 @@ def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, p
         if HASH_TABLE_RE.search(child.name):
             tables.append(child)
         else:
-            v.node(child, 'data', entry_id, tier, f'{prefix}run_id.input_snapshot')
+            v.node(child, input_kind(child), entry_id, tier, f'{prefix}run_id.input_snapshot')
     for table in tables:
-        v.node(table, 'data', entry_id, tier, f'{prefix}run_id.input_snapshot')
+        v.node(table, input_kind(table), entry_id, tier, f'{prefix}run_id.input_snapshot')
         found, missing = hash_table_cells(table, v.res)
         rel_table = table.relative_to(v.root).as_posix()
         for path in found:
-            v.node(path, 'data', entry_id, tier, f'{rel_table} 的 cell')
+            v.node(path, input_kind(path), entry_id, tier, f'{rel_table} 的 cell')
         for raw in missing:
-            v.node(Path(raw), 'data', entry_id, tier, f'{rel_table} 的 cell', missing=True, raw=raw,
+            v.node(Path(raw), input_kind(Path(raw)), entry_id, tier, f'{rel_table} 的 cell', missing=True, raw=raw,
                    note=f'{rel_table} 列出的來源檔已不在原位')
 
 

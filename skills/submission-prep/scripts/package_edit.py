@@ -4,7 +4,7 @@
 用法:
   python3 package_edit.py <root> --include <PATH> --tier main|extended|supplementary --kind data|code|result|figure|other
       [--attach-to <圖表 id 或結果鍵>] [--note "..."]
-  python3 package_edit.py <root> --exclude <PATH> [--reason "..."]
+  python3 package_edit.py <root> --exclude <PATH> [--exclude <PATH> …] [--reason "..."]
   python3 package_edit.py <root> --exclude-entry <圖表 id 或結果鍵> [--reason "..."]
   python3 package_edit.py <root> --restore <PATH 或 入口 id>
   共同旗標: [--inbox IN-xxx] [--daily-log <path>] [--expect-token <token>] (--dry-run | --apply)
@@ -70,18 +70,29 @@ def parse_op(args: argparse.Namespace) -> dict[str, Any]:
             item['attach_to'] = args.attach_to
         if args.note:
             item['note'] = args.note
-        return {'op': 'include', 'list': 'include', 'item': item, 'target': args.include}
+        return {'op': 'include', 'list': 'include', 'items': [item], 'item': item, 'target': args.include}
     if kind == 'exclude':
-        item = {'path': args.exclude}
-        if args.reason:
-            item['reason'] = args.reason
-        return {'op': 'exclude', 'list': 'exclude', 'item': item, 'target': args.exclude}
+        # --exclude 可以重複給：群組節點的「整組移除」就是對每個成員各寫一筆 exclude，同一個 D# 一次 apply 完。
+        # 不發明群組專屬語法——package.yaml 的 exclude 仍是逐路徑一筆。
+        paths: list[str] = []
+        for raw in args.exclude:
+            if raw not in paths:
+                paths.append(raw)
+        items = []
+        for raw in paths:
+            it = {'path': raw}
+            if args.reason:
+                it['reason'] = args.reason
+            items.append(it)
+        return {'op': 'exclude', 'list': 'exclude', 'items': items, 'item': items[0],
+                'target': '、'.join(paths)}
     if kind == 'exclude_entry':
         item = {'entry': args.exclude_entry}
         if args.reason:
             item['reason'] = args.reason
-        return {'op': 'exclude-entry', 'list': 'exclude', 'item': item, 'target': args.exclude_entry}
-    return {'op': 'restore', 'list': '', 'item': {}, 'target': args.restore}
+        return {'op': 'exclude-entry', 'list': 'exclude', 'items': [item], 'item': item,
+                'target': args.exclude_entry}
+    return {'op': 'restore', 'list': '', 'items': [], 'item': {}, 'target': args.restore}
 
 
 # ---------- 清單讀寫（只改指定的那個清單，其餘位元組不動） ----------
@@ -168,12 +179,16 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         if op['item'].get('attach_to') and op['item']['attach_to'] not in entry_ids:
             raise ChainError(f'--attach-to {op["item"]["attach_to"]} 不是現有入口（圖表 id 或現行結果鍵）')
     elif op['op'] == 'exclude':
-        path = op['item']['path']
-        if any(it.get('path') == path for it in lists['exclude']):
-            raise ChainError(f'{PKG_REL} 的 exclude 已有 {path}，沒有要改的東西')
-        hits = [nid for nid in view['nodes'] if nid == path or nid.startswith(path.rstrip('/') + '/')]
-        if not hits:
-            raise ChainError(f'{path} 不在衍生出來的清單裡（沒有這個節點可移除）；先跑 build_submission_package.py --dry-run 看清單')
+        hits: list[str] = []
+        for it_new in op['items']:
+            path = it_new['path']
+            if any(it.get('path') == path for it in lists['exclude']):
+                raise ChainError(f'{PKG_REL} 的 exclude 已有 {path}，沒有要改的東西')
+            one = [nid for nid in view['nodes'] if nid == path or nid.startswith(path.rstrip('/') + '/')]
+            if not one:
+                raise ChainError(f'{path} 不在衍生出來的清單裡（沒有這個節點可移除）；'
+                                 '先跑 build_submission_package.py --dry-run 看清單')
+            hits += [x for x in one if x not in hits]
         op['hits'] = hits
     elif op['op'] == 'exclude-entry':
         eid = op['item']['entry']
@@ -200,7 +215,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     if name == 'include' and op['op'] == 'include':
         items = lists['include'] + [op['item']]
     elif name == 'exclude' and op['op'] in ('exclude', 'exclude-entry'):
-        items = lists['exclude'] + [op['item']]
+        items = lists['exclude'] + list(op['items'])
     else:
         items = [it for it in lists[name] if it is not op['item']]
     inbox = None
@@ -232,7 +247,10 @@ def op_sentence(ctx: dict[str, Any]) -> str:
         extra = ''.join(f'、{k} {item[k]}' for k in ('attach_to', 'note') if item.get(k))
         return f'手動加入 {item["path"]}（帶 {S.TIER_LABEL_ZH[item["tier"]]}、分類 {item["kind"]}{extra}）'
     if op['op'] == 'exclude':
-        return f'移除檔案或資料夾 {item["path"]}（連帶 {len(op.get("hits") or [])} 個節點）' + (f'；理由：{item["reason"]}' if item.get('reason') else '')
+        paths = [it['path'] for it in op['items']]
+        what = paths[0] if len(paths) == 1 else f'{len(paths)} 筆（{"、".join(paths)}）'
+        return f'移除檔案或資料夾 {what}（連帶 {len(op.get("hits") or [])} 個節點）' \
+            + (f'；理由：{item["reason"]}' if item.get('reason') else '')
     if op['op'] == 'exclude-entry':
         return f'移除入口 {item["entry"]}（連帶 {len(op.get("hits") or [])} 個節點）' + (f'；理由：{item["reason"]}' if item.get('reason') else '')
     what = item.get('path') or item.get('entry')
@@ -267,8 +285,8 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
              f'(2) {PKG_REL} 不在 rerun_all 的 fingerprint 雜湊範圍，validation 與 results 不因此過期\n'
              '(3) build_submission_package.py 下次打包即依本條之後的清單；納入而缺檔的節點會讓打包直接拒絕')
     links = [PKG_REL, log_rel]
-    target = ctx['op']['item'].get('path') or ctx['op']['item'].get('entry') or ''
-    if target:
+    targets = [it.get('path') or it.get('entry') or '' for it in (ctx['op'].get('items') or [ctx['op']['item']])]
+    for target in reversed([x for x in targets if x]):
         links.insert(0, target)
     prior = [str(d.get('id')) for d in C.decisions_list(root)
              if PKG_REL in [str(x) for x in (d.get('links') or [])]]
@@ -290,7 +308,10 @@ def argv_of(args: argparse.Namespace) -> list[str]:
                        ('--exclude-entry', 'exclude_entry'), ('--restore', 'restore'),
                        ('--tier', 'tier'), ('--kind', 'kind'), ('--attach-to', 'attach_to'), ('--inbox', 'inbox')):
         value = getattr(args, name, '')
-        if value:
+        if isinstance(value, list):
+            for one in value:
+                out += [flag, str(one)]
+        elif value:
             out += [flag, str(value)]
     return out
 
@@ -453,7 +474,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='投稿打包清單的手動增刪（確定性）')
     parser.add_argument('root')
     parser.add_argument('--include', default='', metavar='PATH')
-    parser.add_argument('--exclude', default='', metavar='PATH')
+    parser.add_argument('--exclude', action='append', default=[], metavar='PATH',
+                        help='可重複；一次移除多筆（群組節點的整組移除）寫成同一個 D#')
     parser.add_argument('--exclude-entry', default='', metavar='ID')
     parser.add_argument('--restore', default='', metavar='PATH_OR_ID')
     parser.add_argument('--tier', default='', choices=('',) + S.TIERS)
