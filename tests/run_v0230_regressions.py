@@ -48,9 +48,12 @@ fixture 沿用 v0.16.1 的 build_fixture，再加 run 資料夾（scripts／repo
 """
 from __future__ import annotations
 
+import collections
 import hashlib
+import html as html_mod
 import inspect
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -93,8 +96,12 @@ def _hash_table(header: str, rows: list[tuple[str, ...]]) -> str:
     return '\n'.join(['\t'.join(header.split())] + ['\t'.join(r) for r in rows]) + '\n'
 
 
-def variant(tmp: Path, name: str) -> Path:
-    """v0.16.1 fixture ＋ 三個 run ＋ 現行／非現行結果鍵 ＋ 三種 role 的圖表與自由文字欄位。"""
+def variant(tmp: Path, name: str, extra: bool = False) -> Path:
+    """v0.16.1 fixture ＋ 三個 run ＋ 現行／非現行結果鍵 ＋ 三種 role 的圖表與自由文字欄位。
+
+    `extra=True` 另外加「依分析分卡」要驗的三種形狀（只有規格 10 用，不影響其他規格的數字）：
+    標籤 run 的 script 同時是作圖腳本（兼作圖）、以及一支作圖腳本帶三張主要分析不同的圖表（跟著圖表走）。
+    """
     global FAR
     root = T1.fixture(tmp, name)
     sib = tmp / 'ext_sib'
@@ -186,6 +193,34 @@ def variant(tmp: Path, name: str) -> Path:
          'figure_number': 'Supp Table 1', 'results_keys': ['cur_c'], 'script': 'analysis/scripts/analyze.py',
          'status': 'registered_not_reviewed', 'caption': 'SI 表說。'},
     ]
+    if extra:
+        for n in ('dual_make.py', 'pair_make.py'):
+            (root / 'analysis/scripts' / n).write_text('import numpy as np\nnp.random.seed(42)\n', encoding='utf-8')
+        for n in ('g_dual.svg', 'g_dual.pdf', 'g_pair1.svg', 'g_pair2.svg', 'g_pair3.svg', 'vals2.tsv'):
+            (figdir / n).write_text('x\n', encoding='utf-8')
+        results = json.loads(rpath.read_text(encoding='utf-8'))
+        results['cur_d'] = {**base, 'plan_id': 'SQ3-v1', 'run_id': 'RUN_LBL',
+                            'script': 'analysis/scripts/dual_make.py',
+                            'description': '標籤 run：資料夾從未存在，script 同時是這張圖的作圖腳本。'}
+        rpath.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        src_c = 'analysis/runs/RUN_C/input_snapshot/source_hashes_x.tsv'
+        man['figures'] += [
+            {'id': 'G_dual', 'files': ['analysis/figures/g_dual.svg', 'analysis/figures/g_dual.pdf'],
+             'type': 'figure', 'role': 'main', 'figure_number': 'Fig. 2', 'results_keys': ['cur_d'],
+             'script': 'analysis/scripts/dual_make.py', 'values_snapshot': 'analysis/figures/vals2.tsv',
+             'status': 'registered_not_reviewed', 'caption': '兼作圖的標籤 run。'},
+            {'id': 'G_pair1', 'files': ['analysis/figures/g_pair1.svg'], 'type': 'figure', 'role': 'main',
+             'figure_number': 'Fig. 3', 'results_keys': ['cur_b'], 'script': 'analysis/scripts/pair_make.py',
+             'status': 'registered_not_reviewed', 'caption': '同一支作圖腳本之一（主要分析 RUN_B）。'},
+            {'id': 'G_pair2', 'files': ['analysis/figures/g_pair2.svg'], 'type': 'figure', 'role': 'main',
+             'figure_number': 'Fig. 4', 'script': 'analysis/scripts/pair_make.py',
+             'unregistered_sources': [src_c], 'status': 'registered_not_reviewed',
+             'caption': '同一支作圖腳本之二（沒有 results_keys，來源落在 RUN_C）。'},
+            {'id': 'G_pair3', 'files': ['analysis/figures/g_pair3.svg'], 'type': 'figure', 'role': 'main',
+             'figure_number': 'Fig. 5', 'script': 'analysis/scripts/pair_make.py',
+             'unregistered_sources': [src_c], 'status': 'registered_not_reviewed',
+             'caption': '同一支作圖腳本之三（沒有 results_keys，來源落在 RUN_C）。'},
+        ]
     mpath.write_text(json.dumps(man, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     run('skills/status/scripts/render_progress.py', root)
     return root
@@ -573,6 +608,27 @@ def test_edit(tmp: Path) -> None:
     assert all(v['nodes'][x]['excluded'] for x in two), '兩個成員都標 excluded'
     assert 'BLOCKER' in run(EDIT, root, '--exclude', two[0], '--exclude', 'analysis/no/such.tsv',
                             '--dry-run', expect=2), '任一筆不合法就整批拒絕'
+
+    # 重複 --exclude-entry：分頁的「移除這個分析」＝對那張卡的每個入口各寫一筆，同一個 D# 一次 apply 完
+    n_before = len(C.decisions_list(root))
+    ex_before = len(C.load_yaml(root / 'submission/package.yaml')['exclude'])
+    ents = ['G_ext', 'cur_a']
+    out = run(EDIT, root, '--exclude-entry', ents[0], '--exclude-entry', ents[1],
+              '--reason', '這個分析整個不投', '--dry-run')
+    assert '移除入口 2 個' in out, out
+    run(EDIT, root, '--exclude-entry', ents[0], '--exclude-entry', ents[1],
+        '--reason', '這個分析整個不投', '--apply')
+    doc = C.load_yaml(root / 'submission/package.yaml')
+    assert len(doc['exclude']) == ex_before + 2, doc['exclude']
+    assert [it['entry'] for it in doc['exclude'][-2:]] == ents, doc['exclude']
+    ds = C.decisions_list(root)
+    assert len(ds) == n_before + 1, f'兩筆 exclude-entry 只記一個 D#（{len(ds) - n_before}）'
+    v = view_of(root)
+    assert all(entry(v, x)['excluded'] for x in ents), '兩個入口都標 excluded'
+    assert 'BLOCKER' in run(EDIT, root, '--exclude-entry', 'G_main', '--exclude-entry', 'NOPE',
+                            '--dry-run', expect=2), '任一筆不是現有入口就整批拒絕'
+    for x in ents:
+        run(EDIT, root, '--restore', x, '--apply')
     print('  規格 8 package_edit ok')
 
 
@@ -614,7 +670,7 @@ def test_existing(tmp: Path) -> None:
 
 
 def test_tab(tmp: Path) -> None:
-    root = variant(tmp, 'tab')
+    root = variant(tmp, 'tab', extra=True)
     pkg = root / 'submission/package.yaml'
     pkg.parent.mkdir(parents=True, exist_ok=True)
     (root / 'analysis/extra_note.md').write_text('# 手動加入、沒掛入口\n', encoding='utf-8')
@@ -630,133 +686,165 @@ def test_tab(tmp: Path) -> None:
     assert not [e for e in rp.validate_ir(ir) if 'IR-17' in e], [e for e in rp.validate_ir(ir) if 'IR-17' in e]
     sub = ir['submission']
     assert sub['present'] and not sub['error'], sub['error']
-    assert {e['id'] for e in sub['entries']} >= {'G_main', 'cur_a', 'miss_run_label'}
+    assert {e['id'] for e in sub['entries']} >= {'G_main', 'cur_a', 'miss_run_label', 'G_dual', 'G_pair1'}
     assert all(e['node_id'] in ('ef:' + e['id'], 'er:' + e['id']) for e in sub['entries'])
     assert sub['stats']['blocking_missing'] == len(sub['blocking_missing']) > 0
     # 歸帶沿用關聯圖：注入的 key_bands 與另外自己算一次相同
     assert S.derive(root)['stats'] == S.derive(root, key_bands=S.bands_from_ir_nodes(ir['graph']['nodes']))['stats']
 
-    lst = rp._sub_list(sub, 'EDITCMD')
     v = view_of(root)
-    cards = {c['id']: c for band in lst['bands'] for c in band['cards']}
-    band_of = {c['id']: band['tier'] for band in lst['bands'] for c in band['cards']}
+    ana = sub['analyses']
+    cards = {c['id']: c for c in ana['cards']}
+    nodes = sub['nodes']
 
-    def chips(cid: str, cell: int) -> dict[str, dict]:
-        return {c['snode'] or ('link:' + c['label']): c for c in cards[cid]['cells'][cell]}
+    # ---- 分析卡分組：一張卡＝一個 run；只在路徑前綴出現、沒有可顯示項目的 run 不另立卡 ----
+    assert {'RUN_A', 'RUN_B', 'RUN_C', 'RUN_LBL'} <= set(cards), sorted(cards)
+    assert 'RUN_UP' not in cards, 'RUN_UP 只被 RUN_C 的 hash 表列進來，沒有自己的可顯示項目'
+    assert cards['RUN_LBL']['kind'] == 'run' and not cards['RUN_LBL']['exists']
+    assert S.RUN_MISSING_BADGE in cards['RUN_LBL']['badges'], cards['RUN_LBL']['badges']
+    ranks = [S.TIER_RANK[c['tier']] for c in ana['cards'] if c['kind'] != 'manual']
+    assert ranks == sorted(ranks), '卡片先依帶分段'
+    for t in S.TIERS:      # 段內依卡片內最早出現的入口順序
+        seq = [c['order'] for c in ana['cards'] if c['tier'] == t and c['kind'] != 'manual']
+        assert seq == sorted(seq), (t, seq)
+    # 每個入口只落一張卡
+    seen_e: dict[str, str] = {}
+    for c in ana['cards']:
+        for eid in c['entries']:
+            assert eid not in seen_e, (eid, seen_e.get(eid), c['id'])
+            seen_e[eid] = c['id']
+    assert seen_e.keys() == {e['id'] for e in sub['entries']}, '每個入口都要落在某張卡上'
 
-    # ---- 三段、每個入口一張列卡、卡內四格 ----
-    assert [b['tier'] for b in lst['bands']] == list(S.TIERS), [b['tier'] for b in lst['bands']]
-    assert [b['title'] for b in lst['bands']] == [rp.BAND_TITLE[rp.SUB_TIER_BAND[t]].split('：')[0] for t in S.TIERS]
-    assert {e['node_id'] for e in sub['entries']} <= set(cards), '每個入口都要有一張列卡'
-    for c in cards.values():
-        assert len(c['cells']) == 4, c['id']
-    assert band_of['ef:G_main'] == 'main' and band_of['er:cur_b'] == 'supplementary', band_of
-    assert cards['ef:G_main']['figure_number'] == 'Fig. 1' and cards['er:cur_a']['type_label'] == '結果鍵'
+    # ---- 五欄；後兩欄沒有就不顯示 ----
+    for c in ana['cards']:
+        assert set(c['cols']) == set(rp.SUB_ANA_COL_IDS), c['id']
+    body = '\n'.join(rp._sub_card_html(sub, cards['RUN_LBL']))
+    n_cells = body.count('class="sub-cell c-')      # 外層容器是 class="sub-cells"，別一起數進來
+    assert n_cells == int(re.search(r'data-cols="(\d+)"', body).group(1)) == 4, \
+        (n_cells, re.findall(r'class="sub-cell c-(\w+)"', body), cards['RUN_LBL']['cols'])
+    assert 'c-figscript' not in body, 'RUN_LBL 的作圖腳本就是它的分析腳本（兼作圖），不重列一欄'
+    assert 'c-figure' in body, '有圖表就要有圖／表欄'
+    body_c = '\n'.join(rp._sub_card_html(sub, cards['RUN_C']))
+    assert body_c.count('class="sub-cell c-') == 5, '五欄都有內容時就是五欄'
+    no_fig = next((c for c in ana['cards'] if not c['figures'] and not c['cols']['figure']
+                   and not c['cols']['figscript']), None)
+    assert no_fig is not None, 'fixture 要有一張沒有圖表也沒有作圖腳本的卡'
+    body_n = '\n'.join(rp._sub_card_html(sub, no_fig))
+    assert body_n.count('class="sub-cell c-') == 3 and 'c-figure' not in body_n, no_fig['id']
 
-    # ---- 落格：資料 0、程式碼 1、結果 2、圖表 3 ----
-    assert 'f:analysis/runs/RUN_A/scripts' in chips('ef:G_main', 1), '程式碼在第二格'
-    assert 'f:analysis/runs/RUN_A/report.md' in chips('er:cur_a', 2), '結果檔在第三格'
-    assert 'f:analysis/figures/g_main.svg' in chips('ef:G_main', 3), '圖表自己的 files 是圖表格的標籤'
-    assert 'g:runinput:RUN_A' in chips('er:cur_a', 0), 'run 輸入群組在資料格'
+    # ---- 圖表的主要分析與「作圖腳本跟著圖表走」----
+    def card_of(eid: str) -> str:
+        return seen_e[eid]
+    assert card_of('G_main') == 'RUN_A', '第一個 results_keys（cur_a）所屬的 run'
+    assert card_of('G_supp') == 'RUN_C'
+    # G_pair1 主要分析是 RUN_B、G_pair2／G_pair3 沒有 results_keys（來源落在 RUN_C）→ 同一支作圖腳本整組放 RUN_C
+    for fid in ('G_pair1', 'G_pair2', 'G_pair3'):
+        assert card_of(fid) == 'RUN_C', (fid, card_of(fid))
+    assert 'analysis/scripts/pair_make.py' in cards['RUN_C']['cols']['figscript'], cards['RUN_C']['cols']
+    # 其他相關分析只留一行「也用於」，不重列圖表與腳本
+    assert 'G_pair1' in [a['entry'] for a in cards['RUN_B']['also_figures']], cards['RUN_B']['also_figures']
+    assert 'G_pair1' not in cards['RUN_B']['entries']
 
-    # ---- 節點粒度＝宣告粒度：run 的輸入收成一個可展開的群組標籤 ----
-    ga = sub['groups']['runinput:RUN_A']
-    assert ga['label'] == f'RUN_A 的輸入（{len(ga["members"])} 檔）', ga['label']
-    assert ga['tier'] == entry(v, 'cur_a')['tier'], '群組的帶＝引用它的入口中最高者'
-    assert {'analysis/runs/RUN_A/input_snapshot/direct.csv',
-            'analysis/runs/RUN_A/input_snapshot/source_hashes.tsv',
-            'data/raw.csv'} <= set(ga['members']), ga['members']
-    assert ga['scripts'] == 'analysis/runs/RUN_A/scripts', ga['scripts']
-    assert sub['nodes']['analysis/runs/RUN_A/input_snapshot/direct.csv']['own'] is False
-    gchip = chips('er:cur_a', 0)['g:runinput:RUN_A']
-    assert gchip['type'] == 'group' and gchip['group'] == 'runinput:RUN_A'
-    assert len(gchip['member_html']) == len(ga['members']), '群組標籤展開要逐列列出成員'
-    assert all('data-saction="exclude"' in m and 'data-saction="restore"' in m for m in gchip['member_html']), \
-        '每個成員自己要有移除／還原'
-    assert not any(c['snode'] == 'f:analysis/runs/RUN_A/input_snapshot/direct.csv'
-                   for cell in cards['er:cur_a']['cells'] for c in cell), '只從群組追到的檔不另開標籤'
-    # 逐條宣告的檔仍獨立：analyze.py 既是 RUN_B 的 hash 表成員，也被 script 欄點名
-    az = sub['nodes']['analysis/scripts/analyze.py']
-    assert az['groups'] == ['runinput:RUN_B'] and az['itemized'] and az['own'], az
-    # 缺檔成員不收進群組：擋打包的清單要點得到
-    assert sub['nodes']['data/gone.csv']['own']
-    # run 的 scripts/ 是一個可展開的資料夾標籤，被 script 欄點名的腳本收在裡面
-    ap = sub['nodes']['analysis/runs/RUN_A/scripts/a.py']
-    assert ap['under'] == 'analysis/runs/RUN_A/scripts' and not ap['own'], ap
-    dchip = chips('ef:G_main', 1)['f:analysis/runs/RUN_A/scripts']
-    assert dchip['type'] == 'group' and 'analysis/runs/RUN_A/scripts/a.py' in dchip['members']
-    assert any('script 欄點名' in m for m in dchip['member_html']), '被 script 欄點名的成員要標出來'
-    assert 'G_main' in sub['nodes']['analysis/runs/RUN_A/scripts']['all_entries'], \
-        '被收走的腳本的入口要聯集進資料夾標籤的 all_entries，否則圖表列卡上那支腳本會整個消失'
+    # ---- 標籤 run 的 script 同時是作圖腳本 → 只放分析腳本、標「兼作圖」 ----
+    dual = 'analysis/scripts/dual_make.py'
+    assert dual in cards['RUN_LBL']['cols']['script'] and dual in cards['RUN_LBL']['dual'], cards['RUN_LBL']
+    assert dual not in cards['RUN_LBL']['cols']['figscript']
+    assert '兼作圖' in body
 
-    # ---- 共用檔：每張引用它的列卡都出現一次，標「共用 N」 ----
-    shared_cards = [cid for cid, c in cards.items()
-                    if any(x['snode'] == 'f:analysis/scripts/analyze.py' for cell in c['cells'] for x in cell)]
-    assert len(shared_cards) >= 2, shared_cards
-    n_share = len(sub['nodes']['analysis/scripts/analyze.py']['all_entries'])
-    assert n_share >= 2
-    for cid in shared_cards:
-        got = [x for cell in cards[cid]['cells'] for x in cell if x['snode'] == 'f:analysis/scripts/analyze.py']
-        assert len(got) == 1 and got[0]['shared'] == n_share, (cid, got)
-    assert lst['stats']['shared'] >= 1
+    # ---- 圖表一項：figure_number＋id、格式小字、所屬帶；values_snapshot 在該項底下 ----
+    fig = next(f for f in cards['RUN_LBL']['figures'] if f['entry'] == 'G_dual')
+    assert fig['figure_number'] == 'Fig. 2' and fig['formats'] == ['svg', 'pdf'], fig
+    assert fig['values'] == ['analysis/figures/vals2.tsv'], fig['values']
+    item = rp._sub_fig_item(sub, fig)
+    assert 'svg・pdf' in item and 'data-snode="ef:G_dual"' in item and '數值快照' in item, item[:300]
+    assert rp.SUB_TIER_SHORT[fig['tier']] in item
+    # 一張圖表一項：files 不再拆成好幾個標籤
+    assert 'analysis/figures/g_dual.svg' not in item and 'g_dual.pdf' not in item, item[:300]
 
-    # ---- 取代連線的雙向連結：圖表列卡列結果鍵、結果鍵列卡列圖表 ----
-    fig_links = chips('ef:G_main', 2)
-    assert 'link:cur_a' in fig_links and fig_links['link:cur_a']['target'] == 'er:cur_a', fig_links
-    assert 'link:old_hist' in fig_links and 'historical' in fig_links['link:old_hist']['badges']
-    back = chips('er:cur_a', 3)
-    assert any(c['target'] == 'ef:G_main' for c in back.values()), back
-    assert lst['stats']['links'] >= 2
+    # ---- 共用檔：只出現在頁首共用區，卡內只放「共用 N 個」 ----
+    shared = {r['node']: r for r in ana['shared']}
+    az = 'analysis/scripts/analyze.py'
+    assert az in shared and shared[az]['col'] == 'script', ana['shared']
+    assert len(shared[az]['cards']) >= 2
+    for c in ana['cards']:
+        assert az not in c['cols']['script'], (c['id'], '共用檔不該再出現在卡內')
+    users = [c['id'] for c in ana['cards'] if az in c['shared']['script']]
+    assert set(users) == set(shared[az]['cards']), (users, shared[az]['cards'])
+    chip = rp._sub_shared_chip(sub, cards['RUN_C']['shared']['script'])
+    assert f'共用 {len(cards["RUN_C"]["shared"]["script"])} 個' in chip and 'data-sgoto="f:' in chip, chip[:200]
+    # 群組的成員清單扣掉共用檔與另有標籤的檔
+    for gid, members in ana['group_unique'].items():
+        assert set(members) <= set(sub['groups'][gid]['members'])
+        assert not (set(members) & set(shared)), gid
+        assert all(not nodes[m]['own'] and not nodes[m]['under'] for m in members), gid
 
-    # ---- 已移除與缺檔仍列出 ----
-    gone = next(x for cell in cards['ef:G_main']['cells'] for x in cell
-                if x['snode'] == 'f:analysis/figures/vals.tsv')
-    assert gone['excluded'] and '已移除' in gone['badges'], gone
-    miss = [x for c in cards.values() for cell in c['cells'] for x in cell if x['snode'] == 'f:data/gone.csv']
-    assert miss and miss[0]['missing'] and '缺檔' in miss[0]['badges'], miss
+    # ---- 未歸屬分析卡與手動加入卡 ----
+    un = [c for c in ana['cards'] if c['kind'] == 'unassigned']
+    assert un and all(c['id'] == 'unassigned:' + c['tier'] for c in un), [c['id'] for c in un]
+    assert any(f['entry'] == 'F_a' for c in un for f in c['figures']), '追不到 run 的圖表歸未歸屬卡'
+    man = [c for c in ana['cards'] if c['kind'] == 'manual']
+    assert len(man) == 1 and 'analysis/extra_note.md' in man[0]['cols']['output'], man
+    assert ana['cards'][-1]['kind'] == 'manual', '手動加入卡固定在頁尾'
+    # 有 attach_to 的手動加入放進那個入口所屬的分析卡
+    assert 'analysis/extra_attached.md' in cards['RUN_A']['cols']['output'], cards['RUN_A']['cols']
 
-    # ---- 未掛入口的手動加入：自成一張列卡 ----
-    # 有 attach_to 的手動加入放進那個入口的列卡（不是未掛入口那張）
-    att = [x for cell in cards['ef:G_main']['cells'] for x in cell if x['snode'] == 'f:analysis/extra_attached.md']
-    assert len(att) == 1 and '手動' in att[0]['badges'], att
-    ua = [c for c in cards.values() if c['kind'] == 'unattached']
-    assert len(ua) == 1 and ua[0]['tier'] == 'supplementary', [c['id'] for c in ua]
-    assert any(x['snode'] == 'f:analysis/extra_note.md' for cell in ua[0]['cells'] for x in cell), ua[0]['cells']
-    assert ua[0]['files'] == 1 and ua[0]['bytes'] > 0, ua[0]
-
-    # ---- 列卡標頭的檔數與大小＝打包同一套算法（共用檔照實計入每一張列卡）----
+    # ---- 檔數與位元組：各卡＋共用區相加＝打包總數（同一套算法）----
+    total = sum(c['files'] for c in ana['cards']) + ana['stats']['shared_files']
+    tbytes = sum(c['bytes'] for c in ana['cards']) + ana['stats']['shared_bytes']
+    assert total == sub['stats']['files'] and tbytes == sub['stats']['bytes'], (total, sub['stats']['files'])
     rows = S.package_files(v)
-    for eid, node_id in (('G_main', 'ef:G_main'), ('cur_a', 'er:cur_a'), ('cur_c', 'er:cur_c')):
-        want = [r for r in rows if eid in r['entries']]
-        assert cards[node_id]['files'] == len(want), (node_id, cards[node_id]['files'], len(want))
-        assert cards[node_id]['bytes'] == sum(r['bytes'] for r in want), node_id
-    assert sum(c['files'] for c in cards.values()) > sub['stats']['files'], '共用檔在每張列卡都算，相加會大於總數'
-    # 打包語意不變：每個沒缺檔、沒移除的群組成員仍各自出現在打包清單裡
+    assert len(rows) == sub['stats']['files']
+    # 打包語意不變：群組成員仍各自是一筆
     srcs = {r['source_path'] for r in rows}
-    for m in ga['members']:
-        node = sub['nodes'][m]
-        if node['missing'] or node['excluded'] or node['is_dir']:
+    for m in sub['groups']['runinput:RUN_A']['members']:
+        n = sub['nodes'][m]
+        if n['missing'] or n['excluded'] or n['is_dir']:
             continue
         assert v['nodes'][m]['abs'] in srcs, f'{m} 不在打包清單'
 
     html = rp.render_html(ir, root, [])
-    for anchor in ('id="tab-submission"', 'data-tab="submission"', '>投稿檔案<', 'id="sub-list"',
-                   'data-scard="ef:G_main"', 'data-snode="ef:G_main"',
-                   "['milestones','relations','literature','submission']", 'class="sub-chip k-data', 'is-miss',
-                   'is-gone', 'data-saction="build"', 'data-saction="include"', 'id="sub-include-form"',
-                   'package_edit.py', 'build_submission_package.py',
-                   'data-snode="g:runinput:RUN_A"', 'is-group', 'exclude-group', 'script 欄點名',
-                   'class="sub-member"', '手動加入（未掛入口）', 'bsw b-share', 'data-sexpand="open"',
-                   'data-sexpand="close"', '<section class="sub-band"', 'class="sub-cell c-figure"',
-                   'data-saction="exclude-entry"', 'run 輸入群組'):
+    i = html.index('<section id="tab-submission"')
+    sec = html[i:html.index('<script', i)]      # 下一個 <script> 就是 IR JSON，投稿分頁到那裡為止
+    for anchor in ('data-tab="submission"', '>投稿檔案<',
+                   "['milestones','relations','literature','submission']"):
         assert anchor in html, anchor
-    # 列表版不再畫連線圖：投稿分頁裡不得有任何 SVG 或連線圖時代的 class
-    _i = html.index('<section id="tab-submission"')
-    sub_sec = html[_i:html.index('<script', _i)]      # 下一個 <script> 就是 IR JSON，投稿分頁到那裡為止
+    for anchor in ('id="tab-submission"', 'id="sub-list"',
+                   'data-scard="RUN_A"', 'data-snode="ef:G_main"', 'data-snode="er:cur_a"',
+                   'class="sub-cell c-input"', 'class="sub-cell c-figscript"', 'class="sub-cell c-figure"',
+                   'is-miss', 'is-gone', 'is-key', 'is-shared', 'sub-fig-item', 'sub-vals',
+                   'data-saction="build"', 'data-saction="include"', 'data-saction="exclude-analysis"',
+                   'data-saction="exclude-entry"', 'data-saction="exclude-group"', 'id="sub-include-form"',
+                   'data-snode="g:runinput:RUN_A"', 'is-group', 'script 欄點名', 'class="sub-member"',
+                   'id="sub-shared"', 'sub-shared-row', '共用 ', '也用於：', '兼作圖', '作圖用',
+                   '手動加入（未掛分析）', '未歸屬分析', 'data-sexpand="open"', '<section class="sub-band"',
+                   '未連上 progress server，按鈕停用'):
+        assert anchor in sec, anchor
+    # 連線圖時代的東西不得復活
     for gone_anchor in ('id="sub-svg"', '<svg', 'class="subnode', 'subedge', 'subtrunk', 'sub-arrow',
                         'id="sub-wrap"', 'data-col=', 'crossings'):
-        assert gone_anchor not in sub_sec, f'列表版不該還有 {gone_anchor}'
-    assert html.count('data-saction') >= 3 and 'disabled>打包<' in html, '按鈕這一版全部 disabled'
+        assert gone_anchor not in sec, f'依分析分卡版不該還有 {gone_anchor}'
+    # 不要等效命令：可見文字與 data-cmd 都不得有命令
+    vis = html_mod.unescape(re.sub(r'<[^>]*>', ' ', sec))
+    for cmd_txt in ('python3 ', '--dry-run', '--apply', '--exclude', '--include', '--restore',
+                    'package_edit.py', 'build_submission_package.py', '等效命令'):
+        assert cmd_txt not in vis, f'頁面上還看得到命令字樣 {cmd_txt!r}'
+    assert 'data-cmd' not in sec and 'data-plugin' not in sec
+    # 不用完整路徑：可見文字不得有絕對路徑（DOM 屬性照原樣留，那是 package.yaml 的 exclude 識別）
+    abs_hits = re.findall(r'(?<![\w.…-])/(?:home|tmp|mnt|Users|var|opt)/[^\s、，。）)"\']*', vis)
+    assert not abs_hits, abs_hits[:3]
+    assert any(n['external'] and not n['disp'].startswith('/') for n in nodes.values()), \
+        'fixture 要有 root 外的節點，才驗得到相對專案根的顯示路徑'
+    # 每個檔與每個入口在整頁只出現一次
+    c_nodes = collections.Counter(re.findall(r'data-snode="f:((?:[^"\\]|\\.)*)"', sec))
+    assert not [k for k, n in c_nodes.items() if n > 1], [k for k, n in c_nodes.items() if n > 1][:5]
+    c_ent = collections.Counter(re.findall(r'data-snode="(e[fr]:(?:[^"\\]|\\.)*)"', sec))
+    assert not [k for k, n in c_ent.items() if n > 1], [k for k, n in c_ent.items() if n > 1][:5]
+    # 「移除這個分析」＝對這張卡的每個入口各一筆 exclude-entry
+    m = re.search(r'data-saction="exclude-analysis" data-ref="RUN_A" data-entries="([^"]*)"', sec)
+    assert m and set(m.group(1).split('|')) == set(cards['RUN_A']['entries']), (m and m.group(1))
+    norm, err = C.validate_payload(root, 'package_edit', {'exclude_entry': cards['RUN_A']['entries']})
+    assert not err and norm['exclude_entry'] == cards['RUN_A']['entries'], err
+    assert C.pkg_op_of({'exclude_entry': ['A', 'B']}) == ('exclude-entry', 'A、B')
     assert '臂' not in html, '中文不得使用「臂」'
     # 打包對話框預設收起來：`display:flex` 會蓋過 hidden 屬性的 UA 預設 display:none，一定要自己寫回來
     assert '<div id="sub-build-dialog" hidden>' in html
@@ -767,7 +855,7 @@ def test_tab(tmp: Path) -> None:
         assert anchor_txt in html, f'HTML 缺接線錨點 {anchor_txt}'
     assert rp.render_html(ir, root, []) == html, '同一份 IR 兩次渲染要一致'
 
-    # ---- 投稿分頁不得影響關聯分頁（0.23.0 列表版改版的不變量）----
+    # ---- 投稿分頁不得影響關聯分頁（0.23.0 改版的不變量）----
     # (a) 共用排版函式沒被為了投稿分頁改過：車道超量仍是折回重用、crossing_stats 沒有多出參數
     assert 'pair_limit' not in inspect.signature(rp.crossing_stats).parameters, 'crossing_stats 的簽章被改過'
     over = rp.TRUNK_MAX_LANES + 3
@@ -781,8 +869,8 @@ def test_tab(tmp: Path) -> None:
     html_empty = rp.render_html(ir_empty, root, [])
 
     def _sect(doc: str, sid: str) -> str:
-        i = doc.index(f'<section id="{sid}"')
-        return doc[i:doc.index('</section>', i)]
+        k = doc.index(f'<section id="{sid}"')
+        return doc[k:doc.index('</section>', k)]
     for sid in ('tab-relations', 'tab-milestones', 'tab-literature'):
         assert _sect(html, sid) == _sect(html_empty, sid), f'{sid} 被投稿分頁影響了'
     src2 = rp.Sources(root)
@@ -800,19 +888,23 @@ def test_tab(tmp: Path) -> None:
     assert empty['present'] is False and empty['error'] == '' and not rp._validate_submission(empty), empty
     ir2 = json.loads(json.dumps(ir))
     ir2['submission'] = empty
-    body = '\n'.join(rp._submission_tab(ir2, []))
-    assert 'id="tab-submission"' in body and '還沒有可以列的投稿檔案' in body, body[:300]
+    doc = '\n'.join(rp._submission_tab(ir2, []))
+    assert 'id="tab-submission"' in doc and '還沒有可以列的投稿檔案' in doc, doc[:300]
     # derive 出例外 → 記 error、分頁照出、不讓整頁掛掉
     bad = rp.build_submission(None, [])
     assert bad['error'] and not bad['entries'] and not rp._validate_submission(bad), bad
     ir2['submission'] = bad
-    body = '\n'.join(rp._submission_tab(ir2, []))
-    assert '算不出來' in body and 'id="tab-submission"' in body, body[:300]
+    doc = '\n'.join(rp._submission_tab(ir2, []))
+    assert '算不出來' in doc and 'id="tab-submission"' in doc, doc[:300]
     # IR-17 會抓到壞資料
     broken = json.loads(json.dumps(sub))
     broken['entries'][0]['tier'] = 'nope'
     assert any('IR-17' in e for e in rp._validate_submission(broken))
-    print('  規格 10 投稿檔案分頁 ok')
+    broken2 = json.loads(json.dumps(sub))
+    first = next(c for c in broken2['analyses']['cards'] if c['cols']['output'])
+    broken2['analyses']['shared'].append({'node': first['cols']['output'][0], 'col': 'input', 'cards': []})
+    assert any('也落在' in e for e in rp._validate_submission(broken2)), '同一個檔落兩處要被 IR-17 抓到'
+    print('  規格 10 投稿檔案分頁（依分析分卡）ok')
 
 
 # =====================================================================================================

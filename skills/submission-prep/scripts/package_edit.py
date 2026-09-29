@@ -5,7 +5,7 @@
   python3 package_edit.py <root> --include <PATH> --tier main|extended|supplementary --kind data|code|result|figure|other
       [--attach-to <圖表 id 或結果鍵>] [--note "..."]
   python3 package_edit.py <root> --exclude <PATH> [--exclude <PATH> …] [--reason "..."]
-  python3 package_edit.py <root> --exclude-entry <圖表 id 或結果鍵> [--reason "..."]
+  python3 package_edit.py <root> --exclude-entry <圖表 id 或結果鍵> [--exclude-entry <ID> …] [--reason "..."]
   python3 package_edit.py <root> --restore <PATH 或 入口 id>
   共同旗標: [--inbox IN-xxx] [--daily-log <path>] [--expect-token <token>] (--dry-run | --apply)
 
@@ -87,11 +87,20 @@ def parse_op(args: argparse.Namespace) -> dict[str, Any]:
         return {'op': 'exclude', 'list': 'exclude', 'items': items, 'item': items[0],
                 'target': '、'.join(paths)}
     if kind == 'exclude_entry':
-        item = {'entry': args.exclude_entry}
-        if args.reason:
-            item['reason'] = args.reason
-        return {'op': 'exclude-entry', 'list': 'exclude', 'items': [item], 'item': item,
-                'target': args.exclude_entry}
+        # --exclude-entry 可以重複給：分頁的「移除這個分析」就是對那張卡的每個入口各寫一筆，
+        # 同一個 D# 一次 apply 完。不發明分析專屬語法——package.yaml 的 exclude 仍是逐入口一筆。
+        ids: list[str] = []
+        for raw in args.exclude_entry:
+            if raw not in ids:
+                ids.append(raw)
+        items = []
+        for raw in ids:
+            it = {'entry': raw}
+            if args.reason:
+                it['reason'] = args.reason
+            items.append(it)
+        return {'op': 'exclude-entry', 'list': 'exclude', 'items': items, 'item': items[0],
+                'target': '、'.join(ids)}
     return {'op': 'restore', 'list': '', 'items': [], 'item': {}, 'target': args.restore}
 
 
@@ -191,12 +200,15 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             hits += [x for x in one if x not in hits]
         op['hits'] = hits
     elif op['op'] == 'exclude-entry':
-        eid = op['item']['entry']
-        if any(it.get('entry') == eid for it in lists['exclude']):
-            raise ChainError(f'{PKG_REL} 的 exclude 已有入口 {eid}，沒有要改的東西')
-        if eid not in entry_ids:
-            raise ChainError(f'{eid} 不是現有入口（圖表 id 或現行結果鍵）')
-        op['hits'] = [nid for nid, n in view['nodes'].items() if eid in n['entries']]
+        hits: list[str] = []
+        for it_new in op['items']:
+            eid = it_new['entry']
+            if any(it.get('entry') == eid for it in lists['exclude']):
+                raise ChainError(f'{PKG_REL} 的 exclude 已有入口 {eid}，沒有要改的東西')
+            if eid not in entry_ids:
+                raise ChainError(f'{eid} 不是現有入口（圖表 id 或現行結果鍵）')
+            hits += [nid for nid, n in view['nodes'].items() if eid in n['entries'] and nid not in hits]
+        op['hits'] = hits
     else:
         target = op['target']
         found = None
@@ -252,7 +264,10 @@ def op_sentence(ctx: dict[str, Any]) -> str:
         return f'移除檔案或資料夾 {what}（連帶 {len(op.get("hits") or [])} 個節點）' \
             + (f'；理由：{item["reason"]}' if item.get('reason') else '')
     if op['op'] == 'exclude-entry':
-        return f'移除入口 {item["entry"]}（連帶 {len(op.get("hits") or [])} 個節點）' + (f'；理由：{item["reason"]}' if item.get('reason') else '')
+        ids = [it['entry'] for it in op['items']]
+        what = ids[0] if len(ids) == 1 else f'{len(ids)} 個（{"、".join(ids)}）'
+        return f'移除入口 {what}（連帶 {len(op.get("hits") or [])} 個節點）' \
+            + (f'；理由：{item["reason"]}' if item.get('reason') else '')
     what = item.get('path') or item.get('entry')
     return f'還原 {what}（從 {ctx["list"]} 清單移除這筆差量，回到衍生規則的判斷）'
 
@@ -476,7 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--include', default='', metavar='PATH')
     parser.add_argument('--exclude', action='append', default=[], metavar='PATH',
                         help='可重複；一次移除多筆（群組節點的整組移除）寫成同一個 D#')
-    parser.add_argument('--exclude-entry', default='', metavar='ID')
+    parser.add_argument('--exclude-entry', action='append', default=[], metavar='ID',
+                        help='可重複：一次移除好幾個入口（分頁的「移除這個分析」），同一個 D#')
     parser.add_argument('--restore', default='', metavar='PATH_OR_ID')
     parser.add_argument('--tier', default='', choices=('',) + S.TIERS)
     parser.add_argument('--kind', default='', choices=('',) + S.KINDS)

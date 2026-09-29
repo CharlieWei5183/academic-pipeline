@@ -2008,9 +2008,13 @@ def pkg_op_of(payload: dict) -> tuple[str, str]:
             if one not in uniq:
                 uniq.append(one)
         return 'exclude', '、'.join(uniq)
-    ent = _pkg_list(payload, 'exclude_entry')
+    ent = [str(x) for x in _pkg_list(payload, 'exclude_entry')]
     if ent:
-        return 'exclude-entry', str(ent[0])
+        uniq_e: list[str] = []
+        for one in ent:      # parse_op 也是保留順序去重後才 '、'.join
+            if one not in uniq_e:
+                uniq_e.append(one)
+        return 'exclude-entry', '、'.join(uniq_e)
     res = _pkg_list(payload, 'restore')
     if res:
         return 'restore', str(res[0])
@@ -2070,14 +2074,18 @@ def _validate_package_edit(root: Path, payload) -> tuple[dict | None, str]:
             if item.get(fld):
                 one[fld] = str(item[fld]).strip()[:500]
         out['include'] = [one]
-    elif given[0] == 'exclude':
+    elif given[0] in ('exclude', 'exclude_entry'):
+        # exclude 可以多個路徑、exclude_entry 可以多個入口（分頁的「移除這個分析」＝一張卡的每個入口各一筆）；
+        # 兩者都是同一個 D# 一次 apply 完，package_edit.py 的旗標也都可以重複給。
+        what = ('exclude 的每一項須為非空字串（相對 root 的路徑，root 外的用絕對路徑）'
+                if given[0] == 'exclude' else 'exclude_entry 的每一項須為非空字串（圖表 id 或現行結果鍵）')
         paths: list[str] = []
-        for raw in _pkg_list(payload, 'exclude'):
+        for raw in _pkg_list(payload, given[0]):
             if not isinstance(raw, str) or not raw.strip():
-                return None, 'exclude 的每一項須為非空字串（相對 root 的路徑，root 外的用絕對路徑）'
+                return None, what
             if raw.strip() not in paths:
                 paths.append(raw.strip())
-        out['exclude'] = paths
+        out[given[0]] = paths
     else:
         items = _pkg_list(payload, given[0])
         if len(items) != 1:
@@ -2168,12 +2176,12 @@ def _argv_package_edit(p: dict) -> list[str]:
 def _title_package_edit(p: dict) -> tuple[str, str, str]:
     op, target = pkg_op_of(p)
     label = {'include': '加入檔案', 'exclude': '移出投稿包', 'exclude-entry': '移除整個入口', 'restore': '還原'}.get(op, op)
-    n = len(_pkg_list(p, 'exclude'))
-    title = f'投稿清單：{label} {target}'[:180] + (f'（{n} 筆）' if op == 'exclude' and n > 1 else '')
+    n = len(_pkg_list(p, 'exclude')) or len(_pkg_list(p, 'exclude_entry'))
+    title = f'投稿清單：{label} {target}'[:180] + (f'（{n} 筆）' if op in ('exclude', 'exclude-entry') and n > 1 else '')
     body = {
         'include': f'{PKG_YAML_REL} 的 include 加一筆 {target}（手動加入，衍生規則不會自己收這個檔）',
         'exclude': f'{PKG_YAML_REL} 的 exclude 加 {n} 筆：{target}。被移除的節點仍列在分頁上，隨時可以還原',
-        'exclude-entry': f'{PKG_YAML_REL} 的 exclude 加一筆入口 {target}：該入口與只被它引用的檔案一起不打包',
+        'exclude-entry': f'{PKG_YAML_REL} 的 exclude 加 {n} 筆入口：{target}。該入口與只被它引用的檔案一起不打包',
         'restore': f'把 {target} 從 {PKG_YAML_REL} 的 include／exclude 移掉，回到衍生規則算出來的狀態',
     }.get(op, f'投稿清單改定：{op} {target}')
     # target 留空（跟 batch 一樣）：server 會拿它去對現行關聯圖的節點 id，而投稿檔案分頁的節點不在那份 IR 裡
