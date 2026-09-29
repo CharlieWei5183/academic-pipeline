@@ -3265,6 +3265,170 @@ def build_literature(src: Sources, path: Path | None = None) -> dict:
             'data': {'nodes': out_nodes, 'edges': out_edges}}
 
 
+# ---------- 投稿檔案（第四個分頁；0.22.0） ----------
+# 清單的衍生規則只有 skills/submission-prep/scripts/submission_package_common.py 那一份（derive()）：
+# 入口＝manifest 有 role 的圖表／表格 ＋ results.json 的現行結果鍵，各自往回追程式碼、資料、結果與圖表檔。
+# 本檔只做兩件事：把關聯圖既有的歸帶結果餵進去（省一次 build_ir），再把回傳值修剪成分頁要用的欄位。
+# 規則不在這裡重寫；要改規則改那一份。
+
+SUB_MODULE = 'skills/submission-prep/scripts/submission_package_common.py'
+SUB_TIERS = ('main', 'extended', 'supplementary')
+SUB_KINDS = ('code', 'data', 'result', 'figure', 'other')
+SUB_TIER_LABEL = {'main': '正式文章', 'extended': '延伸資料', 'supplementary': '補充資料'}
+SUB_TIER_BAND = {'main': 'main', 'extended': 'ext', 'supplementary': 'supp'}
+SUB_KIND_LABEL = {'data': '資料', 'code': '程式碼', 'result': '結果', 'figure': '圖表', 'other': '其他'}
+SUB_NODE_FIELDS = ('id', 'path', 'kind', 'tier', 'exists', 'missing', 'external', 'is_dir', 'n_files', 'bytes',
+                   'packaged_path', 'entries', 'via', 'origin', 'note', 'badges', 'excluded', 'exclude_reason', 'counted')
+SUB_ENTRY_FIELDS = ('id', 'kind', 'tier', 'label', 'type', 'figure_number', 'role', 'caption_first', 'status',
+                    'plan_id', 'run_id', 'result_keys', 'badges', 'run_missing', 'excluded', 'exclude_reason', 'source')
+SUB_ENTRY_PREFIX = {'figure': 'ef:', 'result': 'er:'}   # 入口 id 在 manifest 與 results.json 之間可能撞名，圖上的節點 id 加前綴
+SUB_STAT_KEYS = ('entries', 'entries_excluded', 'entries_by_tier', 'entries_by_kind', 'nodes', 'nodes_excluded',
+                 'nodes_by_kind', 'bytes', 'files', 'missing', 'blocking_missing', 'external', 'added')
+
+
+def _sub_stats_zero() -> dict:
+    return {'entries': 0, 'entries_excluded': 0, 'entries_by_tier': {t: 0 for t in SUB_TIERS},
+            'entries_by_kind': {'figure': 0, 'result': 0}, 'nodes': 0, 'nodes_excluded': 0,
+            'nodes_by_kind': {k: 0 for k in SUB_KINDS}, 'bytes': 0, 'files': 0, 'missing': 0,
+            'blocking_missing': 0, 'external': 0, 'added': 0}
+
+
+def _sub_empty(error: str = '', present: bool = False) -> dict:
+    return {'source': SUB_MODULE, 'present': present, 'error': error, 'entries': [], 'nodes': {}, 'refs': [],
+            'missing': [], 'blocking_missing': [], 'excluded': [], 'added': [], 'run_missing': {},
+            'warnings': [], 'stats': _sub_stats_zero()}
+
+
+def build_submission(root: Path, graph_nodes: list[dict]) -> dict:
+    """投稿檔案分頁的資料（唯讀）：呼叫 derive()，歸帶沿用關聯圖已建好的節點，不重算也不重建 IR。
+
+    模組載不進來、或 derive 出例外時回空狀態＋error：分頁照樣出現、只顯示錯誤訊息，不讓整頁渲染失敗。
+    manifest／results.json 缺檔與 package.yaml 不存在都不是錯誤，是空狀態（derive 自己會記 warning）。
+    """
+    scripts_dir = Path(__file__).resolve().parents[2] / 'submission-prep' / 'scripts'
+    try:
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        import submission_package_common as SP
+        view = SP.derive(root, key_bands=SP.bands_from_ir_nodes(graph_nodes))
+    except Exception as exc:
+        return _sub_empty(f'投稿清單衍生規則無法執行（{_one_line(exc)}）')
+    try:
+        out = {
+            'source': SUB_MODULE,
+            'present': bool(view['entries']),
+            'error': '',
+            'entries': [dict({k: e.get(k, '') if k not in ('result_keys', 'badges', 'run_missing') else e.get(k) or []
+                              for k in SUB_ENTRY_FIELDS},
+                             node_id=SUB_ENTRY_PREFIX[e['kind']] + e['id']) for e in view['entries']],
+            'nodes': {nid: {k: n[k] for k in SUB_NODE_FIELDS} for nid, n in view['nodes'].items()},
+            'refs': [{'from': r['from'], 'to': r['to'], 'via': r['via']} for r in view['edges']],
+            'missing': list(view['missing']),
+            'blocking_missing': list(view['blocking_missing']),
+            'excluded': list(view['excluded']),
+            'added': list(view['added']),
+            'run_missing': dict(view.get('run_missing') or {}),
+            'warnings': list(view['warnings']),
+            'stats': {k: view['stats'][k] for k in SUB_STAT_KEYS},
+        }
+    except Exception as exc:      # derive 的 schema 與這裡的欄位對不上時同樣不讓整頁掛掉
+        return _sub_empty(f'投稿清單的欄位與本頁預期不符（{_one_line(exc)}）')
+    return out
+
+
+def _validate_submission(sub) -> list[str]:
+    """IR-17：投稿檔案分頁的資料。缺檔＝空狀態也要通過（present False、0 入口 0 節點）；derive 出例外時 error 非空、其餘全空。"""
+    errors: list[str] = []
+    if not isinstance(sub, dict):
+        return ['IR-17 submission']
+    for key in ('source', 'error'):
+        if not isinstance(sub.get(key), str):
+            errors.append(f'IR-17 submission.{key}')
+    if not isinstance(sub.get('present'), bool):
+        errors.append('IR-17 submission.present')
+    for key in ('entries', 'refs', 'missing', 'blocking_missing', 'excluded', 'added', 'warnings'):
+        if not isinstance(sub.get(key), list):
+            errors.append(f'IR-17 submission.{key}')
+    for key in ('nodes', 'run_missing', 'stats'):
+        if not isinstance(sub.get(key), dict):
+            errors.append(f'IR-17 submission.{key}')
+    if errors:
+        return errors
+    if sub['error'] and (sub['entries'] or sub['nodes']):
+        errors.append('IR-17 submission.error 非空時其餘要是空狀態')
+    eids: set[str] = set()
+    nids: set[str] = set()
+    for i, e in enumerate(sub['entries']):
+        pre = f'IR-17 submission.entries[{i}]'
+        if not isinstance(e, dict) or not isinstance(e.get('id'), str) or not e['id']:
+            errors.append(f'{pre}.id')
+            continue
+        eids.add(e['id'])
+        if e.get('kind') not in ('figure', 'result'):
+            errors.append(f'{pre}.kind')
+        elif e.get('node_id') != SUB_ENTRY_PREFIX[e['kind']] + e['id']:
+            errors.append(f'{pre}.node_id')
+        elif e['node_id'] in nids:      # 同一個 id 可以同時是 manifest 的圖表與 results.json 的結果鍵，但同分類內必須唯一
+            errors.append(f'{pre}.node_id 重複')
+        nids.add(e.get('node_id') or '')
+        if e.get('tier') not in SUB_TIERS:
+            errors.append(f'{pre}.tier')
+        if not isinstance(e.get('excluded'), bool):
+            errors.append(f'{pre}.excluded')
+        if not isinstance(e.get('badges'), list) or not isinstance(e.get('run_missing'), list):
+            errors.append(f'{pre}.badges／run_missing')
+        if not isinstance(e.get('result_keys'), list):
+            errors.append(f'{pre}.result_keys')
+        else:
+            for j, it in enumerate(e['result_keys']):
+                if not isinstance(it, dict) or not isinstance(it.get('key'), str) \
+                        or any(not isinstance(it.get(k), bool) for k in ('historical', 'registered', 'is_entry')):
+                    errors.append(f'{pre}.result_keys[{j}]')
+    for nid, n in sub['nodes'].items():
+        pre = f'IR-17 submission.nodes[{nid}]'
+        if not isinstance(n, dict) or n.get('id') != nid:
+            errors.append(f'{pre}.id')
+            continue
+        if n.get('kind') not in SUB_KINDS:
+            errors.append(f'{pre}.kind')
+        if n.get('tier') not in SUB_TIERS:
+            errors.append(f'{pre}.tier')
+        for key in ('missing', 'external', 'is_dir', 'excluded', 'counted'):
+            if not isinstance(n.get(key), bool):
+                errors.append(f'{pre}.{key}')
+        for key in ('n_files', 'bytes'):
+            if not isinstance(n.get(key), int) or isinstance(n.get(key), bool):
+                errors.append(f'{pre}.{key}')
+        if not isinstance(n.get('entries'), list) or not isinstance(n.get('badges'), list) or not isinstance(n.get('via'), list):
+            errors.append(f'{pre}.entries／badges／via')
+        elif any(x not in eids for x in n['entries']):
+            errors.append(f'{pre}.entries 指到不存在的入口')
+        if n.get('origin') not in ('derived', 'added'):
+            errors.append(f'{pre}.origin')
+    for i, r in enumerate(sub['refs']):
+        if not isinstance(r, dict) or r.get('from') not in eids or r.get('to') not in sub['nodes']:
+            errors.append(f'IR-17 submission.refs[{i}]')
+    for nid in sub['missing'] + sub['blocking_missing']:
+        if nid not in sub['nodes']:
+            errors.append(f'IR-17 submission.missing {nid} 不在 nodes')
+    st = sub['stats']
+    for key in SUB_STAT_KEYS:
+        if key not in st:
+            errors.append(f'IR-17 submission.stats.{key}')
+    if not errors:
+        if st['missing'] != len(sub['missing']) or st['blocking_missing'] != len(sub['blocking_missing']):
+            errors.append('IR-17 submission.stats.missing／blocking_missing')
+        if st['added'] != len(sub['added']):
+            errors.append('IR-17 submission.stats.added')
+        if st['entries'] != sum(1 for e in sub['entries'] if not e['excluded']):
+            errors.append('IR-17 submission.stats.entries')
+        if st['nodes'] != sum(1 for n in sub['nodes'].values() if not n['excluded']):
+            errors.append('IR-17 submission.stats.nodes')
+        if set(st['entries_by_tier']) != set(SUB_TIERS) or set(st['nodes_by_kind']) != set(SUB_KINDS):
+            errors.append('IR-17 submission.stats 分類鍵')
+    return errors
+
+
 # ---------- IR ----------
 
 def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False,
@@ -3292,6 +3456,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
     graph = build_graph(src, lanes, embed_figures)
     inbox = build_inbox(src, graph)
     literature = build_literature(src, literature_path)
+    submission = build_submission(root, graph['nodes'])
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': generated_at,
@@ -3304,6 +3469,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         'graph': graph,
         'inbox': inbox,
         'literature': literature,
+        'submission': submission,
     }
 
 
@@ -3312,7 +3478,8 @@ def validate_ir(ir) -> list[str]:
     errors: list[str] = []
     if not isinstance(ir, dict):
         return ['IR-01 top-level 不是 object']
-    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph', 'inbox', 'literature'):
+    for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph',
+                'inbox', 'literature', 'submission'):
         if key not in ir:
             errors.append(f'IR-01 top-level.{key}')
     if ir.get('schema_version') != SCHEMA_VERSION:
@@ -3411,6 +3578,7 @@ def validate_ir(ir) -> list[str]:
         if isinstance(stats, dict) and stats.get('inbox_pending') != inbox['pending']:
             errors.append('IR-15 stats.inbox_pending')
     errors.extend(_validate_literature(ir.get('literature')))
+    errors.extend(_validate_submission(ir.get('submission')))
     return errors
 
 
@@ -3879,7 +4047,7 @@ GRAPH_JS = """
   function draggable(id){var n=nodes[id];return !!(n&&((n.type==='question'&&questionKind(id))||isActivePlan(id)||isSensItem(id)||n.type==='figure'||isDragResult(id)||n.type==='validation'));}   // 0.20.0：驗證節點可拖（只為 Extended Data 歸屬）
   var ACT_LABEL={reassign:'降為附錄問題',promote:'升回主問題',set_role:'改圖表 role',move_plan:'搬方法',move_sensitivity:'搬敏感性子分析',reorder:'調順序',move_result:'搬結果',nest_result:'掛到主結果下',demote_plan:'降為敏感性子分析',set_tier:'Extended Data 歸屬',batch:'批次'};
   // ---- 分頁 ----
-  var tabs={};['milestones','relations','literature'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
+  var tabs={};['milestones','relations','literature','submission'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
   var cur='milestones';
   function showTab(name,writeHash){
     if(!tabs[name])name='milestones';cur=name;
@@ -6083,6 +6251,807 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     return '\n'.join(out)
 
 
+# ---------- 投稿檔案分頁（第四個分頁；0.22.0） ----------
+# 版面沿用關聯圖既有的排版引擎：欄距／列距／區帶框架（band_frame）、走道車道與幹線合併（route_edges）、
+# 跳欄借一列 dummy 穿過、交叉計數（crossing_stats）都是同一套，不另寫第二份。
+# 欄序由左到右固定四欄：資料 → 程式碼 → 結果 → 圖表；區帶由上而下 Main → Extended Data → Supplementary。
+
+SUB_COLS = (('data', '資料'), ('code', '程式碼'), ('result', '結果'), ('figure', '圖表'))
+SUB_COL_OF = {'data': 0, 'code': 1, 'result': 2, 'other': 2, 'figure': 3}
+SUB_CHILD_SUBTYPE = 'secondary'   # 只借 SUB_INDENT_OF 的縮排寬度，與關聯圖的次要結果無關
+SUB_BADGE_SHORT = {'缺檔': '缺檔', 'root 外': 'root 外', '手動加入': '手動', '已移除': '已移除',
+                   'historical': 'historical', 'run 資料夾不存在': 'run 缺'}
+SUB_SWEEPS = 8            # barycenter 往返掃描輪數（掃描便宜，節點數在千位以下）
+SUB_FIG_FIELDS = ('files', 'script', 'values_snapshot', 'registered_sources', 'unregistered_sources')
+RUNS_DIR_PREFIX = 'analysis/runs/'   # 資料檔 → 所屬 run 的 scripts 節點（只做顯示用的連線，衍生規則不在這裡）
+SUB_BAND_TITLE = {b: BAND_TITLE[b].split('：')[0] for b in BANDS}   # 沿用關聯圖的帶標籤（去掉關聯圖專屬的補述）
+
+
+def _sub_node(nid: str, kind: str, col: int, band: str, label: str, *, parent: str = '',
+              entry: str = '', ref: str = '') -> dict:
+    return {'id': nid, 'kind': kind, 'col': col, 'band': band, 'label': label, 'parent': parent,
+            'subtype': SUB_CHILD_SUBTYPE if parent else '', 'entry': entry, 'ref': ref,
+            'x': 0.0, 'y': 0.0, 'order': 0, 'type': kind}
+
+
+def _sub_label(node: dict) -> str:
+    """檔案節點的顯示名：檔名（資料夾補「/」）；同名檔多時補上一層資料夾。"""
+    name = node['path'].rstrip('/').rsplit('/', 1)[-1] or node['path']
+    return name + '/' if node['is_dir'] else name
+
+
+def _sub_badges(node: dict, hist: bool) -> list[str]:
+    out = [SUB_BADGE_SHORT.get(b, b) for b in node['badges']]
+    if hist and 'historical' not in out:
+        out.append('historical')
+    return out
+
+
+SUB_FAN_MIN = 3   # 同一個目標、同一個走道的邊到幾條才收束成扇形（2 條分開畫還看得清）
+
+
+def _sub_fan(nodes: dict[str, dict], edges: list[dict]) -> dict:
+    """多對一的扇形收束：同一個目標、同一個走道的邊（≥ SUB_FAN_MIN 條）合成一條共用垂直線＋逐來源水平線。
+
+    route_edges 的幹線是按「同一個來源」合併的（扇出）；扇入沒有東西可合，幾十條線各佔一條車道就會互相交叉上千次
+    （一個 run 的 input_snapshot 動輒幾十個資料檔，全部指向同一個 scripts/ 節點）。這裡自己畫：走道裡一條共用垂直線，
+    每個來源一段水平線接上去，最後一段水平線進目標。水平線只在端點碰到垂直線，不算交叉。
+    回 {'paths': {edge idx: d}, 'spines': [{'d', 'type', 'style', 'key'}], 'lines': [...], 'handled': {idx}}。
+    """
+    def cy(n: dict) -> float:
+        return n['y'] + NODE_H / 2
+
+    groups: dict[int, list[tuple[tuple, list[int]]]] = {}
+    cand: dict[tuple, list[int]] = {}
+    for i, e in enumerate(edges):
+        a, b = nodes[e['from']], nodes[e['to']]
+        if b['col'] - a['col'] != 1:
+            continue
+        cand.setdefault((a['col'], e['to'], e['type'], e['style']), []).append(i)
+    def span(key: tuple) -> tuple:
+        ys = [cy(nodes[edges[i]['from']]) for i in cand[key]] + [cy(nodes[key[1]])]
+        return (round((min(ys) + max(ys)) / 2, 2), round(max(ys) - min(ys), 2), key[1])
+
+    # 車道由左到右依「這一束的 y 中心」排：y 範圍互不重疊的束彼此不會交叉，重疊的也讓包住別人的那一束靠右
+    for key in sorted(cand, key=span):
+        if len(cand[key]) >= SUB_FAN_MIN:
+            groups.setdefault(key[0], []).append((key, cand[key]))
+    paths: dict[int, str] = {}
+    spines: list[dict] = []
+    lines: list[dict] = []
+    handled: set[int] = set()
+    for gap, items in sorted(groups.items()):
+        for lane, (key, idxs) in enumerate(items):
+            x = _lane_x(gap, lane, len(items))
+            tgt = nodes[key[1]]
+            ty = cy(tgt)
+            ys = [cy(nodes[edges[i]['from']]) for i in idxs] + [ty]
+            key_s = f'fan|{key[0]}|{key[1]}|{key[2]}|{key[3]}'
+            spines.append({'d': f'M{_num(x)},{_num(min(ys))} L{_num(x)},{_num(max(ys))}',
+                           'type': key[2], 'style': key[3], 'key': key_s})
+            lines.append({'edge': None, 'trunk': key_s, 'kind': 'vertical', 'type': key[2],
+                          'seg': ((x, min(ys)), (x, max(ys)))})
+            lines.append({'edge': None, 'trunk': key_s, 'kind': 'stub', 'type': key[2],
+                          'seg': ((x, ty), (tgt['x'], ty))})
+            spines.append({'d': f'M{_num(x)},{_num(ty)} L{_num(tgt["x"])},{_num(ty)}',
+                           'type': key[2], 'style': key[3], 'key': key_s, 'head': True})
+            for i in idxs:
+                src = nodes[edges[i]['from']]
+                sx, sy = src['x'] + _node_w(src), cy(src)
+                paths[i] = f'M{_num(sx)},{_num(sy)} L{_num(x)},{_num(sy)}'
+                lines.append({'edge': i, 'trunk': key_s, 'kind': 'stub', 'type': key[2],
+                              'seg': ((sx, sy), (x, sy))})
+                handled.add(i)
+    return {'paths': paths, 'spines': spines, 'lines': lines, 'handled': handled}
+
+
+def _sub_primary_code(code: list[str], nodes: dict[str, dict]) -> str:
+    """一個入口的代表腳本節點：優先 run 的 `scripts/` 資料夾，其次路徑最前面的那一支。"""
+    if not code:
+        return ''
+    dirs = sorted(x for x in code if nodes[x]['is_dir'])
+    return dirs[0] if dirs else sorted(code)[0]
+
+
+def _sub_run_scripts(node: dict, nodes: dict[str, dict]) -> str:
+    """資料檔所屬 run 的 scripts 節點（從自己的路徑或被追到的欄位裡取 run 名）；沒有就回空字串。"""
+    cands = [node['path']] + list(node.get('via') or [])
+    for text in cands:
+        i = text.find(RUNS_DIR_PREFIX)
+        if i < 0:
+            continue
+        rest = text[i + len(RUNS_DIR_PREFIX):]
+        run = rest.split('/', 1)[0]
+        nid = f'f:{RUNS_DIR_PREFIX}{run}/scripts'
+        if run and nid in nodes:
+            return nid
+    return ''
+
+
+def _sub_graph(sub: dict) -> dict:
+    """節點、邊與座標。回 {'nodes', 'edges', 'l_edges', 'route', 'width', 'height', 'frame', 'dummy_rows', 'stats'}。
+
+    節點：入口自己是節點（圖表入口在圖表欄、結果鍵入口在結果欄）；檔案節點依 kind 落欄（其他 → 結果欄）；
+    kind=figure 的檔案不另開節點，改在圖表節點的面板逐檔列出。結果鍵入口的 run 輸出檔（report.md、status.json、
+    values_snapshot…）縮排掛在該入口之下，以 L 形線相連。
+    邊：資料 → 程式碼 → 結果 → 圖表；產圖腳本可跳過結果欄直接進圖表（在結果欄借一列 dummy 穿過）；
+    結果鍵入口 → 引用它的圖表入口。邊只從 derive 的節點—入口關係推出來，衍生規則不在這裡重寫。
+    """
+    entries = sub['entries']
+    by_id: dict[str, list[dict]] = {}
+    for e in entries:
+        by_id.setdefault(e['id'], []).append(e)
+    eorder = {e['id']: i for i, e in enumerate(entries)}
+    for eid, group in by_id.items():
+        eorder[eid] = min(entries.index(x) for x in group)
+
+    def has_kind(eid: str, kind: str) -> bool:
+        return any(x['kind'] == kind for x in by_id.get(eid, []))
+    hist_keys = {it['key'] for e in entries for it in e['result_keys'] if it['historical']}
+    cur_keys = {it['key'] for e in entries for it in e['result_keys'] if not it['historical']}
+    nodes: dict[str, dict] = {}
+
+    # ---- 入口節點 ----
+    for e in entries:
+        band = SUB_TIER_BAND[e['tier']]
+        label = (f'{e["figure_number"]} ｜ {e["id"]}' if e['kind'] == 'figure' and e['figure_number'] else e['id'])
+        n = _sub_node(e['node_id'], 'entry_figure' if e['kind'] == 'figure' else 'entry_result',
+                      3 if e['kind'] == 'figure' else 2, band, label, entry=e['id'], ref=e['id'])
+        n.update({'is_dir': False, 'bytes': 0, 'n_files': 0, 'missing': False, 'excluded': e['excluded'],
+                  'badges': [SUB_BADGE_SHORT.get(b, b) for b in e['badges']] + (['已移除'] if e['excluded'] else []),
+                  'path': e['source'], 'tier': e['tier']})
+        nodes[n['id']] = n
+
+    # ---- 檔案節點 ----
+    for nid, fn in sorted(sub['nodes'].items()):
+        owners = [x for x in fn['entries'] if x in by_id]
+        fig_owners = [x for x in owners if has_kind(x, 'figure')]
+        if fn['kind'] == 'figure' and fig_owners:
+            continue        # 圖表自己的 svg／pdf／png：面板逐檔列，不另開節點
+        band = SUB_TIER_BAND[fn['tier']]
+        parent = ''
+        if fn['kind'] in ('result', 'other'):
+            res_owners = [x for x in owners if any(y['kind'] == 'result' and SUB_TIER_BAND[y['tier']] == band
+                                                   for y in by_id[x])]
+            if res_owners:
+                parent = 'er:' + min(res_owners, key=lambda x: eorder[x])
+        via_hist = any(f'results_keys[{k}]' in v for v in fn['via'] for k in hist_keys)
+        via_cur = any(not v.startswith('results_keys[') for v in fn['via']) or \
+            any(f'results_keys[{k}]' in v for v in fn['via'] for k in cur_keys)
+        n = _sub_node(f'f:{nid}', fn['kind'], SUB_COL_OF.get(fn['kind'], 2), band, '', parent=parent, ref=nid)
+        n.update({k: fn[k] for k in ('path', 'tier', 'is_dir', 'bytes', 'n_files', 'missing', 'excluded', 'external',
+                                     'origin', 'packaged_path', 'note', 'entries', 'via', 'counted')})
+        n['badges'] = _sub_badges(fn, via_hist and not via_cur)
+        n['label'] = _sub_label(n)
+        nodes[n['id']] = n
+    for n in nodes.values():
+        if n['parent'] and n['parent'] not in nodes:
+            n['parent'] = ''
+            n['subtype'] = ''
+
+    # ---- 邊 ----
+    edges: list[dict] = []
+    l_edges: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(a: str, b: str, etype: str, style: str = 'solid') -> None:
+        if a == b or a not in nodes or b not in nodes or (a, b) in seen:
+            return
+        seen.add((a, b))
+        edges.append({'from': a, 'to': b, 'type': etype, 'style': style, 'label': '', 'source': ''})
+
+    by_entry: dict[str, list[str]] = {}
+    for nid, n in nodes.items():
+        for eid in n.get('entries') or []:
+            by_entry.setdefault(eid, []).append(nid)
+    for e in entries:
+        target = e['node_id']
+        # 已經有連線的結果鍵入口
+        key_entries = [it['key'] for it in e['result_keys'] if it['is_entry'] and has_kind(it['key'], 'result')]
+        mine = by_entry.get(e['id'], [])
+        code = [x for x in mine if nodes[x]['kind'] == 'code']
+        data = [x for x in mine if nodes[x]['kind'] == 'data']
+        res = [x for x in mine if nodes[x]['kind'] in ('result', 'other', 'figure')]
+        for x in code:
+            add(x, target, 'produces')
+        # 資料 → 程式碼只連一條：優先連「這個資料檔自己那個 run 的 scripts/」，否則連這個入口的代表腳本
+        # （每個資料檔對每個入口都畫到所有腳本的話，線會多到看不出東西）
+        primary = _sub_primary_code(code, nodes)
+        for x in data:
+            c = _sub_run_scripts(nodes[x], nodes) or primary
+            if c:
+                add(x, c, 'feeds')
+            else:
+                add(x, target, 'feeds')
+        for x in res:
+            if nodes[x]['parent'] == target:
+                l_edges.append((target, x))
+            elif e['kind'] == 'figure' and not nodes[x]['parent']:
+                # 這個結果檔是靠圖表的 results_keys 追到的，而那個鍵本身已經有節點連過來了：
+                # 不再從檔案另拉一條，否則同一條關係會畫兩次、線也會多到看不出東西
+                vias = nodes[x]['via'] or []
+                via_key = any(v.startswith(f'results_keys[{k}]') for v in vias for k in key_entries)
+                via_direct = any(v.split('.')[0] in SUB_FIG_FIELDS for v in vias)
+                if via_key and not via_direct:
+                    continue
+                add(x, target, 'depicts')
+            elif e['kind'] == 'result':
+                add(target, x, 'produces', 'thin')
+        if e['kind'] == 'figure':
+            for it in e['result_keys']:
+                if it['is_entry'] and has_kind(it['key'], 'result'):
+                    add('er:' + it['key'], target, 'depicts')
+
+    # ---- 列序：同一入口的檔案排在一起，再以 barycenter 往返掃描（只在同帶同欄內重排）----
+    blocks: dict[tuple[str, int], list[list[str]]] = {}
+    members: dict[str, list[str]] = {}
+    for nid, n in nodes.items():
+        head = n['parent'] or nid
+        members.setdefault(head, [])
+        if head != nid:
+            members[head].append(nid)
+    for head, kids in members.items():
+        kids.sort()
+    for nid, n in nodes.items():
+        if n['parent']:
+            continue
+        key = (n['band'], n['col'])
+        blocks.setdefault(key, []).append([nid] + members.get(nid, []))
+
+    def anchor(nid: str) -> tuple:
+        if nid not in nodes:        # 跳欄借的空列：起點跟著目標節點，之後由 barycenter 微調
+            a = anchor(edges[dummies[nid]['edge']]['to'])
+            return (a[0], 'zz~', nid)
+        n = nodes[nid]
+        own = [eorder[x] for x in (n.get('entries') or []) if x in eorder]
+        if n['kind'].startswith('entry_'):
+            own = [eorder.get(n['entry'], 10 ** 6)]
+        return (min(own) if own else 10 ** 6, n['kind'], nid)
+
+    for key in blocks:
+        blocks[key].sort(key=lambda blk: anchor(blk[0]))
+
+    # 跳欄邊的 dummy 列：一條邊每個中間欄借一列，落在目標節點的區帶（與關聯圖同一套）
+    dummies: dict[str, dict] = {}
+    for i, e in enumerate(edges):
+        a, b = nodes[e['from']], nodes[e['to']]
+        if abs(b['col'] - a['col']) <= 1:
+            continue
+        step = 1 if b['col'] > a['col'] else -1
+        for col in range(a['col'] + step, b['col'], step):
+            did = f'~{i}@{col}'
+            dummies[did] = {'id': did, 'col': col, 'band': b['band'], 'edge': i, 'y': 0.0}
+            blocks.setdefault((b['band'], col), []).append([did])
+
+    adj: dict[str, list[str]] = {}
+    for e in edges:
+        adj.setdefault(e['from'], []).append(e['to'])
+        adj.setdefault(e['to'], []).append(e['from'])
+    for did, d in dummies.items():
+        e = edges[d['edge']]
+        adj.setdefault(did, []).extend([e['from'], e['to']])
+        adj.setdefault(e['from'], []).append(did)
+        adj.setdefault(e['to'], []).append(did)
+
+    pos: dict[str, int] = {}
+
+    def repos() -> None:
+        """全圖列序（barycenter 比較用）：區帶依序累積，帶高＝該帶最高那欄的列數，帶與帶之間留一列。"""
+        off = 0
+        for band in BANDS:
+            rows = 0
+            for c in range(len(SUB_COLS)):
+                row = 0
+                for blk in blocks.get((band, c), []):
+                    for nid in blk:
+                        pos[nid] = off + row
+                        row += 1
+                rows = max(rows, row)
+            off += rows + 1
+
+    def col_of(nid: str) -> int:
+        return nodes[nid]['col'] if nid in nodes else dummies[nid]['col']
+
+    repos()
+    for rnd in range(SUB_SWEEPS):
+        cols = range(len(SUB_COLS)) if rnd % 2 == 0 else reversed(range(len(SUB_COLS)))
+        for c in cols:
+            for key, blks in blocks.items():
+                if key[1] != c or len(blks) < 2:
+                    continue
+                def bary(blk: list[str]) -> tuple:
+                    vals = [pos[x] for nid in blk for x in adj.get(nid, []) if abs(col_of(x) - c) == 1 and x in pos]
+                    return (0, sum(vals) / len(vals)) if vals else (1, float(pos[blk[0]]))
+                blks.sort(key=lambda blk: (bary(blk), anchor(blk[0])))
+                repos()
+
+    # ---- y：每個區帶內各欄從帶的第一列起往下排，帶高＝最高那欄的列數（與 band_frame 同一套定義）----
+    has_other = any(key[0] != 'main' and blks for key, blks in blocks.items())
+    prev = GRAPH_PAD
+    for band in BANDS:
+        y0 = (GRAPH_PAD + BAND_TITLE_H if has_other else GRAPH_PAD) if band == 'main' else prev + BAND_GAP + BAND_TITLE_H
+        rows_max = 0
+        for c in range(len(SUB_COLS)):
+            row = 0
+            for blk in blocks.get((band, c), []):
+                for nid in blk:
+                    y = y0 + row * ROW_GAP
+                    if nid in nodes:
+                        nodes[nid]['y'] = y
+                        nodes[nid]['order'] = row
+                        nodes[nid]['x'] = GRAPH_PAD + c * COL_PITCH + _indent(nodes[nid])
+                    else:
+                        dummies[nid]['y'] = y
+                    row += 1
+            rows_max = max(rows_max, row)
+        prev = y0 + (rows_max - 1) * ROW_GAP + NODE_H if rows_max else (prev if band != 'main' else y0)
+
+    for i, e in enumerate(edges):
+        a, b = nodes[e['from']], nodes[e['to']]
+        if abs(b['col'] - a['col']) <= 1:
+            continue
+        step = 1 if b['col'] > a['col'] else -1
+        e['via'] = [[col, dummies[f'~{i}@{col}']['y']] for col in range(a['col'] + step, b['col'], step)]
+
+    fan = _sub_fan(nodes, edges)
+    route = route_edges(nodes, [(i, e) for i, e in enumerate(edges) if i not in fan['handled']])
+    shown = set(nodes)
+    crossings, pairs, overlaps = crossing_stats(nodes, shown, route['lines'] + fan['lines'])
+    dummy_rows: dict[str, list[float]] = {}
+    for d in dummies.values():
+        dummy_rows.setdefault(d['band'], []).append(d['y'])
+    frame = band_frame(list(nodes.values()), shown, dummy_rows)
+    width = int(max([n['x'] + _node_w(n) for n in nodes.values()] + [GRAPH_PAD + len(SUB_COLS) * COL_PITCH]) + GRAPH_PAD)
+    height = int(max([frame['bottom'][b] for b in BANDS] + [GRAPH_PAD]) + GRAPH_PAD)
+    return {'nodes': nodes, 'edges': edges, 'l_edges': l_edges, 'route': route, 'fan': fan, 'dummies': dummies,
+            'width': width, 'height': height, 'frame': frame, 'dummy_rows': dummy_rows,
+            'stats': {'graph_nodes': len(nodes), 'graph_edges': len(edges) + len(l_edges),
+                      'crossings': crossings, 'edge_node_overlaps': overlaps, 'dummy_rows': len(dummies),
+                      'fans': len([s for s in fan['spines'] if not s.get('head')]), 'fan_edges': len(fan['handled']),
+                      'crossing_pairs': pairs[:5], 'lane_overflow': list(route['overflow'])}}
+
+
+SUB_HEAD_H = 26          # 欄標題列（在區帶框架之上，另外算高度）
+SUB_BADGE_CLASS = {'缺檔': 'miss', 'root 外': 'ext', '手動': 'add', '已移除': 'gone',
+                   'historical': 'hist', 'run 缺': 'runmiss'}
+
+
+def _sub_human(n: int) -> str:
+    v = float(n)
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if v < 1024 or unit == 'GB':
+            return f'{v:.0f} {unit}' if unit == 'B' else f'{v:.1f} {unit}'
+        v /= 1024.0
+    return f'{v:.1f} GB'
+
+
+def _sub_size_text(n: dict) -> str:
+    if n['kind'].startswith('entry_'):
+        return ''
+    if n['missing']:
+        return '—'
+    if n.get('is_dir'):
+        return f'{n["n_files"]} 檔 {_sub_human(n["bytes"])}'
+    return _sub_human(n['bytes'])
+
+
+def _sub_node_svg(n: dict) -> str:
+    w = _node_w(n)
+    size = _sub_size_text(n)
+    size_w = _tw(size, 11)
+    badges = n['badges'][:2] + ([f'+{len(n["badges"]) - 2}'] if len(n['badges']) > 2 else [])
+    bw = [_tw(b, 10) + 6 for b in badges]
+    label = _fit(n['label'], w - 22 - size_w - sum(bw) - 6 * len(bw) - 8, 11 if n['parent'] else 12)
+    parts = [f'<g class="subnode k-{n["kind"]}{" sub" if n["parent"] else ""}{" is-miss" if n["missing"] else ""}'
+             f'{" is-gone" if n["excluded"] else ""}" data-snode="{_h(n["id"])}" data-kind="{n["kind"]}" '
+             f'data-band="{n["band"]}" data-col="{n["col"]}" data-order="{n["order"]}" '
+             f'transform="translate({n["x"]:g},{n["y"]:g})" tabindex="0" role="button">'
+             f'<rect class="box" width="{w}" height="{NODE_H}" rx="6"></rect>'
+             f'<rect class="kbar" x="3" y="3" width="5" height="{NODE_H - 6}" rx="2"></rect>'
+             f'<text class="lbl" x="16" y="23">{_h(label)}</text>']
+    x = w - 8 - size_w - (6 if size else 0)
+    for b, bwi in zip(reversed(badges), reversed(bw)):
+        x -= bwi
+        parts.append(f'<text class="bdg b-{SUB_BADGE_CLASS.get(b, "other")}" x="{x:g}" y="23">{_h(b)}</text>')
+        x -= 4
+    if size:
+        parts.append(f'<text class="sz" x="{w - 8}" y="23" text-anchor="end">{_h(size)}</text>')
+    title = f'{n["label"]}（{SUB_KIND_LABEL.get(n["kind"], n["kind"])}）\n{n["path"]}'
+    if n['badges']:
+        title += '\n' + '、'.join(n['badges'])
+    parts.append(f'<title>{_h(title)}</title></g>')
+    return ''.join(parts)
+
+
+def _svg_submission(g: dict) -> str:
+    nodes, route = g['nodes'], g['route']
+    width, height, frame = g['width'], g['height'] + SUB_HEAD_H, g['frame']
+    out = [f'<svg id="sub-svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" '
+           f'aria-label="投稿檔案關係圖：四欄由左到右資料、程式碼、結果、圖表；三個區帶由上而下正式文章、延伸資料、補充資料">',
+           '<defs><marker id="sub-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" '
+           'orient="auto-start-reverse"><path class="sub-arrow-head" d="M0,0 L10,5 L0,10 z"></path></marker></defs>',
+           '<g id="sub-view"><g id="sub-cols">']
+    for c, (_cid, label) in enumerate(SUB_COLS):
+        out.append(f'<text class="colhead" x="{GRAPH_PAD + c * COL_PITCH}" y="{SUB_HEAD_H - 9}">{_h(label)}</text>')
+    out.append(f'</g><g id="sub-root" transform="translate(0,{SUB_HEAD_H})"><g id="sub-bands">')
+    for b in BANDS:
+        off = '' if frame['has'][b] else ' off'
+        if b != 'main':
+            out.append(f'<line class="band-divider{off}" data-band="{b}" x1="{GRAPH_PAD}" y1="{frame["y_div"][b]:g}" '
+                       f'x2="{width - GRAPH_PAD}" y2="{frame["y_div"][b]:g}"></line>')
+        out.append(f'<text class="band-title{off}" data-band="{b}" x="{GRAPH_PAD}" '
+                   f'y="{frame["y_title"][b] + BAND_TITLE_DY:g}">{_h(SUB_BAND_TITLE[b])}</text>')
+    out.append('</g><g id="sub-trunks">')
+    for t in route['trunks']:
+        out.append(f'<path class="subtrunk e-{t["type"]} st-{t["style"]}" data-trunk="{_h(t["key"])}" d="{t["d"]}"></path>')
+    for s in g['fan']['spines']:
+        out.append(f'<path class="subtrunk e-{s["type"]} st-{s["style"]}{" head" if s.get("head") else ""}" '
+                   f'data-trunk="{_h(s["key"])}" d="{s["d"]}"></path>')
+    out.append('</g><g id="sub-edges">')
+    for i, e in enumerate(g['edges']):
+        d = g['fan']['paths'].get(i) or route['paths'].get(i, '')
+        fanned = ' fanned' if i in g['fan']['handled'] else ''
+        out.append(f'<path class="subedge e-{e["type"]} st-{e["style"]}{fanned}" data-idx="{i}" data-from="{_h(e["from"])}" '
+                   f'data-to="{_h(e["to"])}" d="{d}"></path>')
+    for a, b in g['l_edges']:
+        out.append(f'<path class="subedge e-owns" data-from="{_h(a)}" data-to="{_h(b)}" '
+                   f'd="{_l_path(nodes[a], nodes[b])}"></path>')
+    out.append('</g><g id="sub-nodes">')
+    for nid in sorted(nodes, key=lambda x: (nodes[x]['band'], nodes[x]['col'], nodes[x]['order'])):
+        out.append(_sub_node_svg(nodes[nid]))
+    out.append('</g></g></g></svg>')
+    return '\n'.join(out)
+
+
+def _sub_cmd(plugin: Path, root: str, script: str, tail: str) -> str:
+    return f'python3 {plugin}/skills/submission-prep/scripts/{script} {root} {tail}'
+
+
+def _submission_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
+    """第四個分頁「投稿檔案」（唯讀檢視）：摘要列、四欄三帶的關係圖、節點面板。
+
+    面板與摘要列的「移除／還原／加入檔案／打包」在這一版全部 disabled，旁邊寫等效命令；伺服器端動作登記與按鈕
+    接線是下一棒。按鈕的 data 屬性即為接線契約：data-saction（動作種類）、data-node（圖上的節點 id）、
+    data-ref（SSOT 的識別：入口 id 或相對 root 的路徑）、data-tier、data-kind、data-cmd（等效命令）。
+    """
+    sub = ir.get('submission') or _sub_empty()
+    plugin = Path(__file__).resolve().parents[3]
+    root = ir['project_root']
+    lines = [f'<section id="tab-submission" hidden data-plugin="{_h(str(plugin))}" data-root="{_h(root)}">']
+    if sub['error']:
+        lines += [f'<p class="sub-empty">投稿檔案清單這次算不出來：{_h(sub["error"])}。'
+                  f'其他分頁不受影響；修好 <code>{_h(sub["source"])}</code> 後重跑本頁即可。</p>', '</section>']
+        return lines
+    st = sub['stats']
+    build_cmd = _sub_cmd(plugin, root, 'build_submission_package.py', '--dry-run')
+    blocked = st['blocking_missing'] > 0
+    lines += [
+        '<div class="sub-summary">',
+        '<div class="sub-figs">',
+        '<span class="sub-fig"><b>入口</b> ' + '、'.join(
+            f'{SUB_TIER_LABEL[t]} {st["entries_by_tier"].get(t, 0)}' for t in SUB_TIERS)
+        + f'（圖表／表格 {st["entries_by_kind"].get("figure", 0)}、結果鍵 {st["entries_by_kind"].get("result", 0)}）</span>',
+        '<span class="sub-fig"><b>檔案節點</b> ' + '、'.join(
+            f'{SUB_KIND_LABEL[k]} {st["nodes_by_kind"].get(k, 0)}' for k in SUB_KINDS if st['nodes_by_kind'].get(k))
+        + '</span>',
+        f'<span class="sub-fig"><b>總計</b> {st["files"]} 個檔、{_sub_human(st["bytes"])}</span>',
+        f'<span class="sub-fig"><b>root 外</b> {st["external"]}</span>',
+        f'<span class="sub-fig"><b>手動加入</b> {st["added"]}</span>',
+        f'<span class="sub-fig"><b>已移除</b> 入口 {st["entries_excluded"]}、節點 {st["nodes_excluded"]}</span>',
+        ('<span class="sub-fig is-bad"><b>缺檔（擋打包）</b> ' + str(st['blocking_missing']) + '</span>'
+         if blocked else '<span class="sub-fig is-ok"><b>缺檔（擋打包）</b> 0</span>'),
+        '</div>',
+        '<div class="sub-act">',
+        f'<button type="button" id="sub-build" data-saction="build" data-cmd="{_h(build_cmd)}" disabled>打包</button>',
+        '<span class="sub-cmd">下一棒才接線；等效命令：<code>' + _h(build_cmd) + '</code></span>',
+    ]
+    if blocked:
+        lines.append(f'<span class="sub-why">有 {st["blocking_missing"]} 個納入中的缺檔，打包會被拒絕（exit 1）：'
+                     '先用 package_edit.py 移除，或補上替代檔。</span>')
+    lines.append('</div>')
+    if blocked:
+        lines.append('<ul class="sub-missing">')
+        for nid in sub['blocking_missing'][:8]:
+            lines.append(f'<li><a href="#" class="sub-goto" data-sgoto="f:{_h(nid)}"><code>{_h(nid)}</code></a></li>')
+        if st['blocking_missing'] > 8:
+            lines.append(f'<li class="notice">…另有 {st["blocking_missing"] - 8} 個（完整清單在 PROGRESS.ir.json 的 submission.blocking_missing）</li>')
+        lines.append('</ul>')
+    if sub['warnings']:
+        lines.append(f'<details class="sub-warn"><summary>衍生時的提醒 {len(sub["warnings"])} 條</summary><ul>')
+        lines += [f'<li>{_h(w)}</li>' for w in sub['warnings'][:40]]
+        if len(sub['warnings']) > 40:
+            lines.append(f'<li class="notice">…另有 {len(sub["warnings"]) - 40} 條</li>')
+        lines.append('</ul></details>')
+    lines.append('</div>')
+    if not sub['present']:
+        lines += ['<p class="sub-empty">還沒有可以列的投稿檔案：'
+                  '<code>analysis/figures/manifest.json</code> 沒有標 role 的圖表，<code>analysis/results.json</code> 也沒有現行結果鍵。'
+                  '兩者其中之一有內容後重跑本頁就會出現。</p>', '</section>']
+        return lines
+    g = _sub_graph(sub)
+    gs = g['stats']
+    if notes is not None:
+        for gap in gs['lane_overflow']:
+            notes.append(f'投稿檔案分頁走道 {gap} 的幹線超過 {TRUNK_MAX_LANES} 條車道，折回重用')
+    lines += [
+        '<div class="sub-legend">',
+        '<span>欄序由左到右：' + ' → '.join(label for _cid, label in SUB_COLS) + '</span>',
+        '<span>區帶由上而下：' + '、'.join(SUB_BAND_TITLE[b] for b in BANDS) + '（節點落在自己的帶，跨帶的線照畫）</span>',
+    ]
+    for kind, label in SUB_COLS:
+        lines.append(f'<span><span class="ksw k-{kind}"></span>{label}</span>')
+    lines += [
+        '<span><span class="ksw k-entry_result"></span>結果鍵入口</span>',
+        '<span><span class="ksw k-entry_figure"></span>圖表／表格入口</span>',
+        '<span>縮排＝該結果鍵 run 的輸出檔（report.md、status.json、快照表…），以 L 形線連回入口</span>',
+        '<span>徽章：<span class="bsw b-miss">缺檔</span>擋打包・<span class="bsw b-runmiss">run 缺</span>run 資料夾不存在'
+        '（不擋）・<span class="bsw b-ext">root 外</span>・<span class="bsw b-add">手動</span>手動加入・'
+        '<span class="bsw b-gone">已移除</span>整個節點變灰但仍列出・<span class="bsw b-hist">historical</span>只被歷史鍵引用</span>',
+        '<span>點節點看來源路徑、打包後路徑與引用它的入口；圖表節點逐檔列出 files</span>',
+        '<span>滾輪縮放、拖曳平移、Esc 關面板</span>',
+        '</div>',
+        '<div id="sub-wrap">',
+        _svg_submission(g),
+        '</div>',
+        f'<p class="notice">投稿檔案圖：節點 {gs["graph_nodes"]}（入口 {st["entries"] + st["entries_excluded"]}、檔案節點'
+        f' {len(sub["nodes"])}，其中圖表自己的 files 不另開節點）、邊 {gs["graph_edges"]}、跳欄借用的空列'
+        f' {gs["dummy_rows"]}；線段交叉 {gs["crossings"]}、穿過節點 {gs["edge_node_overlaps"]}。'
+        f'清單與帶的規則來自 <code>{_h(sub["source"])}</code>（derive()），歸帶沿用關聯圖同一套；本頁只讀不改 SSOT。</p>',
+        '<aside id="sub-detail" hidden><button type="button" class="close" id="sub-detail-close">關閉（Esc）</button>',
+        '<div id="sub-detail-body"></div>',
+        '<form id="sub-include-form" class="sub-form">',
+        '<h4>加入檔案（下一棒才接線）</h4>',
+        '<label>路徑 <input type="text" name="path" placeholder="相對 root；root 外用絕對路徑" disabled></label>',
+        '<label>帶 <select name="tier" disabled>'
+        + ''.join(f'<option value="{t}">{SUB_TIER_LABEL[t]}</option>' for t in SUB_TIERS) + '</select></label>',
+        '<label>分類 <select name="kind" disabled>'
+        + ''.join(f'<option value="{k}">{SUB_KIND_LABEL[k]}</option>' for k in SUB_KINDS) + '</select></label>',
+        '<label>掛到哪個入口 <select name="attach_to" disabled><option value="">（不掛）</option>'
+        + ''.join(f'<option value="{_h(e["id"])}">{_h(e["id"])}</option>' for e in sub['entries']) + '</select></label>',
+        '<label>備註 <input type="text" name="note" disabled></label>',
+        f'<button type="button" data-saction="include" data-cmd="{_h(_sub_cmd(plugin, root, "package_edit.py", "--include <路徑> --tier <帶> --kind <分類> --dry-run"))}" disabled>加入檔案</button>',
+        '<p class="sub-cmd">等效命令：<code>'
+        + _h(_sub_cmd(plugin, root, 'package_edit.py', '--include <路徑> --tier <帶> --kind <分類> --dry-run')) + '</code></p>',
+        '</form>',
+        '</aside>',
+        '</section>',
+    ]
+    return lines
+
+
+SUB_CSS = """
+.sub-summary{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.sub-figs{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px}
+.sub-fig b{font-weight:600;color:var(--muted);margin-right:4px}
+.sub-fig.is-bad{color:var(--badge-blocked);font-weight:600}
+.sub-fig.is-ok{color:var(--done)}
+.sub-act{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px}
+.sub-act button{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:4px 12px;font:inherit}
+.sub-act button[disabled]{opacity:.55;cursor:not-allowed}
+.sub-cmd{font-size:11px;color:var(--muted)}
+.sub-cmd code{font-size:11px;word-break:break-all}
+.sub-why{font-size:12px;color:var(--badge-blocked)}
+.sub-missing{margin:8px 0 0;padding-left:18px;font-size:12px}
+.sub-missing code{word-break:break-all}
+.sub-missing a{color:var(--badge-blocked)}
+.sub-warn{margin-top:8px;font-size:12px;color:var(--muted)}
+.sub-warn ul{margin:4px 0;padding-left:18px}
+.sub-warn li{margin:2px 0}
+.sub-empty{margin:16px 0;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
+.sub-legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:8px 0 10px;font-size:12px;color:var(--muted)}
+.sub-legend span{display:inline-flex;align-items:center;gap:5px}
+.ksw{display:inline-block;width:10px;height:14px;border-radius:2px;background:var(--pending)}
+.ksw.k-data{background:var(--t-validation)}.ksw.k-code{background:var(--t-method)}
+.ksw.k-result{background:var(--t-result)}.ksw.k-figure{background:var(--t-figure)}
+.ksw.k-entry_result{background:var(--t-result);outline:2px solid var(--current);outline-offset:1px}
+.ksw.k-entry_figure{background:var(--t-figure);outline:2px solid var(--current);outline-offset:1px}
+.bsw{border-radius:3px;padding:0 4px;font-size:11px;border:1px solid var(--line)}
+.bsw.b-miss{color:var(--badge-blocked);border-color:var(--badge-blocked)}
+.bsw.b-runmiss{color:var(--expired);border-color:var(--expired)}
+.bsw.b-ext{color:var(--current);border-color:var(--current)}
+.bsw.b-add{color:var(--done);border-color:var(--done)}
+.bsw.b-gone{color:var(--muted)}
+.bsw.b-hist{color:var(--t-lit);border-color:var(--t-lit)}
+#sub-wrap{position:relative;overflow:auto;height:72vh;min-height:360px;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:grab;user-select:none}
+#sub-wrap.dragging{cursor:grabbing}
+#sub-svg{display:block}
+#sub-cols text.colhead{font-size:12px;font-weight:600;fill:var(--muted)}
+#sub-bands text.band-title{font-size:12px;font-weight:600;fill:var(--muted)}
+#sub-bands line.band-divider{stroke:var(--edge-faint);stroke-width:1;stroke-dasharray:6 4}
+#sub-bands .off{display:none}
+.subnode{cursor:pointer}
+.subnode .box{fill:var(--bg-none);stroke:var(--pending);stroke-width:1.2}
+.subnode .kbar{fill:var(--pending)}
+.subnode .lbl{font-size:12px;fill:var(--fg)}
+.subnode.sub .lbl{font-size:11px}
+.subnode .sz{font-size:11px;fill:var(--muted)}
+.subnode .bdg{font-size:10px;fill:var(--muted)}
+.subnode .bdg.b-miss{fill:var(--badge-blocked);font-weight:700}
+.subnode .bdg.b-runmiss{fill:var(--expired);font-weight:700}
+.subnode .bdg.b-ext{fill:var(--current)}
+.subnode .bdg.b-add{fill:var(--done)}
+.subnode .bdg.b-hist{fill:var(--t-lit)}
+.subnode.k-data .kbar{fill:var(--t-validation)}
+.subnode.k-code .kbar{fill:var(--t-method)}
+.subnode.k-result .kbar,.subnode.k-other .kbar{fill:var(--t-result)}
+.subnode.k-figure .kbar{fill:var(--t-figure)}
+.subnode.k-entry_result .kbar{fill:var(--t-result)}
+.subnode.k-entry_figure .kbar{fill:var(--t-figure)}
+.subnode.k-entry_result .box,.subnode.k-entry_figure .box{stroke:var(--current);stroke-width:1.8;fill:var(--proj)}
+.subnode.is-miss .box{stroke:var(--badge-blocked);stroke-dasharray:5 3}
+.subnode.is-gone{opacity:.45}
+.subnode.is-gone .box{stroke-dasharray:3 3}
+.subnode.on .box{stroke:var(--current);stroke-width:2.6}
+.subnode.dim{opacity:.28}
+.subnode:focus{outline:none}.subnode:focus .box{stroke:var(--current);stroke-width:2.6}
+path.subedge{fill:none;stroke:var(--edge);stroke-width:1.1;marker-end:url(#sub-arrow)}
+path.subtrunk{fill:none;stroke:var(--edge);stroke-width:1.6}
+path.subedge.st-thin,path.subtrunk.st-thin{stroke-width:.9;stroke:var(--edge-thin)}
+path.subedge.e-owns{stroke:var(--edge-thin);stroke-width:1;marker-end:none}
+path.subedge.fanned{marker-end:none}
+path.subtrunk.head{marker-end:url(#sub-arrow)}
+path.subedge.on,path.subtrunk.on{stroke:var(--current);stroke-width:2}
+path.subedge.dim,path.subtrunk.dim{stroke:var(--edge-faint)}
+.sub-arrow-head{fill:var(--edge)}
+#sub-detail{position:fixed;right:16px;bottom:16px;width:min(520px,calc(100vw - 32px));max-height:76vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:10}
+#sub-detail h3{margin:0 0 6px;font-size:15px}
+#sub-detail h4{margin:10px 0 4px;font-size:13px}
+#sub-detail .close{float:right;border:1px solid var(--line);background:none;color:inherit;border-radius:6px;cursor:pointer;padding:2px 8px}
+#sub-detail dl{margin:6px 0}#sub-detail dt{font-weight:600;margin-top:6px;font-size:12px;color:var(--muted)}
+#sub-detail dd{margin:0 0 0 8px;font-size:13px;word-break:break-all}
+#sub-detail ul{margin:2px 0;padding-left:18px;font-size:12px}
+#sub-detail li{margin:2px 0}
+#sub-detail .row{display:flex;align-items:center;gap:6px;justify-content:space-between}
+#sub-detail button[data-saction]{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:1px 8px;font-size:12px}
+#sub-detail button[disabled]{opacity:.55;cursor:not-allowed}
+#sub-detail .goto{color:var(--current);cursor:pointer;text-decoration:underline dotted}
+#sub-detail .sub-form{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+#sub-detail .sub-form label{display:block;font-size:12px;margin:4px 0;color:var(--muted)}
+#sub-detail .sub-form input,#sub-detail .sub-form select{font:inherit;font-size:12px;padding:2px 4px;max-width:100%;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+#sub-detail .sub-form button{border:1px solid var(--line);background:var(--proj);color:inherit;border-radius:6px;padding:3px 10px;font-size:12px;margin-top:4px}
+"""
+
+SUB_JS = r"""
+/* 投稿檔案分頁（唯讀）：節點面板、缺檔跳轉、滾輪縮放與拖曳平移。
+   面板與表單裡所有 data-saction 的按鈕這一版一律 disabled，只顯示等效命令；下一棒接 server 動作。 */
+(function(){
+  var src=document.getElementById('progress-ir'); if(!src) return;
+  var ir; try{ir=JSON.parse(src.textContent);}catch(e){return;}
+  var sub=ir.submission; if(!sub) return;
+  var section=document.getElementById('tab-submission'); if(!section) return;
+  var svg=document.getElementById('sub-svg'), wrap=document.getElementById('sub-wrap');
+  var detail=document.getElementById('sub-detail'), body=document.getElementById('sub-detail-body');
+  var PLUGIN=section.getAttribute('data-plugin')||'', ROOT=section.getAttribute('data-root')||'';
+  var EDIT='python3 '+PLUGIN+'/skills/submission-prep/scripts/package_edit.py '+ROOT;
+  var TIER={main:'正式文章',extended:'延伸資料',supplementary:'補充資料'};
+  var KIND={data:'資料',code:'程式碼',result:'結果',figure:'圖表',other:'其他',
+            entry_result:'結果鍵入口',entry_figure:'圖表／表格入口'};
+  var WHY={'缺檔':'引用它的欄位指到這個路徑，但檔案不存在；打包會被拒絕',
+           'run 資料夾不存在':'結果鍵的 run_id 只是標籤，資料夾從未存在；script 欄找得到檔，所以不擋打包',
+           'root 外':'來源在專案根之外，打包時放進 external/',
+           '手動加入':'submission/package.yaml 的 include 加的，不是衍生出來的',
+           '已移除':'submission/package.yaml 的 exclude 移掉了，仍列出以便還原',
+           'historical':'只被 status=historical 的結果鍵引用（該鍵本身不是入口）'};
+  var entries={},byId={}; (sub.entries||[]).forEach(function(e){entries[e.node_id]=e;
+    (byId[e.id]=byId[e.id]||[]).push(e.node_id);});
+  var nodes=sub.nodes||{};
+  function h(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+  function q(s){return String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"');}
+  function human(n){var v=n||0,u=['B','KB','MB','GB'],i=0;
+    while(v>=1024&&i<3){v/=1024;i++;} return (i?v.toFixed(1):v.toFixed(0))+' '+u[i];}
+  function btn(action,ref,label,cmd,extra){
+    return '<button type="button" data-saction="'+h(action)+'" data-ref="'+h(ref)+'" data-cmd="'+h(cmd)+'"'+
+      (extra||'')+' disabled>'+h(label)+'</button>';}
+  function cmdline(cmd){return '<p class="sub-cmd">等效命令：<code>'+h(cmd)+'</code></p>';}
+  function gotoLink(id,label){return '<span class="goto" data-sgoto="'+h(id)+'">'+h(label)+'</span>';}
+  function dl(pairs){var out='<dl>';pairs.forEach(function(p){
+      if(p[1]===''||p[1]===null||p[1]===undefined)return;
+      out+='<dt>'+h(p[0])+'</dt><dd>'+p[1]+'</dd>';});return out+'</dl>';}
+  function badgeList(bs){ if(!bs||!bs.length) return '';
+    return '<ul>'+bs.map(function(b){return '<li><span class="bsw">'+h(b)+'</span> '+h(WHY[b]||'')+'</li>';}).join('')+'</ul>';}
+  function filesOf(eid){var out=[];Object.keys(nodes).forEach(function(k){var n=nodes[k];
+      if(n.kind==='figure'&&(n.entries||[]).indexOf(eid)>=0)out.push(n);});return out;}
+  function fileRow(n){
+    return '<li><div class="row"><span><code>'+h(n.path)+'</code> '+(n.missing?'<span class="bsw b-miss">缺檔</span>':h(human(n.bytes)))+'</span>'+
+      '<span>'+btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --dry-run')+
+      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div></li>';}
+  function nodePanel(id){
+    var n=nodes[id.slice(2)]; if(!n) return '';
+    var refs=[];(n.entries||[]).forEach(function(x){
+      (byId[x]||[]).forEach(function(nid){refs.push(gotoLink(nid,x+'（'+(KIND[entries[nid].kind==='figure'?'entry_figure':'entry_result'])+'）'));});
+      if(!byId[x])refs.push(h(x));});
+    refs=refs.join('、');
+    var out='<h3>'+h(n.path.split('/').pop()||n.path)+'</h3>'+
+      dl([['分類',h(KIND[n.kind]||n.kind)+'／'+h(TIER[n.tier]||n.tier)],
+          ['來源路徑','<code>'+h(n.path)+'</code>'+(n.external?'（專案根之外）':'')],
+          ['打包後路徑',n.missing?'—（缺檔不會被複製）':'<code>'+h(n.packaged_path)+'</code>'],
+          ['大小',n.missing?'—':(n.is_dir?(n.n_files+' 個檔、'+human(n.bytes)):human(n.bytes))+
+                 (n.counted?'':'（已含在上層資料夾節點內，不重複計）')],
+          ['引用它的入口',refs||'（沒有入口引用，來自手動加入）'],
+          ['被哪些欄位追到','<ul><li>'+(n.via||[]).map(h).join('</li><li>')+'</li></ul>'],
+          ['備註',n.note?h(n.note):''],
+          ['徽章',badgeList(n.badges)]]);
+    out+='<div class="row"><span>'+(n.excluded?'已移除：'+h(n.exclude_reason||''):'納入打包')+'</span><span>'+
+      btn('exclude',n.path,'移除',EDIT+' --exclude '+n.path+' --reason <理由> --dry-run')+
+      btn('restore',n.path,'還原',EDIT+' --restore '+n.path+' --dry-run')+'</span></div>'+
+      cmdline(EDIT+' --exclude '+n.path+' --dry-run');
+    return out;}
+  function entryPanel(id){
+    var e=entries[id]; if(!e) return '';
+    var keys=(e.result_keys||[]).map(function(it){
+      var tgt=(byId[it.key]||[]).filter(function(x){return x.indexOf('er:')===0;})[0];
+      return '<li>'+(it.is_entry&&tgt?gotoLink(tgt,it.key):'<code>'+h(it.key)+'</code>')+
+        (it.historical?' <span class="bsw b-hist">historical</span>':'')+
+        (it.registered?'':' <span class="bsw b-miss">不在 results.json</span>')+'</li>';}).join('');
+    var rows=[['類型',h(e.kind==='figure'?(e.type||'figure'):'結果鍵'+(e.type?'（'+e.type+'）':''))],
+              ['帶',h(TIER[e.tier]||e.tier)+(e.role?'（manifest role：'+h(e.role)+'）':'')],
+              ['編號',h(e.figure_number||'')],
+              ['計畫／run',[e.plan_id,e.run_id].filter(Boolean).map(h).join(' ／ ')],
+              ['說明',h(e.caption_first||'')],
+              ['來源','<code>'+h(e.source)+'</code>'],
+              ['結果鍵',keys?'<ul>'+keys+'</ul>':''],
+              ['run 資料夾不存在',(e.run_missing||[]).length?'<ul><li><code>'+(e.run_missing||[]).map(h).join('</code></li><li><code>')+'</code></li></ul>':''],
+              ['徽章',badgeList(e.badges)]];
+    var out='<h3>'+h(e.figure_number?e.figure_number+' ｜ '+e.id:e.id)+'</h3>'+dl(rows);
+    if(e.kind==='figure'){
+      var fs=filesOf(e.id);
+      out+='<h4>圖表檔（'+fs.length+'）</h4>'+(fs.length?'<ul>'+fs.map(fileRow).join('')+'</ul>':'<p class="sub-cmd">manifest 的 files 沒有列任何檔</p>');}
+    out+='<div class="row"><span>'+(e.excluded?'整個入口已移除：'+h(e.exclude_reason||''):'納入打包')+'</span><span>'+
+      btn('exclude-entry',e.id,'移除入口',EDIT+' --exclude-entry '+e.id+' --reason <理由> --dry-run')+
+      btn('restore',e.id,'還原',EDIT+' --restore '+e.id+' --dry-run')+'</span></div>'+
+      cmdline(EDIT+' --exclude-entry '+e.id+' --dry-run');
+    return out;}
+  var cur='';
+  function select(id,scroll){
+    var g=svg.querySelector('.subnode[data-snode="'+q(id)+'"]');
+    Array.prototype.forEach.call(svg.querySelectorAll('.subnode'),function(x){x.classList.remove('on');x.classList.remove('dim');});
+    Array.prototype.forEach.call(svg.querySelectorAll('.subedge,.subtrunk'),function(x){x.classList.remove('on');x.classList.remove('dim');});
+    if(!g){detail.hidden=true;cur='';return;}
+    cur=id;g.classList.add('on');
+    var near={};near[id]=1;
+    Array.prototype.forEach.call(svg.querySelectorAll('.subedge'),function(p){
+      var f=p.getAttribute('data-from'),t=p.getAttribute('data-to');
+      if(f===id||t===id){p.classList.add('on');near[f]=1;near[t]=1;}else{p.classList.add('dim');}});
+    Array.prototype.forEach.call(svg.querySelectorAll('.subtrunk'),function(p){p.classList.add('dim');});
+    Array.prototype.forEach.call(svg.querySelectorAll('.subnode'),function(x){
+      if(!near[x.getAttribute('data-snode')])x.classList.add('dim');});
+    body.innerHTML=(id.indexOf('f:')===0?nodePanel(id):entryPanel(id));
+    detail.hidden=false;
+    if(scroll&&g.getBoundingClientRect){var r=g.getBoundingClientRect(),w=wrap.getBoundingClientRect();
+      wrap.scrollLeft+=r.left-w.left-w.width/3;wrap.scrollTop+=r.top-w.top-w.height/3;}
+    try{g.focus({preventScroll:true});}catch(err){}}
+  function clear(){detail.hidden=true;cur='';
+    Array.prototype.forEach.call(svg.querySelectorAll('.on,.dim'),function(x){x.classList.remove('on');x.classList.remove('dim');});}
+  svg.addEventListener('click',function(ev){var g=ev.target.closest('.subnode');
+    if(!g){clear();return;} var id=g.getAttribute('data-snode'); if(id===cur){clear();}else{select(id,false);}});
+  svg.addEventListener('keydown',function(ev){var g=ev.target.closest('.subnode');
+    if(g&&(ev.key==='Enter'||ev.key===' ')){ev.preventDefault();select(g.getAttribute('data-snode'),false);}});
+  section.addEventListener('click',function(ev){
+    var t=ev.target.closest('[data-sgoto]');
+    if(t){ev.preventDefault();select(t.getAttribute('data-sgoto'),true);}});
+  var close=document.getElementById('sub-detail-close');
+  if(close)close.addEventListener('click',clear);
+  document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!detail.hidden&&!section.hidden)clear();});
+  /* 縮放與平移：viewBox 不動，只改 svg 的 width／height */
+  var W0=+svg.getAttribute('width')||1, H0=+svg.getAttribute('height')||1, z=1;
+  wrap.addEventListener('wheel',function(ev){
+    ev.preventDefault();
+    var r=wrap.getBoundingClientRect(), ox=ev.clientX-r.left, oy=ev.clientY-r.top;
+    var px=(wrap.scrollLeft+ox)/(W0*z), py=(wrap.scrollTop+oy)/(H0*z);
+    z=Math.min(2.5,Math.max(0.2,z*(ev.deltaY<0?1.12:1/1.12)));
+    svg.setAttribute('width',Math.round(W0*z));svg.setAttribute('height',Math.round(H0*z));
+    wrap.scrollLeft=px*W0*z-ox;wrap.scrollTop=py*H0*z-oy;},{passive:false});
+  var drag=null;
+  wrap.addEventListener('pointerdown',function(ev){
+    if(ev.target.closest('.subnode'))return;
+    drag={x:ev.clientX,y:ev.clientY,sl:wrap.scrollLeft,st:wrap.scrollTop};wrap.classList.add('dragging');});
+  window.addEventListener('pointermove',function(ev){if(!drag)return;
+    wrap.scrollLeft=drag.sl-(ev.clientX-drag.x);wrap.scrollTop=drag.st-(ev.clientY-drag.y);});
+  window.addEventListener('pointerup',function(){drag=null;wrap.classList.remove('dragging');});
+})();
+"""
+
+
 def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
     graph = ir['graph']
     st = graph['stats']
@@ -6278,7 +7247,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{_h(p["title"])} 研究問題里程圖</title>',
-        f'<style>{CSS}{GRAPH_CSS}{LIT_CSS}</style>',
+        f'<style>{CSS}{GRAPH_CSS}{LIT_CSS}{SUB_CSS}</style>',
         '</head>',
         '<body>',
         '<header>',
@@ -6290,7 +7259,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         f'<p class="notice">本檔由 {SCRIPT_REL} 自動產生，請勿手動編輯；要改內容請改對應的 SSOT 檔再重跑。</p>',
         '</header>',
         *_inbox_block(ir),
-        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button><button type="button" data-tab="literature">文獻</button></nav>',
+        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button><button type="button" data-tab="literature">文獻</button><button type="button" data-tab="submission">投稿檔案</button></nav>',
         '<section id="tab-milestones">',
         '<div class="controls">',
         '<span>顯示 state：</span>',
@@ -6317,6 +7286,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     ]
     lines += _relations_tab(ir, notes)
     lines += _literature_tab(ir)
+    lines += _submission_tab(ir, notes)
     gs = ir['graph']['stats']
     lines += [
         '<footer>',
@@ -6336,6 +7306,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         f'<script>{JS}</script>',
         f'<script>{GRAPH_JS}</script>',
         f'<script>{LIT_JS}</script>',
+        f'<script>{SUB_JS}</script>',
         '</body>',
         '</html>',
     ]

@@ -30,6 +30,10 @@ fixture 沿用 v0.16.1 的 build_fixture，再加 run 資料夾（scripts／repo
 - 規格 8（package_edit）：include／exclude／exclude-entry／restore 的 dry-run 不寫檔與 apply 全鏈
   （package.yaml 缺檔用模板建、D# stage submission-prep、備份、重畫、daily log）、前置條件 exit 2、
   token 不符 exit 2、package.yaml 改了 rerun_all 的 fingerprint 不變。
+- 規格 10（PROGRESS 分頁「投稿檔案」）：IR 多一個 submission 鍵並過 IR-17（缺檔＝空狀態也通過、derive 出例外時
+  記 error 但分頁照出）；四欄（資料｜程式碼｜結果｜圖表）× 三個區帶的節點落位、結果鍵 run 輸出檔縮排掛在入口之下、
+  圖表自己的 files 不另開節點；缺檔與已移除節點有對應 class 與徽章；HTML 有 tab-submission、分頁按鈕與 #submission
+  的 hash 路由；版面決定性（同一份輸入兩次渲染的 SVG 相同）。
 - 規格 9（既有回歸）：build_repro_package.py 抽出 scan_scripts／write_dependency_files 後行為不變；
   set_tier 相關的 v0.20.0 回歸與 ssot_actions_common 的工作區改動（COPY_FILES 加 submission/package.yaml）
   不影響既有動作。
@@ -53,6 +57,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SUB))
 sys.path.insert(0, str(PLUGIN / 'skills/study-design/scripts'))
 import ssot_actions_common as C  # noqa: E402
+import render_progress as rp  # noqa: E402
 import submission_package_common as S  # noqa: E402
 import run_v0160_regressions as T0  # noqa: E402
 import run_v0161_regressions as T1  # noqa: E402
@@ -547,9 +552,78 @@ def test_existing(tmp: Path) -> None:
     print('  規格 9 既有回歸 ok')
 
 
+def test_tab(tmp: Path) -> None:
+    root = variant(tmp, 'tab')
+    pkg = root / 'submission/package.yaml'
+    pkg.parent.mkdir(parents=True, exist_ok=True)
+    pkg.write_text('schema_version: 1\ninclude: []\n'
+                   'exclude:\n  - {path: "analysis/figures/vals.tsv", reason: "測試用"}\n', encoding='utf-8')
+    src = rp.Sources(root)
+    ir = rp.build_ir(root, src, '1970-01-01T00:00:00+00:00')
+    assert not [e for e in rp.validate_ir(ir) if 'IR-17' in e], [e for e in rp.validate_ir(ir) if 'IR-17' in e]
+    sub = ir['submission']
+    assert sub['present'] and not sub['error'], sub['error']
+    assert {e['id'] for e in sub['entries']} >= {'G_main', 'cur_a', 'miss_run_label'}
+    assert all(e['node_id'] in ('ef:' + e['id'], 'er:' + e['id']) for e in sub['entries'])
+    assert sub['stats']['blocking_missing'] == len(sub['blocking_missing']) > 0
+    # 歸帶沿用關聯圖：注入的 key_bands 與另外自己算一次相同
+    assert S.derive(root)['stats'] == S.derive(root, key_bands=S.bands_from_ir_nodes(ir['graph']['nodes']))['stats']
+
+    g = rp._sub_graph(sub)
+    n = g['nodes']
+    assert n['ef:G_main']['col'] == 3 and n['ef:G_main']['band'] == 'main', n['ef:G_main']
+    assert n['er:cur_a']['col'] == 2 and n['er:cur_b']['band'] == 'supp', (n['er:cur_a'], n['er:cur_b'])
+    assert n['f:analysis/runs/RUN_A/scripts']['col'] == 1, '程式碼在第二欄'
+    assert n['f:analysis/runs/RUN_A/input_snapshot/direct.csv']['col'] == 0, '資料在第一欄'
+    assert n['f:analysis/runs/RUN_A/report.md']['col'] == 2, '結果檔在第三欄'
+    assert 'f:analysis/figures/g_main.svg' not in n, '圖表自己的 files 不另開節點（在面板逐檔列）'
+    assert n['f:analysis/runs/RUN_A/report.md']['parent'] == 'er:cur_a', 'run 的輸出檔縮排掛在結果鍵入口之下'
+    assert ('er:cur_a', 'f:analysis/runs/RUN_A/report.md') in g['l_edges'], g['l_edges'][:5]
+    assert n['f:analysis/runs/RUN_A/report.md']['x'] > n['er:cur_a']['x'], '縮排要往右'
+    kinds = {e['type'] for e in g['edges']}
+    assert kinds <= {'feeds', 'produces', 'depicts'} and 'feeds' in kinds, kinds
+    assert any(e['type'] == 'depicts' and e['from'].startswith('er:') and e['to'].startswith('ef:') for e in g['edges']), \
+        '結果鍵入口 → 引用它的圖表入口'
+    assert any((e.get('via') or []) for e in g['edges']), '跳欄的邊要借中間欄的空列'
+    assert isinstance(g['stats']['crossings'], int) and g['stats']['edge_node_overlaps'] == 0, g['stats']
+    miss = n['f:data/gone.csv']
+    assert miss['missing'] and '缺檔' in miss['badges'], miss
+    gone = n['f:analysis/figures/vals.tsv']
+    assert gone['excluded'] and '已移除' in gone['badges'], gone
+
+    html = rp.render_html(ir, root, [])
+    for anchor in ('id="tab-submission"', 'data-tab="submission"', '>投稿檔案<', 'id="sub-svg"', 'data-snode="ef:G_main"',
+                   "['milestones','relations','literature','submission']", 'class="subnode k-data', 'is-miss',
+                   'is-gone', 'data-saction="build"', 'data-saction="include"', 'id="sub-include-form"',
+                   'package_edit.py', 'build_submission_package.py'):
+        assert anchor in html, anchor
+    assert html.count('data-saction') >= 3 and 'disabled>打包<' in html, '按鈕這一版全部 disabled'
+    assert '臂' not in html, '中文不得使用「臂」'
+    assert rp.render_html(ir, root, []) == html, '同一份 IR 兩次渲染要一致'
+
+    # 空狀態：沒有 manifest 也沒有 results.json → present False、error 空、IR-17 照樣過、分頁出空狀態說明
+    empty = rp.build_submission(tmp / 'no-such-root', [])
+    assert empty['present'] is False and empty['error'] == '' and not rp._validate_submission(empty), empty
+    ir2 = json.loads(json.dumps(ir))
+    ir2['submission'] = empty
+    body = '\n'.join(rp._submission_tab(ir2, []))
+    assert 'id="tab-submission"' in body and '還沒有可以列的投稿檔案' in body, body[:300]
+    # derive 出例外 → 記 error、分頁照出、不讓整頁掛掉
+    bad = rp.build_submission(None, [])
+    assert bad['error'] and not bad['entries'] and not rp._validate_submission(bad), bad
+    ir2['submission'] = bad
+    body = '\n'.join(rp._submission_tab(ir2, []))
+    assert '算不出來' in body and 'id="tab-submission"' in body, body[:300]
+    # IR-17 會抓到壞資料
+    broken = json.loads(json.dumps(sub))
+    broken['entries'][0]['tier'] = 'nope'
+    assert any('IR-17' in e for e in rp._validate_submission(broken))
+    print('  規格 10 投稿檔案分頁 ok')
+
+
 def test_existing_suites() -> None:
     """set_tier 相關的既有回歸整份跑一次，確認 ssot_actions_common 的改動沒壞舊動作。"""
-    for name in ('run_v0200_regressions.py', 'run_v0190_regressions.py'):
+    for name in ('run_v0200_regressions.py', 'run_v0190_regressions.py', 'run_v0180_regressions.py'):
         proc = subprocess.run([sys.executable, str(PLUGIN / 'tests' / name)], capture_output=True, text=True,
                               encoding='utf-8', cwd=str(PLUGIN))
         tail = ((proc.stdout or '') + (proc.stderr or ''))[-1200:]
@@ -564,7 +638,7 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix='v0220-'))
     try:
         for fn in (test_entries, test_bands, test_free_text, test_runs, test_external_and_kinds,
-                   test_dedup, test_build, test_edit, test_existing):
+                   test_dedup, test_build, test_edit, test_existing, test_tab):
             fn(tmp)
         test_existing_suites()
     finally:
