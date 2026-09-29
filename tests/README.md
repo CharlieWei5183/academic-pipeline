@@ -413,15 +413,18 @@ v0.17.3 修進度頁面批次模式的流程：理由欄不再作廢已建的批
 
 ## run_literature3d_regressions.py
 
-`PROGRESS.html` 的第三個分頁「文獻」（文獻引用 3D 圖，排在「里程」「關聯」之後）。資料來源固定在 `<root>/literature/citation-graph.json`（`schema: academic-pipeline/citation-graph@1`），`--literature-graph PATH` 可改指別的檔案；版面座標由產生資料的腳本算好寫在 `layout`，renderer 只讀不重算。fixture 是 `tests/mini-project` 的複本（repo 裡那份不動）。0.22.0 起多一支需要 headless Chrome 的 tooltip 測試，找不到 Chrome 就印一行說明並跳過，其餘五支不需要瀏覽器。執行：`python3 tests/run_literature3d_regressions.py`。
+`PROGRESS.html` 的第三個分頁「文獻」（文獻引用 3D 圖，排在「里程」「關聯」之後）。資料來源固定在 `<root>/literature/citation-graph.json`（`schema: academic-pipeline/citation-graph@1`），`--literature-graph PATH` 可改指別的檔案；版面座標由產生資料的腳本算好寫在 `layout`，renderer 只讀不重算。fixture 是 `tests/mini-project` 的複本（repo 裡那份不動）。0.22.0 起多一支需要 headless Chrome 的 tooltip 測試，0.22.1 再多一支同樣需要 Chrome 的刻度與命中判定測試，找不到 Chrome 就各印一行說明並跳過，其餘六支不需要瀏覽器。執行：`python3 tests/run_literature3d_regressions.py`。
 
 - 測試一（缺檔＝空狀態）：IR `literature` ＝ `{source, present:false, demo:false, nodes:0, edges:{}, max_cin:0, data:{nodes:[],edges:[]}}`、缺檔不記 WARNING、`validate_ir` 空；HTML 仍有「文獻」分頁鈕與 `#tab-literature`、內容是「尚無文獻引用資料（… 不存在）」、不畫 canvas、里程與關聯的骨架一個不少、內嵌 script 恰四個；`--literature-graph` 指到不存在的路徑同樣是空狀態且訊息換成那個路徑。
 - 測試二（有 demo 資料）：IR `literature` 各欄位正確（source／present／demo／點數／各類線數／資料本體），問題點的 `note` 取自 `project.yaml` 的 goals、書目欄位照抄、`year` 一律字串、座標照抄、邊改成索引並對到 lq／ll；HTML 有示範資料提示、canvas、統計行、兩套 `--t-lit` 色票與 `window.lit3dSelect`；壞資料（邊指向不存在的 id、自環、未知 edge kind、未知 node kind、重複 id、缺座標、問題 id 不在 goals）逐項 WARNING 並只略過那一筆；schema 不符記 WARNING 但照讀；檔案無法解析＝present true、0 點、WARNING、頁面顯示「沒有可畫的節點」；`validate_ir` 的 IR-16 十四條規則各報對應訊息、缺 `literature` 鍵報 IR-01。
 - 測試三（圈內被引數，0.22.0）：`cin` 只算 `cites` 邊、重複邊只算一次、自我引用與懸空邊不算、指到問題點的 `cites` 不算、問題點不帶 `cin`；`max_cin` 是圖內最大值；整張圖沒有 `cites` 時 `max_cin` ＝ 0、圖例兩端都是 0、前端有「最大值 0 就用最低端」的分支（不除以零）。
 - 測試四（全球被引數，0.22.0）：合法的 `global_citations` 進 IR 的 `gc`；十種不合法（不是 object、count 型別錯、count 是 bool、count 負數、缺 source、source 空字串、缺 retrieved、日期格式錯、日期不存在、掛在問題點上）各記一句 WARNING 並丟掉整個欄位，整張圖照畫、`validate_ir` 仍通過。
-- 測試五（色階與圖例，0.22.0）：從 HTML 解出亮暗兩組 `--lit-ramp-*`，階數相同；每一階與 41 點插值抽樣對該主題 `--card` 的對比都 ≥ 3:1（測試自己算 WCAG 相對亮度，不是比對寫死的 hex），亮色主題亮度遞減（低→淺）、暗色主題亮度遞增（低→暗）；圖例已換成漸層條並標 0 與圖內最大值、問題點仍用 `--t-question`、`--t-lit` 仍在（fallback）、canvas 的 aria-label 帶被引數說明。
+- 測試五（色階與圖例，0.22.0；圖例部分 0.22.1 改）：從 HTML 解出亮暗兩組 `--lit-ramp-*`，階數相同；每一階與 41 點插值抽樣對該主題 `--card` 的對比都 ≥ 3:1（測試自己算 WCAG 相對亮度，不是比對寫死的 hex），亮色主題亮度遞減（低→淺）、暗色主題亮度遞增（低→暗）；圖例是漸層條加對數刻度標記、左右各一個大小示意點（`is-lo` 9 px／`is-hi` 14 px，顏色取色階兩端）、舊的 `.lit3d-ramp-end` 已拿掉、問題點仍用 `--t-question`、`--t-lit` 仍在（fallback）、canvas 的 aria-label 與分頁底下的來源說明都帶顏色、大小與對數刻度。
+- 測試七（對數刻度與點大小，0.22.1）：`_lit_ticks`／`_lit_tick_pos` 在 max=0／1／2／12 的刻度值與位置（0 與最大值，加上把 `log(1 + v)` 切三等分的兩個整數點；12 → 0、1、5、12，位置 0%／27.02%／69.86%／100%），max=0 不除以零；前端 `litT` 取對數、顏色 `litColor` 吃同一條刻度、半徑常數 `R_Q = 9`／`R_LIT = 4.5`／`R_GAIN = 0.6` 且 `4.5 × 1.6 ≤ 0.8 × 9`、`sr[` 只出現在投影／繪製／`pick`／`lit3dProbe` 四處（命中判定和畫出來的是同一個半徑）、深度透明度與由遠到近的畫序沒動；`max_cin = 12` 的 fixture 渲染出來的四個刻度標記位置正確。
+- 測試八（刻度、半徑與命中判定，需 headless Chrome，0.22.1）：關掉自動旋轉後用 `window.lit3dProbe(id)` 讀每個點的刻度與投影幾何——0 次 → t=0、最大值 → t=1、max=12 時 1 次 ≈ 0.270、`max_cin = 0` 的同一張圖全部 t=0 且半徑回到基準（不出 NaN）；每個點的半徑都等於 `(問題點 9｜文獻點 4.5 × (1 + 0.6t)) × CAM/depth`，文獻點一律 ≤ 同深度問題點的 0.8 倍；對 canvas 送 `pointermove`——落在「原半徑 + 6」之外、「放大後半徑 + 6」之內仍命中那個被引最多的文獻點，0 次的點在同一條式子算出的距離指不到，放大後半徑 + 6 之外也不命中。
 - 測試六（tooltip，需 headless Chrome）：`window.lit3dSelect(id)` 釘住 tooltip → 有 `global_citations` 的文獻點同時有「本圖內被引 1 次」與「Crossref 被引 1,234 次（2026-09-24 取得）」、沒有的只有前者、問題點的 tooltip 不變；圖例漸層條的 `background-image` 解析成實際顏色（主題 token 有吃到）。
 - 0.22.0 的配合改動：測試一的空狀態 exact dict 多 `max_cin: 0`；測試二多兩條斷言（`cin` 與 `max_cin`）、IR-16 的 mutation 清單多十條。
+- 0.22.1 的配合改動：測試三與測試五的圖例斷言由 `.lit3d-ramp-end` 兩端數字改成刻度標記與大小示意點，測試五的 aria-label 斷言換成對數刻度版本並多一條來源說明。
 - 既有測試的配合改動：`run_v0110` 的「只允許內嵌三個 script」改為四個（多文獻 JS）、兩處 `build_ir` 的 monkeypatch lambda 改吃 `*args, **kwargs`（簽章多了 `literature_path`）；`run_v0200` 的 `_strip_band_source()` 一併拿掉 0.19.0 沒有的 top-level `literature` 鍵。其餘各支照跑、沒有改斷言。
 
 ## run_v0200_regressions.py

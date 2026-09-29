@@ -4846,9 +4846,17 @@ LIT_CSS = """
 .lit3d-legend li{display:flex;align-items:center;gap:6px}
 .lit3d-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
 .lit3d-dot.is-q{background:var(--t-question)}
-.lit3d-ramp{width:82px;height:9px;border-radius:5px;flex:0 0 auto;border:1px solid var(--line);
+.lit3d-legend li.lit3d-scale{flex-direction:column;align-items:flex-start;gap:3px}
+.lit3d-scale-row{display:flex;align-items:center;gap:7px;padding-bottom:15px}
+.lit3d-ramp{position:relative;width:96px;height:9px;border-radius:5px;flex:0 0 auto;border:1px solid var(--line);
 background:linear-gradient(90deg,var(--lit-ramp-0),var(--lit-ramp-1),var(--lit-ramp-2),var(--lit-ramp-3),var(--lit-ramp-4),var(--lit-ramp-5))}
-.lit3d-ramp-end{font-variant-numeric:tabular-nums}
+.lit3d-tick{position:absolute;top:calc(100% + 1px);width:1px;height:3px;background:var(--line)}
+.lit3d-tick i{position:absolute;top:3px;left:50%;transform:translateX(-50%);font-style:normal;
+font-size:11px;line-height:1.1;font-variant-numeric:tabular-nums}
+.lit3d-tick.is-first i{left:0;transform:none}
+.lit3d-tick.is-last i{left:auto;right:0;transform:none}
+.lit3d-dot.is-lo{width:9px;height:9px;background:var(--lit-ramp-0)}
+.lit3d-dot.is-hi{width:14px;height:14px;background:var(--lit-ramp-5)}
 .lit3d-bar{width:20px;height:2px;border-radius:1px;flex:0 0 auto}
 .lit3d-bar.is-q{background:var(--t-question);opacity:.6}
 .lit3d-bar.is-c{background:var(--edge)}
@@ -4937,17 +4945,27 @@ LIT_JS = """
     }
     return stops.length ? stops : [C.lit];
   }
-  /* 文獻點的顏色＝圈內被引數線性對到色階（最大值 0 時全部用最低那一端，不除以零） */
+  /* 文獻點的顏色與大小共用同一條刻度：圈內被引數取對數後對到 0–1（最大值 0 時一律 0，不除以零）。
+     被引數本來就偏斜，線性刻度會讓低端幾乎同色同大。 */
+  function litT(cin){
+    return MAXCIN > 0 ? Math.min(1, Math.max(0, Math.log(1 + cin) / Math.log(1 + MAXCIN))) : 0;
+  }
   function litColor(cin){
     var st = C.ramp, n = st.length - 1;
     if (n <= 0) return st[0];
-    var t = MAXCIN > 0 ? Math.min(1, Math.max(0, cin / MAXCIN)) : 0;
+    var t = litT(cin);
     var p = t * n, i = Math.min(n - 1, Math.floor(p)), f = p - i;
     var a = st[i], b = st[i + 1];
     return [Math.round(a[0] + (b[0] - a[0]) * f),
             Math.round(a[1] + (b[1] - a[1]) * f),
             Math.round(a[2] + (b[2] - a[2]) * f)];
   }
+  /* 刻度值與主題無關，開場算一次就好；問題點不吃這條刻度 */
+  var litTv = new Float64Array(N);
+  for (var i = 0; i < N; i++) litTv[i] = NODES[i].q ? 0 : litT(NODES[i].cin || 0);
+  /* 點的基準半徑（螢幕 px，畫的時候還要乘投影縮放）：問題點固定，文獻點隨刻度放大，
+     最大 4.5 * (1 + 0.6) = 7.2，同深度下是問題點的 0.8 倍 */
+  var R_Q = 9, R_LIT = 4.5, R_GAIN = 0.6;
   var litRGB = new Array(N);
   function refreshTheme(){
     readTheme();
@@ -5023,7 +5041,7 @@ LIT_JS = """
       sy[i] = cy - y2 * kk;
       sd[i] = depth;
       var ss = CAM / depth;
-      sr[i] = (nd.q ? 9 : 4.5) * ss;
+      sr[i] = (nd.q ? R_Q : R_LIT * (1 + R_GAIN * litTv[i])) * ss;
       order[i] = i;
     }
 
@@ -5167,7 +5185,7 @@ LIT_JS = """
   }
   function hideTip(){ tip.hidden = true; }
 
-  /* ---- 命中判定：投影後 (半徑 + 6px) 內，重疊時取最近 ---- */
+  /* ---- 命中判定：投影後 (半徑 + 6px) 內，重疊時取最近；半徑就是畫出來的那一顆（文獻點放大後也指得到）---- */
   function pick(px, py){
     var best = -1, bestDepth = Infinity;
     for (var i = 0; i < N; i++){
@@ -5281,8 +5299,40 @@ LIT_JS = """
     }
     return false;
   };
+
+  /* ---- 對外：讀一個點的刻度與投影幾何（只讀，測試用；頁面本身不呼叫）---- */
+  window.lit3dProbe = function(id){
+    for (var i = 0; i < N; i++){
+      if (NODES[i].id !== id) continue;
+      return {t: litTv[i], x: sx[i], y: sy[i], r: sr[i], depth: sd[i],
+              q: NODES[i].q ? 1 : 0, cin: NODES[i].cin || 0,
+              rq: R_Q, rl: R_LIT, gain: R_GAIN, cam: CAM, maxcin: MAXCIN};
+    }
+    return null;
+  };
 })();
 """
+
+
+def _lit_tick_pos(v: int, max_cin: int) -> float:
+    """刻度值在漸層條上的位置（0–1），和前端的 litT 同一條式子。"""
+    return math.log(1 + v) / math.log(1 + max_cin) if max_cin > 0 else 0.0
+
+
+def _lit_ticks(max_cin: int) -> list[int]:
+    """圖例的對數刻度值：0 與最大值，再加上把 log(1+v) 切三等分的那兩個整數點。
+
+    跨專案同一條規則，不設門檻、沒有逐專案設定；四捨五入後落在 0..max 之外或重複的就丟掉。
+    例：max=12 → [0, 1, 5, 12]；max=2 → [0, 1, 2]；max=1 → [0, 1]；max=0 → [0]。
+    """
+    if max_cin <= 0:
+        return [0]
+    vals = {0, int(max_cin)}
+    for k in (1, 2):
+        v = int(round((1 + max_cin) ** (k / 3) - 1))
+        if 0 <= v <= max_cin:
+            vals.add(v)
+    return sorted(vals)
 
 
 def _literature_tab(ir: dict) -> list[str]:
@@ -5298,25 +5348,34 @@ def _literature_tab(ir: dict) -> list[str]:
     max_cin = lit.get('max_cin', 0)
     if lit.get('demo'):
         lines.append('<p class="lit3d-demo">示範資料：點與連線都是隨機產生的</p>')
+    ticks = _lit_ticks(max_cin)
+    marks = ''.join(
+        '<b class="lit3d-tick{cls}" style="left:{pos:.2f}%"><i>{v}</i></b>'.format(
+            cls=(' is-first' if i == 0 else (' is-last' if i == len(ticks) - 1 else '')),
+            pos=_lit_tick_pos(v, max_cin) * 100, v=v)
+        for i, v in enumerate(ticks))
     lines += [
         '<ul class="lit3d-legend">',
         '<li><span class="lit3d-dot is-q"></span>問題點</li>',
-        '<li>文獻點・被本圖其他文獻引用次數'
-        f'<span class="lit3d-ramp-end">0</span><span class="lit3d-ramp"></span>'
-        f'<span class="lit3d-ramp-end">{max_cin}</span></li>',
+        '<li class="lit3d-scale">'
+        '<span>文獻點的顏色與大小＝被本圖其他文獻引用的次數（對數刻度）</span>'
+        '<span class="lit3d-scale-row"><span class="lit3d-dot is-lo"></span>'
+        f'<span class="lit3d-ramp">{marks}</span>'
+        '<span class="lit3d-dot is-hi"></span></span></li>',
         '<li><span class="lit3d-bar is-q"></span>文獻—問題</li>',
         '<li><span class="lit3d-bar is-c"></span>文獻引用文獻</li>',
         '</ul>',
         '<p class="lit3d-hint">拖曳旋轉・滾輪或雙指縮放・指到點看文獻・方向鍵旋轉、加減號縮放、Esc 取消選取</p>',
         '<div class="lit3d-stage" id="lit3d-stage">',
         '<canvas id="lit3d-canvas" class="lit3d-canvas" tabindex="0" role="img" '
-        f'aria-label="文獻引用 3D 圖。文獻點的顏色越醒目，代表被本圖其他文獻引用越多次，'
-        f'從 0 次到 {max_cin} 次。方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
+        f'aria-label="文獻引用 3D 圖。文獻點的顏色越醒目、點畫得越大，代表被本圖其他文獻引用越多次，'
+        f'從 0 次到 {max_cin} 次；刻度取對數，低次數之間分得比較開。'
+        f'方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
         '<div class="lit3d-tip" id="lit3d-tip" hidden></div>',
         '</div>',
         f'<p class="notice">來源：<code>{source}</code>；節點 {lit.get("nodes", 0)}、'
         f'文獻—問題 {counts.get("cited_for", 0)} 條、文獻引用文獻 {counts.get("cites", 0)} 條；'
-        f'文獻點的顏色是圈內被引數（被本圖其他文獻引用的次數，最多 {max_cin} 次）。'
+        f'文獻點的顏色與大小都是圈內被引數（被本圖其他文獻引用的次數，最多 {max_cin} 次），刻度取對數。'
         f'版面座標由產生資料的腳本算好寫在 layout，本頁只讀不重算。</p>',
         '</div>',
         '</section>',

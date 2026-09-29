@@ -17,8 +17,15 @@
   cin 與 max_cin。
 - test_global_citations（0.22.0）：合法的 `global_citations` 進 IR 的 `gc`；型別不對、bool 當整數、負數、缺鍵、
   日期格式錯或日期不存在、出現在問題點上 → 各記一句 WARNING 並丟掉那個欄位，整張圖照畫、validate_ir 仍通過。
-- test_ramp_and_legend（0.22.0）：亮暗兩組 `--lit-ramp-*` 都在 HTML 裡，每一階與插值抽樣對該主題 `--card` 的
-  對比都 ≥ 3:1；圖例是漸層條並標 0 與圖內最大值；canvas 的 aria-label 帶被引數說明。
+- test_ramp_and_legend（0.22.0，圖例部分 0.22.1 改）：亮暗兩組 `--lit-ramp-*` 都在 HTML 裡，每一階與插值抽樣對
+  該主題 `--card` 的對比都 ≥ 3:1；圖例是漸層條＋對數刻度＋一小一大兩個示意點；canvas 的 aria-label 與來源說明
+  都帶被引數、大小與對數刻度。
+- test_log_scale_and_size（0.22.1）：`_lit_ticks`／`_lit_tick_pos` 在 max=0／1／2／12 的刻度值與位置；前端的
+  litT 取對數、顏色與半徑共用同一條刻度、半徑只放大文獻點且同深度最多是問題點的 0.8 倍、命中判定與繪製共用
+  同一個 `sr`、深度透明度與由遠到近的畫序沒動；HTML 的刻度標記位置正確。
+- test_headless_scale（0.22.1，需 headless Chrome，沒有就跳過）：`window.lit3dProbe(id)` 讀出的刻度與幾何——
+  0 次 → t=0、最大值 → t=1、max=12 時 1 次 ≈ 0.270、max=0 時全部 0；半徑符合公式且 ≤ 0.8 倍問題點；滑鼠落在
+  原半徑外、放大後半徑內仍命中該文獻點，0 次的點在同樣距離指不到，放大後半徑 + 6 之外也不命中。
 - test_headless_tooltip（0.22.0，需 headless Chrome，沒有就跳過）：`window.lit3dSelect(id)` 釘住 tooltip →
   文獻點一律有「本圖內被引 N 次」，有 global_citations 時多一行「{source} 被引 {千分位} 次（{retrieved} 取得）」，
   沒有就沒有那一行。
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -340,12 +348,13 @@ def test_indegree(tmp: Path) -> None:
     assert all(n['cin'] == 0 for n in ir2['literature']['data']['nodes'] if n['q'] == 0)
     rc, out, err = render(root2)
     assert rc == 0, out + err
-    assert '<span class="lit3d-ramp-end">0</span>' in out and '最多 0 次' in out
+    assert '<b class="lit3d-tick is-first" style="left:0.00%"><i>0</i></b>' in out and '最多 0 次' in out
+    assert out.count('class="lit3d-tick') == 1, 'max=0 只標一個 0'
     assert 'MAXCIN > 0 ?' in out, '前端要有 max=0 的分支，不能除以零'
 
     rc, out, err = render(root)
     assert rc == 0, out + err
-    assert '<span class="lit3d-ramp-end">2</span>' in out and '最多 2 次' in out
+    assert '<b class="lit3d-tick is-last" style="left:100.00%"><i>2</i></b>' in out and '最多 2 次' in out
     print('[regression] 圈內被引數：只算 cites、重複邊算一次、自我引用與懸空邊不算、指到問題點不算、問題點不帶 cin、'
           'max_cin 為圖內最大值、全圖無 cites 時 max_cin=0 且前端不除以零: pass')
 
@@ -453,17 +462,205 @@ def test_ramp_and_legend(tmp: Path) -> None:
         else:                                   # 暗色：低→暗、高→亮
             assert all(lums[i] < lums[i + 1] for i in range(len(lums) - 1)), lums
 
-    # 圖例是漸層條、兩端標 0 與圖內最大值；問題點維持原色
+    # 圖例是漸層條＋對數刻度＋大小示意；問題點維持原色
     assert '<span class="lit3d-dot is-l">' not in out, '文獻的單色圓點已換成漸層條'
-    assert '文獻點・被本圖其他文獻引用次數<span class="lit3d-ramp-end">0</span>' in out
-    assert '<span class="lit3d-ramp"></span><span class="lit3d-ramp-end">2</span></li>' in out
+    assert '<span>文獻點的顏色與大小＝被本圖其他文獻引用的次數（對數刻度）</span>' in out
+    assert ('<span class="lit3d-scale-row"><span class="lit3d-dot is-lo"></span><span class="lit3d-ramp">'
+            in out), '大小示意的小點在漸層條左邊'
+    assert '</span><span class="lit3d-dot is-hi"></span></span></li>' in out, '大小示意的大點在漸層條右邊'
+    assert '.lit3d-dot.is-lo{width:9px;height:9px;background:var(--lit-ramp-0)}' in out
+    assert '.lit3d-dot.is-hi{width:14px;height:14px;background:var(--lit-ramp-5)}' in out
     assert 'background:linear-gradient(90deg,var(--lit-ramp-0)' in out
     assert '<li><span class="lit3d-dot is-q"></span>問題點</li>' in out
     assert '.lit3d-dot.is-q{background:var(--t-question)}' in out
-    # 文字替代：canvas 的 aria-label 帶被引數說明
-    assert '文獻點的顏色越醒目，代表被本圖其他文獻引用越多次，從 0 次到 2 次。' in out
+    assert '.lit3d-ramp-end' not in out, '舊的兩端數字已由刻度取代'
+    # 文字替代：canvas 的 aria-label 帶被引數、大小與對數刻度
+    assert ('文獻點的顏色越醒目、點畫得越大，代表被本圖其他文獻引用越多次，從 0 次到 2 次；'
+            '刻度取對數，低次數之間分得比較開。') in out
+    assert '文獻點的顏色與大小都是圈內被引數（被本圖其他文獻引用的次數，最多 2 次），刻度取對數。' in out
     print('[regression] 色階：亮暗兩組 --lit-ramp-* 階數相同、每階與插值抽樣對 --card 的對比都 ≥ 3:1、'
-          '亮色低→淺高→深且暗色低→暗高→亮；圖例換成漸層條並標 0 與最大值、問題點維持原色、aria-label 帶被引數: pass')
+          '亮色低→淺高→深且暗色低→暗高→亮；圖例是漸層條＋對數刻度＋一小一大兩個示意點、問題點維持原色、'
+          'aria-label 與來源說明都帶大小與對數刻度: pass')
+
+
+# ---------- 測試七：對數刻度與點大小（0.22.1） ----------
+
+def scale_graph() -> dict:
+    """max_cin = 12 的小圖：HI 被 12 篇引用、MID 被 1 篇、LO 沒有人引；座標寫死在球面上，不會重疊。"""
+    lit_ids = ['HI', 'MID', 'LO'] + [f'C{i:02d}' for i in range(1, 13)]
+    ids = ['SQ1'] + lit_ids
+    coords, n = {}, len(ids)
+    for k, nid in enumerate(ids):            # Fibonacci 球面，固定值、沒有亂數
+        z = 1 - 2 * (k + 0.5) / n
+        r = math.sqrt(max(0.0, 1 - z * z))
+        a = math.pi * (3 - math.sqrt(5)) * k
+        coords[nid] = [round(0.85 * r * math.cos(a), 6), round(0.85 * r * math.sin(a), 6), round(0.85 * z, 6)]
+    edges = [{'source': 'C01', 'target': 'SQ1', 'kind': 'cited_for'},
+             {'source': 'C01', 'target': 'MID', 'kind': 'cites'}]
+    edges += [{'source': f'C{i:02d}', 'target': 'HI', 'kind': 'cites'} for i in range(1, 13)]
+    return {
+        'schema': rp.LIT_SCHEMA,
+        'nodes': [{'id': 'SQ1', 'kind': 'question'}] +
+                 [{'id': i, 'kind': 'literature', 'title': f'T{i}'} for i in lit_ids],
+        'edges': edges,
+        'layout': {'coords': coords},
+    }
+
+
+def test_log_scale_and_size(tmp: Path) -> None:
+    # 圖例刻度：跨專案同一條規則——0 與最大值，加上把 log(1+v) 切三等分的那兩個整數點
+    assert rp._lit_ticks(0) == [0]
+    assert rp._lit_ticks(1) == [0, 1]
+    assert rp._lit_ticks(2) == [0, 1, 2]
+    assert rp._lit_ticks(12) == [0, 1, 5, 12]
+    assert rp._lit_tick_pos(0, 12) == 0.0 and rp._lit_tick_pos(12, 12) == 1.0
+    assert abs(rp._lit_tick_pos(1, 12) - 0.2702381) < 1e-6, rp._lit_tick_pos(1, 12)
+    assert abs(rp._lit_tick_pos(5, 12) - 0.6985555) < 1e-6, rp._lit_tick_pos(5, 12)
+    assert rp._lit_tick_pos(0, 0) == 0.0, 'max=0 不可除以零'
+
+    # 前端：顏色與半徑共用同一條對數刻度，半徑只放大文獻點
+    js = rp.LIT_JS
+    assert 'Math.log(1 + cin) / Math.log(1 + MAXCIN)' in js, 'litT 要取對數'
+    assert 'MAXCIN > 0 ? Math.min(1, Math.max(0,' in js, 'max=0 的分支還在'
+    assert 'var t = litT(cin);' in js, '顏色也吃同一條刻度'
+    assert 'var litTv = new Float64Array(N);' in js and 'litTv[i] = NODES[i].q ? 0 : litT(' in js
+    m = re.search(r'var R_Q = ([\d.]+), R_LIT = ([\d.]+), R_GAIN = ([\d.]+);', js)
+    assert m, '找不到半徑常數'
+    rq, rl, gain = (float(x) for x in m.groups())
+    assert 'sr[i] = (nd.q ? R_Q : R_LIT * (1 + R_GAIN * litTv[i])) * ss;' in js
+    assert rl * (1 + gain) <= 0.8 * rq + 1e-9, (rl, gain, rq)
+    # 命中判定和畫出來的是同一個半徑：sr[ 只出現在投影、繪製、pick 與 probe 四處
+    assert 'var lim = sr[i] + 6;' in js and 'var rr = sr[j];' in js
+    assert js.count('sr[') == 4, js.count('sr[')
+    # 深度透明度、hover 變淡、由遠到近的畫序都沒動
+    assert 'var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15);' in js
+    assert 'nArr.sort(function(p, q){ return sd[q] - sd[p]; });' in js
+
+    # 畫出來的 HTML：刻度值與位置
+    root = fixture(tmp, 'lit_scale')
+    write_graph(root, scale_graph())
+    ir = rp.build_ir(root, rp.Sources(root), GEN)
+    assert ir['literature']['max_cin'] == 12, ir['literature']['max_cin']
+    assert rp.validate_ir(ir) == [], rp.validate_ir(ir)
+    cin = {n['id']: n.get('cin') for n in ir['literature']['data']['nodes']}
+    assert (cin['HI'], cin['MID'], cin['LO']) == (12, 1, 0), cin
+    rc, out, err = render(root)
+    assert rc == 0, out + err
+    for frag in ('<b class="lit3d-tick is-first" style="left:0.00%"><i>0</i></b>',
+                 '<b class="lit3d-tick" style="left:27.02%"><i>1</i></b>',
+                 '<b class="lit3d-tick" style="left:69.86%"><i>5</i></b>',
+                 '<b class="lit3d-tick is-last" style="left:100.00%"><i>12</i></b>'):
+        assert frag in out, frag
+    assert out.count('class="lit3d-tick') == 4
+    print('[regression] 對數刻度：litT 與圖例刻度同一條式子（max=0／1／2／12 的刻度值與位置）、顏色與半徑共用刻度、'
+          '半徑只放大文獻點且同深度最多 0.8 倍問題點、命中判定與繪製共用同一個 sr、透明度與畫序沒動: pass')
+
+
+# ---------- 測試八：刻度、半徑與命中判定（headless Chrome，0.22.1） ----------
+
+RECT = ("(function(){var r=document.getElementById('lit3d-canvas').getBoundingClientRect();"
+        "return JSON.stringify({x:r.left,y:r.top});})()")
+HOVER = ("(function(x,y){var c=document.getElementById('lit3d-canvas');"
+         "c.dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse'}));"
+         "c.dispatchEvent(new PointerEvent('pointermove',{clientX:x,clientY:y,pointerType:'mouse'}));"
+         "var t=document.getElementById('lit3d-tip');return t.hidden?'':t.innerHTML;})(%r,%r)")
+
+
+def _open_lit(ws, page: Path, ids: list[str]) -> dict:
+    """開一頁文獻分頁（關掉自動旋轉，視角才不會在讀幾何與送事件之間漂掉），回每個點的 probe 幾何。"""
+    ws.send('Page.enable')
+    ws.send('Emulation.setDeviceMetricsOverride', width=1280, height=820, deviceScaleFactor=1, mobile=False)
+    ws.send('Emulation.setEmulatedMedia',
+            features=[{'name': 'prefers-reduced-motion', 'value': 'reduce'}])
+    ws.send('Page.navigate', url=page.as_uri() + '#literature')
+    T3._wait(ws, "document.readyState==='complete'", bool, timeout=60)
+    T3._wait(ws, "String(typeof window.lit3dProbe)", lambda v: v == 'function', timeout=30)
+    ws.eval("(function(){var b=document.querySelector('nav.tabs [data-tab=\"literature\"]');"
+            "if(b)b.click();return 1;})()")
+    T3._wait(ws, "(function(){var p=window.lit3dProbe('%s');return !!(p && p.r > 0);})()" % ids[0], bool, timeout=30)
+    expr = '(function(){var o={};%s return o;})()' % ''.join("o['%s']=window.lit3dProbe('%s');" % (i, i) for i in ids)
+    return ws.eval(expr)
+
+
+def test_headless_scale(tmp: Path) -> bool:
+    ids = ['SQ1', 'HI', 'MID', 'LO'] + [f'C{i:02d}' for i in range(1, 13)]
+    root = fixture(tmp, 'lit_scale_head')
+    write_graph(root, scale_graph())
+    rc, out, err = render(root)
+    assert rc == 0, out + err
+    page = tmp / 'lit_scale.html'
+    page.write_text(out, encoding='utf-8')
+
+    zero = scale_graph()                      # 同一張圖拿掉全部 cites：max_cin = 0
+    zero['edges'] = [e for e in zero['edges'] if e['kind'] != 'cites']
+    root0 = fixture(tmp, 'lit_scale_zero')
+    write_graph(root0, zero)
+    rc0, out0, err0 = render(root0)
+    assert rc0 == 0, out0 + err0
+    page0 = tmp / 'lit_scale_zero.html'
+    page0.write_text(out0, encoding='utf-8')
+
+    proc, wsurl = T3._launch_chrome(tmp)
+    if proc is None:
+        print('  （無 headless Chrome 或無法啟動，跳過刻度與命中判定的瀏覽器端測試）')
+        return False
+    ws = T3._WS(wsurl)
+    try:
+        geo = _open_lit(ws, page, ids)
+        assert geo['HI']['maxcin'] == 12, geo['HI']
+        # litT：0 次 → 0、最大值 → 1、max=12 時 1 次 ≈ 0.270
+        assert geo['LO']['t'] == 0, geo['LO']['t']
+        assert abs(geo['HI']['t'] - 1.0) < 1e-12, geo['HI']['t']
+        assert abs(geo['MID']['t'] - 0.2702381) < 1e-6, geo['MID']['t']
+        assert geo['SQ1']['q'] == 1 and geo['SQ1']['t'] == 0, geo['SQ1']
+        # 半徑：問題點沒動、文獻點按刻度放大、同深度下最多是問題點的 0.8 倍
+        for nid, g in geo.items():
+            ss = g['cam'] / g['depth']
+            want = (g['rq'] if g['q'] else g['rl'] * (1 + g['gain'] * g['t'])) * ss
+            assert abs(g['r'] - want) < 1e-9, (nid, g['r'], want)
+            if not g['q']:
+                assert g['r'] <= 0.8 * g['rq'] * ss + 1e-9, (nid, g['r'], g['rq'] * ss)
+        assert geo['HI']['r'] > geo['HI']['rl'] * geo['HI']['cam'] / geo['HI']['depth'] + 1.0
+
+        # 命中判定吃放大後的半徑：探測點取「原半徑 + 6」與「放大後半徑 + 6」的中間
+        rect = json.loads(ws.eval(RECT))
+
+        def probe(nid: str) -> tuple[float, float]:
+            g = geo[nid]
+            ss = g['cam'] / g['depth']
+            d = g['rl'] * ss * (2 + g['gain']) / 2 + 6
+            assert g['rl'] * ss + 6 < d, (nid, d)
+            for ux, uy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                pt = (g['x'] + ux * d, g['y'] + uy * d)
+                if all(k == nid or math.hypot(pt[0] - o['x'], pt[1] - o['y']) > o['r'] + 12
+                       for k, o in geo.items()):
+                    return rect['x'] + pt[0], rect['y'] + pt[1]
+            raise AssertionError(f'{nid}：四個方向都會撞到別的點')
+
+        hi = ws.eval(HOVER % probe('HI'))
+        assert 'THI' in hi, hi                 # 放大那一圈指得到（原半徑 + 6 之外）
+        lo = ws.eval(HOVER % probe('LO'))
+        assert lo == '', lo                    # 0 次的點沒放大，同一條式子的探測點就指不到
+        g = geo['LO']
+        near = (rect['x'] + g['x'] + g['r'] + 6 - 2, rect['y'] + g['y'])
+        assert 'TLO' in ws.eval(HOVER % near), '0 次的點在自己的半徑內仍指得到'
+        far = geo['HI']
+        out_pt = (rect['x'] + far['x'] + far['r'] + 6 + 4, rect['y'] + far['y'])
+        assert ws.eval(HOVER % out_pt) == '', '放大後半徑 + 6 之外不該命中'
+
+        # max_cin = 0：全部 t = 0、半徑回到基準，不除以零、不出 NaN
+        geo0 = _open_lit(ws, page0, ids)
+        assert geo0['HI']['maxcin'] == 0
+        for nid, g0 in geo0.items():
+            assert g0['t'] == 0, (nid, g0['t'])
+            ss = g0['cam'] / g0['depth']
+            assert abs(g0['r'] - (g0['rq'] if g0['q'] else g0['rl']) * ss) < 1e-9, nid
+    finally:
+        ws.close()
+        proc.kill()
+    print('[regression] headless 刻度與命中：litT 在 0／max／中間值與 max=0 都對、半徑只放大文獻點且 ≤ 0.8 倍問題點、'
+          '滑鼠落在原半徑外但放大後半徑內仍命中該文獻點、0 次的點在同樣距離指不到: pass')
+    return True
 
 
 # ---------- 測試六：tooltip（headless Chrome） ----------
@@ -522,7 +719,9 @@ def main() -> int:
         test_indegree(tmp)
         test_global_citations(tmp)
         test_ramp_and_legend(tmp)
+        test_log_scale_and_size(tmp)
         test_headless_tooltip(tmp)
+        test_headless_scale(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print('run_literature3d_regressions: all pass')
