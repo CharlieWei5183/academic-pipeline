@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.22.0（2026-09-29）
+
+「文獻」分頁的 3D 引用圖多一層資訊：**文獻點依「被本圖其他文獻引用的次數」上連續色階**，tooltip 另外補一行全球被引數（資料有提供才顯示）。問題點、節點大小、邊的顏色與 hover 行為都不變。跨專案同一條規則，不設門檻、沒有逐專案設定。IR `schema_version` 維持 1、citation-graph 的 `schema` 維持 `academic-pipeline/citation-graph@1`（只加向下相容的選填欄位）；skills、agents、管線階段、收件匣動作腳本都不變。
+
+1. **圈內被引數（in-degree）**：每個 literature 節點的值＝有 `cites` 邊指向它的**不同 literature 來源節點數**。排除自我引用、不算 `cited_for`、忽略指向或來自不存在節點的邊、重複的邊只算一次、兩端都要是文獻點。在 loader（`_lit_indegree`）算好寫進 IR 每個文獻點的 `cin`，整張圖的最大值寫進 `literature.max_cin`——放 Python 端是為了能寫回歸測試，前端只讀。
+2. **上色**：只套文獻點，問題點維持 `--t-question`。色階線性對到 0 → `max_cin`，`max_cin` 為 0 時全部用最低那一端（不除以零）。醒目程度隨被引數增加——亮色主題低→淺、高→深，暗色主題低→暗、高→亮。**每一階與插值抽樣對 `.lit3d-stage` 背景（`--card`）的對比都 ≥ 3:1**（WCAG 1.4.11 非文字對比），兩個主題都是，最低端也看得到。
+3. **色階只定義在一處**：主題 CSS 的 `--lit-ramp-0…5`（亮暗各一組），換色只改那六個值。沿用文獻原本的赭黃色系（`--t-lit` 那一族，近似截掉過淺一段的 ColorBrewer YlOrBr）：亮色 `#b0842a → #41240a`（最低對比 3.40:1），暗色 `#9a7024 → #f7e7ae`（最低對比 3.68:1）。**不用 seaborn mako**——mako 在暗色主題要滿足 ≥ 3:1 就得從亮度 0.142 以上起跳，可用的低端剛好落在 `#395d9c` 一帶，和問題點的藍 `#4477aa` 撞色；已出對照預覽確認過。前端 `readRamp()` 從 `--lit-ramp-0` 一路讀到沒有為止，JS 不寫死階數，切主題時跟著重算（`refreshTheme()` 順便重建每個點的顏色快取，不在每一幀算）。`--t-lit` 保留為讀不到色階時的 fallback。
+4. **全球被引數（選填欄位）**：literature 節點可帶 `global_citations: {count: 整數 ≥ 0, source: 非空字串, retrieved: "YYYY-MM-DD"}`。loader 逐項驗證——型別不對（bool 不算整數）、負數、缺鍵、日期格式錯或日期根本不存在、出現在問題點上，都只記一句 WARNING 並丟掉整個欄位，不讓整張圖失敗。合格的進 IR 的 `gc`。schema 版本不動，這是向下相容的加法。
+5. **tooltip**：文獻點一律多一行「本圖內被引 N 次」（取 IR 的 `cin`，不再由 JS 自己數邊——單一來源），有 `global_citations` 時再多一行「{source} 被引 {千分位} 次（{retrieved} 取得）」，沒有就不顯示那一行。原本的「被引用 N 篇」由這一行取代，「引用 N 篇」保留。
+6. **圖例與文字替代**：文獻的單色圓點換成一條小漸層條（`.lit3d-ramp`，`linear-gradient` 直接引用那組 token，跟著主題切），左右標 0 與圖內最大值；canvas 的 `aria-label` 補一句「文獻點的顏色越醒目，代表被本圖其他文獻引用越多次，從 0 次到 N 次」；分頁底下的來源說明也加上最大值。
+7. **IR-16 多四類規則**：`literature.max_cin` 是整數 ≥ 0 且等於各點 `cin` 的最大值；每個文獻點要有 `cin`（整數 ≥ 0）且**和 `data.edges` 重算的結果一致**；問題點不得帶 `cin` 或 `gc`；`gc` 的三個欄位形狀正確。顏色靠 `cin`，和邊對不上就是 BLOCKER、不落檔，不讓它靜靜畫錯。
+8. **測試**：`tests/run_literature3d_regressions.py` 由兩支增為六支——新增 in-degree 的五條規則與 `max_cin = 0`、`global_citations` 的十種不合法、色階（測試自己算 WCAG 相對亮度，對兩個主題各做 41 點插值抽樣）、圖例端點與 aria-label，以及一支 headless Chrome 的 tooltip 測試（沒有 Chrome 就跳過）。配合改動：測試一的空狀態 exact dict 多 `max_cin: 0`，測試二多兩條斷言、IR-16 的 mutation 清單多十條。其餘各支照跑、沒有改斷言。
+9. **文件**：README、`status` SKILL.md、`tests/README.md` 登記；`plugin.json` 0.22.0。
+
 ## 0.21.0（2026-09-24）
 
 `PROGRESS.html` 在「里程」「關聯」之後多一個分頁「**文獻**」（URL hash `#literature`），以 Canvas 2D 畫一張會自動慢轉的 3D 文獻引用圖：問題點與文獻點，加上文獻指向問題的 `cited_for` 線與文獻之間的 `cites` 線。這一版只接畫法與資料管道，本身不附帶任何真實文獻；跨專案通用，不設門檻、不做逐專案設定。資料檔不存在時分頁照出、顯示空狀態，里程與關聯兩個分頁完全不受影響。IR `schema_version` 維持 1（只加一個 top-level 鍵與一條驗證規則，沿用 0.18.x 以來的慣例）；skills、agents、管線階段、收件匣動作腳本都不變。
