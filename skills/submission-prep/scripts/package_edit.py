@@ -6,7 +6,7 @@
       [--attach-to <圖表 id 或結果鍵>] [--note "..."]
   python3 package_edit.py <root> --exclude <PATH> [--exclude <PATH> …] [--reason "..."]
   python3 package_edit.py <root> --exclude-entry <圖表 id 或結果鍵> [--exclude-entry <ID> …] [--reason "..."]
-  python3 package_edit.py <root> --restore <PATH 或 入口 id>
+  python3 package_edit.py <root> --restore <PATH 或 入口 id> [--restore <PATH 或 入口 id> …]
   共同旗標: [--inbox IN-xxx] [--daily-log <path>] [--expect-token <token>] (--dry-run | --apply)
 
 只改 `submission/package.yaml` 的差量（include／exclude 兩個清單），不存整份清單——投稿檔案分頁與打包
@@ -101,7 +101,14 @@ def parse_op(args: argparse.Namespace) -> dict[str, Any]:
             items.append(it)
         return {'op': 'exclude-entry', 'list': 'exclude', 'items': items, 'item': items[0],
                 'target': '、'.join(ids)}
-    return {'op': 'restore', 'list': '', 'items': [], 'item': {}, 'target': args.restore}
+    # --restore 也可以重複給：分頁的「還原這個分析」就是對那張卡已移除的每個入口各還原一筆，
+    # 同一個 D# 一次 apply 完。哪些目標落在哪個清單、是否同一個清單，留給 check_preconditions 查。
+    targets: list[str] = []
+    for raw in args.restore:
+        if raw not in targets:
+            targets.append(raw)
+    return {'op': 'restore', 'list': '', 'items': [], 'item': {}, 'targets': targets,
+            'target': '、'.join(targets)}
 
 
 # ---------- 清單讀寫（只改指定的那個清單，其餘位元組不動） ----------
@@ -210,26 +217,34 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             hits += [nid for nid, n in view['nodes'].items() if eid in n['entries'] and nid not in hits]
         op['hits'] = hits
     else:
-        target = op['target']
-        found = None
-        for lname in LIST_NAMES:
-            for it in lists[lname]:
-                if it.get('path') == target or it.get('entry') == target:
-                    found = (lname, it)
+        # 一次 apply 只改一個清單，所以多個還原目標必須全部落在同一個清單；跨 include／exclude 就拒絕，
+        # 請分兩次（或放進 batch，一筆一個 package_edit）。
+        found_items: list[dict] = []
+        for target in op['targets']:
+            found = None
+            for lname in LIST_NAMES:
+                for it in lists[lname]:
+                    if it.get('path') == target or it.get('entry') == target:
+                        found = (lname, it)
+                        break
+                if found:
                     break
-            if found:
-                break
-        if found is None:
-            raise ChainError(f'{PKG_REL} 的 include／exclude 都沒有 {target}，沒有要還原的東西')
-        name = found[0]
+            if found is None:
+                raise ChainError(f'{PKG_REL} 的 include／exclude 都沒有 {target}，沒有要還原的東西')
+            if name and found[0] != name:
+                raise ChainError(f'還原目標跨了兩個清單（{name} 與 {found[0]}）：一次 apply 只改一個清單，請分兩次')
+            name = found[0]
+            if not any(it is found[1] for it in found_items):
+                found_items.append(found[1])
         op['list'] = name
-        op['item'] = found[1]
+        op['items'] = found_items
+        op['item'] = found_items[0]
     if name == 'include' and op['op'] == 'include':
         items = lists['include'] + [op['item']]
     elif name == 'exclude' and op['op'] in ('exclude', 'exclude-entry'):
         items = lists['exclude'] + list(op['items'])
     else:
-        items = [it for it in lists[name] if it is not op['item']]
+        items = [it for it in lists[name] if not any(it is f for f in op['items'])]
     inbox = None
     if args.inbox:
         inbox = C.inbox_item(root, args.inbox)
@@ -268,8 +283,10 @@ def op_sentence(ctx: dict[str, Any]) -> str:
         what = ids[0] if len(ids) == 1 else f'{len(ids)} 個（{"、".join(ids)}）'
         return f'移除入口 {what}（連帶 {len(op.get("hits") or [])} 個節點）' \
             + (f'；理由：{item["reason"]}' if item.get('reason') else '')
-    what = item.get('path') or item.get('entry')
-    return f'還原 {what}（從 {ctx["list"]} 清單移除這筆差量，回到衍生規則的判斷）'
+    names = [it.get('path') or it.get('entry') or '' for it in (op.get('items') or [item])]
+    what = names[0] if len(names) == 1 else f'{len(names)} 筆（{"、".join(names)}）'
+    n_word = '這筆差量' if len(names) == 1 else f'這 {len(names)} 筆差量'
+    return f'還原 {what}（從 {ctx["list"]} 清單移除{n_word}，回到衍生規則的判斷）'
 
 
 def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: str, date: str,
@@ -493,7 +510,9 @@ def main(argv: list[str] | None = None) -> int:
                         help='可重複；一次移除多筆（群組節點的整組移除）寫成同一個 D#')
     parser.add_argument('--exclude-entry', action='append', default=[], metavar='ID',
                         help='可重複：一次移除好幾個入口（分頁的「移除這個分析」），同一個 D#')
-    parser.add_argument('--restore', default='', metavar='PATH_OR_ID')
+    parser.add_argument('--restore', action='append', default=[], metavar='PATH_OR_ID',
+                        help='可重複：一次還原好幾筆（分頁的「還原這個分析」），同一個 D#；'
+                             '多筆必須落在同一個清單')
     parser.add_argument('--tier', default='', choices=('',) + S.TIERS)
     parser.add_argument('--kind', default='', choices=('',) + S.KINDS)
     parser.add_argument('--attach-to', default='', metavar='ID')

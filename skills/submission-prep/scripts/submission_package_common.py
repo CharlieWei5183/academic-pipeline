@@ -888,6 +888,9 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         added.append(nid)
 
     # ---- 手動移除（可逆：仍列出、標 excluded）----
+    # 每筆紀錄的 `via` ＝ package.yaml 差量裡真正寫了的那個識別（路徑或入口 id），還原時就是拿它去 --restore。
+    # 資料夾整個被移除時，底下每個節點的 via 都是那個資料夾路徑；「唯一引用它的入口已移除」這種連帶移除
+    # 沒有自己的差量，via 留空，還原要回去還原那個入口。
     excluded: list[dict] = []
     ex_entries = {item['entry']: item.get('reason', '') for item in delta['exclude'] if item.get('entry')}
     ex_paths = [(item['path'], item.get('reason', '')) for item in delta['exclude'] if item.get('path')]
@@ -895,7 +898,8 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         if entry['id'] in ex_entries:
             entry['excluded'] = True
             entry['exclude_reason'] = ex_entries[entry['id']]
-            excluded.append({'kind': 'entry', 'id': entry['id'], 'reason': ex_entries[entry['id']]})
+            excluded.append({'kind': 'entry', 'id': entry['id'], 'reason': ex_entries[entry['id']],
+                             'via': entry['id']})
     for eid, reason in ex_entries.items():
         if not any(e['id'] == eid for e in v.entries):
             v.warnings.append(f'{PACKAGE_REL} 的 exclude entry {eid!r} 不是現有入口：這筆沒有作用')
@@ -905,11 +909,11 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         if hit is not None:
             node['excluded'] = True
             node['exclude_reason'] = hit[1]
-            excluded.append({'kind': 'node', 'id': nid, 'reason': hit[1]})
+            excluded.append({'kind': 'node', 'id': nid, 'reason': hit[1], 'via': hit[0]})
         elif node['entries'] and not (set(node['entries']) & live_entries) and node['origin'] != 'added':
             node['excluded'] = True
             node['exclude_reason'] = '唯一引用它的入口已移除'
-            excluded.append({'kind': 'node', 'id': nid, 'reason': node['exclude_reason']})
+            excluded.append({'kind': 'node', 'id': nid, 'reason': node['exclude_reason'], 'via': ''})
     for p, _r in ex_paths:
         if not any(nid == p or nid.startswith(p.rstrip('/') + '/') for nid in v.nodes):
             v.warnings.append(f'{PACKAGE_REL} 的 exclude path {p!r} 不對應任何衍生出來的節點：這筆沒有作用')
@@ -1380,6 +1384,8 @@ def build_analyses(v: _View, out: dict) -> dict:
                          and not own_node(nodes[m]) and not nodes[m]['under']] for gid in groups}
 
     # ---- 六、也用於：這個分析有貢獻、但圖表卡在別處 ----
+    # 只認這個分析自己的檔。共用檔（兩個以上分析都在用的輸入或腳本）不算：否則兩個分析光是讀同一份輸入、
+    # 共用同一支腳本，就會互相掛上對方的圖表，成了誤連。圖表自己的 run 與結果鍵的 run 照算。
     for fid in sorted(fig_ids, key=lambda x: order[x]):
         own_c = card_of_entry(fid)
         rel: set[str] = set(r for r in fig_runs[fid] if r in card_ids)
@@ -1388,7 +1394,7 @@ def build_analyses(v: _View, out: dict) -> dict:
             if r in card_ids:
                 rel.add(r)
         for nid in sorted(nodes):
-            if fid in all_ent[nid] and home[nid] in card_ids:
+            if nid not in shared_set and fid in all_ent[nid] and home[nid] in card_ids:
                 rel.add(home[nid])
         e = ent_by_id[fid]
         for aid in sorted(rel - {own_c}):

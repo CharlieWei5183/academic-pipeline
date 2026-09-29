@@ -54,11 +54,12 @@ metadata:
      python3 <skill路徑>/scripts/build_submission_package.py <root> --dry-run
      python3 <skill路徑>/scripts/build_submission_package.py <root> --apply [--no-zip]
 
-     # 清單增刪：一次一個動作，--exclude 與 --exclude-entry 都可重複；一次 apply 記一筆 D#
-     # （分頁的「移除這個分析」＝對那張卡的每個入口各一筆 --exclude-entry）
+     # 清單增刪：一次一個動作，--exclude／--exclude-entry／--restore 都可重複；一次 apply 記一筆 D#
+     # （分頁的「移除這個分析」＝對那張卡的每個入口各一筆 --exclude-entry；
+     #   「還原這個分析」＝對已移除的每個入口各一筆 --restore，多筆須落在同一個清單）
      python3 <skill路徑>/scripts/package_edit.py <root> --exclude <路徑> --reason <理由> --dry-run
      python3 <skill路徑>/scripts/package_edit.py <root> --include <路徑> --tier <帶> --kind <分類> --dry-run
-     python3 <skill路徑>/scripts/package_edit.py <root> --restore <路徑或入口 id> --dry-run
+     python3 <skill路徑>/scripts/package_edit.py <root> --restore <路徑或入口 id> [--restore <…>] --dry-run
      ```
 
    - **打包產出**：`submission/package_<日期>/`，含逐檔 sha256 的 `MANIFEST.tsv`、README、`results_subset.json` 與依賴清單，預設壓成 zip（`--no-zip` 可關）。**有納入中的缺檔一律拒絕打包**（exit 1）：先移除那些節點，或補上替代檔。未見顯式隨機種子的腳本照舊只記 warning。
