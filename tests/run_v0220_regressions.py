@@ -182,6 +182,9 @@ def variant(tmp: Path, name: str) -> Path:
     return root
 
 
+SUB_BAND = {'main': 'main', 'extended': 'ext', 'supplementary': 'supp'}
+
+
 def view_of(root: Path) -> dict:
     return S.derive(root)
 
@@ -605,11 +608,53 @@ def test_tab(tmp: Path) -> None:
 
     g = rp._sub_graph(sub)
     n = g['nodes']
+    v = view_of(root)
     assert n['ef:G_main']['col'] == 3 and n['ef:G_main']['band'] == 'main', n['ef:G_main']
     assert n['er:cur_a']['col'] == 2 and n['er:cur_b']['band'] == 'supp', (n['er:cur_a'], n['er:cur_b'])
     assert n['f:analysis/runs/RUN_A/scripts']['col'] == 1, '程式碼在第二欄'
-    assert n['f:analysis/runs/RUN_A/input_snapshot/direct.csv']['col'] == 0, '資料在第一欄'
     assert n['f:analysis/runs/RUN_A/report.md']['col'] == 2, '結果檔在第三欄'
+
+    # ---- 節點粒度＝宣告粒度：run 的輸入收成一個群組節點 ----
+    ga = sub['groups']['runinput:RUN_A']
+    assert ga['label'] == f'RUN_A 的輸入（{len(ga["members"])} 檔）', ga['label']
+    assert ga['tier'] == entry(v, 'cur_a')['tier'], '群組的帶＝引用它的入口中最高者'
+    assert {'analysis/runs/RUN_A/input_snapshot/direct.csv',
+            'analysis/runs/RUN_A/input_snapshot/source_hashes.tsv',
+            'data/raw.csv'} <= set(ga['members']), ga['members']
+    assert ga['scripts'] == 'analysis/runs/RUN_A/scripts', ga['scripts']
+    assert 'f:analysis/runs/RUN_A/input_snapshot/direct.csv' not in n, '只從群組追到的檔不另開節點'
+    assert sub['nodes']['analysis/runs/RUN_A/input_snapshot/direct.csv']['own'] is False
+    gn = n['g:runinput:RUN_A']
+    assert gn['col'] == 0 and gn['group'] and gn['band'] == SUB_BAND[ga['tier']], gn
+    out_e = [e for e in g['edges'] if e['from'] == 'g:runinput:RUN_A']
+    assert len(out_e) == 1 and out_e[0]['to'] == 'f:analysis/runs/RUN_A/scripts', out_e
+    assert not [e for e in g['edges'] if e['to'] == 'g:runinput:RUN_A'], '群組節點只出不進'
+    # RUN_C 沒有 scripts/：線退而接到引用它的入口
+    gc = sub['groups']['runinput:RUN_C']
+    assert gc['scripts'] == '', gc
+    out_c = [e for e in g['edges'] if e['from'] == 'g:runinput:RUN_C']
+    assert len(out_c) == 1 and out_c[0]['to'] == 'er:cur_c', out_c
+    # 逐條宣告的檔仍獨立：analyze.py 既是 RUN_B 的 hash 表成員，也被 script 欄點名
+    az = sub['nodes']['analysis/scripts/analyze.py']
+    assert az['groups'] == ['runinput:RUN_B'] and az['itemized'] and az['own'], az
+    assert 'f:analysis/scripts/analyze.py' in n, '逐條宣告的檔保留獨立節點'
+    assert 'analysis/scripts/analyze.py' in sub['groups']['runinput:RUN_B']['members']
+    # 缺檔成員不收進群組：擋打包的清單要點得到
+    assert sub['nodes']['data/gone.csv']['own'] and 'f:data/gone.csv' in n
+    # run 的 scripts/ 裡被 script 欄點名的腳本收進資料夾節點
+    ap = sub['nodes']['analysis/runs/RUN_A/scripts/a.py']
+    assert ap['under'] == 'analysis/runs/RUN_A/scripts' and not ap['own'], ap
+    assert 'f:analysis/runs/RUN_A/scripts/a.py' not in n, '點名腳本收進 scripts/ 節點'
+    assert 'G_main' in n['f:analysis/runs/RUN_A/scripts']['entries'], \
+        '被收走的腳本的入口要聯集進資料夾節點，否則「圖表 → 腳本」的邊會消失'
+    assert any(e['from'] == 'f:analysis/runs/RUN_A/scripts' and e['to'] == 'ef:G_main' for e in g['edges'])
+    # 打包語意不變：每個沒缺檔、沒移除的成員仍各自出現在打包清單裡
+    srcs = {r['source_path'] for r in S.package_files(v)}
+    for m in ga['members']:
+        node = sub['nodes'][m]
+        if node['missing'] or node['excluded'] or node['is_dir']:
+            continue
+        assert v['nodes'][m]['abs'] in srcs, f'{m} 不在打包清單'
     assert 'f:analysis/figures/g_main.svg' not in n, '圖表自己的 files 不另開節點（在面板逐檔列）'
     assert n['f:analysis/runs/RUN_A/report.md']['parent'] == 'er:cur_a', 'run 的輸出檔縮排掛在結果鍵入口之下'
     assert ('er:cur_a', 'f:analysis/runs/RUN_A/report.md') in g['l_edges'], g['l_edges'][:5]
@@ -629,7 +674,9 @@ def test_tab(tmp: Path) -> None:
     for anchor in ('id="tab-submission"', 'data-tab="submission"', '>投稿檔案<', 'id="sub-svg"', 'data-snode="ef:G_main"',
                    "['milestones','relations','literature','submission']", 'class="subnode k-data', 'is-miss',
                    'is-gone', 'data-saction="build"', 'data-saction="include"', 'id="sub-include-form"',
-                   'package_edit.py', 'build_submission_package.py'):
+                   'package_edit.py', 'build_submission_package.py',
+                   'data-snode="g:runinput:RUN_A"', 'is-group', 'exclude-group', 'script 欄點名',
+                   '另有獨立節點', 'run 輸入群組'):
         assert anchor in html, anchor
     assert html.count('data-saction') >= 3 and 'disabled>打包<' in html, '按鈕這一版全部 disabled'
     assert '臂' not in html, '中文不得使用「臂」'

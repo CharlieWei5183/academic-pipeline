@@ -25,6 +25,13 @@
   （hash 表會把上游腳本一起列進來），其餘 → data。run 資料夾不存在 → 缺檔節點。
 - 資料只追一層（run 的直接輸入），不遞迴到上游 run 或 raw；要更多請用 `package_edit.py` 手動加。
 
+群組（`groups`；只影響呈現）：節點粒度跟著 SSOT 的宣告粒度走。一個 run 的 `input_snapshot/` 是「這個
+run 的輸入」一個宣告單位，於是那一組檔案除了各自的節點之外，另外登記成一個群組
+（`runinput:<run_id>`，帶 `members`、`entries`、`tier`＝引用它的入口中最高者、`scripts`＝該 run 的
+`scripts/` 節點）。逐條宣告的欄位（`script`、`files`、`values_snapshot`、`registered_sources`…）仍是
+一檔一個節點，節點上的 `itemized` 記這件事。`nodes`、`edges` 與 `package_files()` 一律仍以檔案路徑為
+單位，群組不改打包內容。另外每個節點帶 `under`：被哪個資料夾節點包住（`counted` 也由它決定）。
+
 分類（依 pipeline 慣例目錄與副檔名，不看專案）：副檔名屬 CODE_SUFFIXES 或位於任一
 `scripts/` 之下 → code；位於 `input_snapshot/` 或 root 的 `data/` 之下 → data；
 manifest 的 `files` → figure；其餘 → result。
@@ -67,6 +74,11 @@ KIND_PRIORITY = {'figure': 0, 'code': 1, 'data': 2, 'result': 3, 'other': 4}
 CODE_SUFFIXES = {'.py', '.r', '.jl', '.m', '.sh', '.ipynb', '.rmd', '.qmd'}
 KIND_DIR = {'code': 'code', 'data': 'data', 'result': 'results', 'figure': '', 'other': 'other'}
 RUN_MISSING_BADGE = 'run 資料夾不存在'
+# ---------- 群組（宣告粒度） ----------
+# 節點粒度跟著 SSOT 的宣告單位走：一個 run 的 `input_snapshot/`（實體檔＋hash 表追到的來源）是「這個 run 的輸入」
+# 這一個宣告單位，於是收成一個群組；逐條宣告的欄位（script、files、values_snapshot、registered_sources…）仍是
+# 一檔一個節點。群組只影響呈現：`nodes`、`edges` 與 `package_files()` 照舊以檔案路徑為單位。
+GROUP_PREFIX = 'runinput:'
 
 # ---------- 路徑抽取 ----------
 
@@ -547,12 +559,28 @@ class _View:
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
         self.warnings: list[str] = []
+        self.groups: dict[str, dict] = {}
         self.run_missing: dict[str, str] = {}   # 結果鍵 → run 資料夾（從未存在、但 script 欄找得到實體檔；只標徽章不當缺檔）
 
     # ---- 節點 ----
 
+    def group(self, gid: str, run_id: str, tier: str, entry_id: str, scripts: str) -> dict:
+        """登記（或更新）一個 run 的輸入群組。tier 取「追到這個 run 的入口」中最高者。"""
+        g = self.groups.get(gid)
+        if g is None:
+            g = {'id': gid, 'run_id': run_id, 'label': '', 'tier': tier, 'scripts': scripts, 'entries': [],
+                 'members': [], 'n_files': 0, 'bytes': 0, 'missing': 0, 'excluded': 0}
+            self.groups[gid] = g
+        if TIER_RANK.get(tier, 9) < TIER_RANK.get(g['tier'], 9):
+            g['tier'] = tier
+        if entry_id and entry_id not in g['entries']:
+            g['entries'].append(entry_id)
+        if scripts and not g['scripts']:
+            g['scripts'] = scripts
+        return g
+
     def node(self, path: Path, kind: str, entry_id: str, tier: str, via: str, *, origin: str = 'derived',
-             note: str = '', missing: bool = False, raw: str = '') -> str:
+             note: str = '', missing: bool = False, raw: str = '', group: str = '') -> str:
         nid, abs_path = (self.res.locate(raw) if missing and raw else self.res.locate(str(path)))
         exists = (not missing) and abs_path.exists()
         node = self.nodes.get(nid)
@@ -565,7 +593,8 @@ class _View:
                     'exists': exists, 'missing': not exists, 'external': external, 'is_dir': abs_path.is_dir(),
                     'n_files': n_files, 'bytes': size, 'mtime_ns': mtime, 'segment': seg,
                     'packaged_path': '', 'entries': [], 'via': [], 'origin': origin, 'note': note,
-                    'badges': [], 'excluded': False, 'exclude_reason': ''}
+                    'badges': [], 'excluded': False, 'exclude_reason': '',
+                    'groups': [], 'itemized': False, 'under': ''}
             self.nodes[nid] = node
         else:
             if TIER_RANK.get(tier, 9) < TIER_RANK.get(node['tier'], 9):
@@ -578,6 +607,14 @@ class _View:
                 node['origin'] = 'added'
             if note and note not in node['note']:
                 node['note'] = (node['note'] + '；' + note).strip('；')
+        if group:
+            if group not in node['groups']:
+                node['groups'].append(group)
+            members = self.groups[group]['members']
+            if nid not in members:
+                members.append(nid)
+        else:
+            node['itemized'] = True      # 逐條宣告追到的：即使同時是某個 run 輸入群組的成員，也保留自己的節點
         if entry_id and entry_id not in node['entries']:
             node['entries'].append(entry_id)
         if via and via not in node['via']:
@@ -624,9 +661,10 @@ def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, p
                note=f'results.json#{key}.run_id 指到 {rel}，但該資料夾不存在，script 欄也沒有指到任何實體檔')
         return
     scripts_dir = run_dir / 'scripts'
+    scripts_nid = ''
     if scripts_dir.is_dir():
-        v.node(scripts_dir, 'code', entry_id, tier, f'{prefix}run_id.scripts',
-               note='run 的腳本資料夾（宣告粒度＝run，整個資料夾一個節點）')
+        scripts_nid = v.node(scripts_dir, 'code', entry_id, tier, f'{prefix}run_id.scripts',
+                             note='run 的腳本資料夾（宣告粒度＝run，整個資料夾一個節點）')
     for name in ('report.md', 'status.json'):
         p = run_dir / name
         if p.is_file():
@@ -634,6 +672,9 @@ def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, p
     snap = run_dir / 'input_snapshot'
     if not snap.is_dir():
         return
+    # 「這個 run 的輸入」是一個宣告單位 → 收成一個群組（組內各檔保留自己的 kind 與自己的節點）
+    gid = f'{GROUP_PREFIX}{run_id}'
+    v.group(gid, run_id, tier, entry_id, scripts_nid)
     tables: list[Path] = []
     for child in sorted(snap.rglob('*')):
         if not child.is_file() or child.is_symlink():
@@ -641,16 +682,16 @@ def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, p
         if HASH_TABLE_RE.search(child.name):
             tables.append(child)
         else:
-            v.node(child, input_kind(child), entry_id, tier, f'{prefix}run_id.input_snapshot')
+            v.node(child, input_kind(child), entry_id, tier, f'{prefix}run_id.input_snapshot', group=gid)
     for table in tables:
-        v.node(table, input_kind(table), entry_id, tier, f'{prefix}run_id.input_snapshot')
+        v.node(table, input_kind(table), entry_id, tier, f'{prefix}run_id.input_snapshot', group=gid)
         found, missing = hash_table_cells(table, v.res)
         rel_table = table.relative_to(v.root).as_posix()
         for path in found:
-            v.node(path, input_kind(path), entry_id, tier, f'{rel_table} 的 cell')
+            v.node(path, input_kind(path), entry_id, tier, f'{rel_table} 的 cell', group=gid)
         for raw in missing:
             v.node(Path(raw), input_kind(Path(raw)), entry_id, tier, f'{rel_table} 的 cell', missing=True, raw=raw,
-                   note=f'{rel_table} 列出的來源檔已不在原位')
+                   note=f'{rel_table} 列出的來源檔已不在原位', group=gid)
 
 
 def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str, list[dict]] | None = None) -> dict:
@@ -824,14 +865,23 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
     blocking = sorted(nid for nid, n in v.nodes.items() if n['missing'] and not n['excluded'])
     kind_counts = {k: 0 for k in KINDS}
     tier_entries = {t: 0 for t in TIERS}
-    # 位元組與檔數不重複計：落在某個資料夾節點（例如 run 的 `scripts/`）底下的檔案節點，package_files() 會併成同一列
-    dir_prefixes = [nid.rstrip('/') + '/' for nid, n in v.nodes.items()
-                    if n['is_dir'] and not n['excluded'] and not n['missing']]
+    # 位元組與檔數不重複計：落在某個資料夾節點（例如 run 的 `scripts/`）底下的檔案節點，package_files() 會併成同一列。
+    # `under` 記住是哪個資料夾節點收的（最深的那個），分頁靠它把檔案收進資料夾節點的面板。
+    dirs = sorted(((nid.rstrip('/') + '/', nid) for nid, n in v.nodes.items()
+                   if n['is_dir'] and not n['excluded'] and not n['missing']), key=lambda x: -len(x[0]))
     for node in v.nodes.values():
         if not node['excluded']:
             kind_counts[node['kind']] = kind_counts.get(node['kind'], 0) + 1
-        node['counted'] = (not node['excluded'] and not node['missing']
-                           and not any(node['id'].startswith(p) for p in dir_prefixes))
+        node['under'] = next((d for p, d in dirs if node['id'] != d and node['id'].startswith(p)), '')
+        node['counted'] = not node['excluded'] and not node['missing'] and not node['under']
+    for g in v.groups.values():
+        g['members'] = sorted(g['members'])
+        mem = [v.nodes[m] for m in g['members'] if m in v.nodes]
+        g['n_files'] = sum(n['n_files'] for n in mem if n['counted'])
+        g['bytes'] = sum(n['bytes'] for n in mem if n['counted'])
+        g['missing'] = sum(1 for n in mem if n['missing'])
+        g['excluded'] = sum(1 for n in mem if n['excluded'])
+        g['label'] = f'{g["run_id"]} 的輸入（{len(g["members"])} 檔）'
     for entry in v.entries:
         if not entry['excluded']:
             tier_entries[entry['tier']] = tier_entries.get(entry['tier'], 0) + 1
@@ -844,6 +894,7 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
         'key_bands': key_bands,
         'entries': v.entries,
         'nodes': v.nodes,
+        'groups': dict(sorted(v.groups.items())),
         'edges': v.edges,
         'missing': missing,
         'blocking_missing': blocking,
