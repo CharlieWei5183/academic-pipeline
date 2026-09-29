@@ -57,11 +57,11 @@ TABLE_ORDER = ('raster', 'pdf', 'office', 'text')
 
 # 縮圖旁的小字：說明這張預覽是怎麼來的，並且講清楚打包用原檔
 ROUTE_NOTE = {
-    'raster': '預覽用原檔的 png',
-    'svg': '預覽直接用 svg 原檔',
-    'pdf': '預覽由 pdf 第一頁轉出，打包用原檔',
-    'office': '預覽由 {ext} 轉出，打包用原檔',
-    'text': '預覽由 {ext} 排成表格，打包用原檔',
+    'raster': '縮圖取自原檔的 {ext}',
+    'svg': '縮圖直接用原檔的 svg',
+    'pdf': '縮圖由 pdf 第一頁轉出，打包用原檔',
+    'office': '縮圖由 {ext} 轉出，打包用原檔',
+    'text': '縮圖由 {ext} 排成表格，打包用原檔',
 }
 TABLE_MAX_ROWS = 24         # 畫表格 png 只取前幾列／欄，多的截掉並在圖上註明
 TABLE_MAX_COLS = 10
@@ -378,10 +378,12 @@ class Previewer:
             with tempfile.TemporaryDirectory(prefix='ap-preview-') as tmp:
                 out = Path(tmp) / 'out'
                 out.mkdir()
+                # `-env:UserInstallation` 與 `XDG_CACHE_HOME` 都指到臨時目錄：LibreOffice 自己的 profile
+                # 與它會順手重建的 fontconfig 快取都落在這裡，`--dry-run` 就真的什麼也沒留在家目錄。
                 proc = subprocess.run([exe, '--headless', '--norestore',
                                        f'-env:UserInstallation=file://{Path(tmp) / "profile"}',
                                        '--convert-to', 'pdf', '--outdir', str(out), str(path)],
-                                      capture_output=True,
+                                      capture_output=True, env={**os.environ, 'XDG_CACHE_HOME': str(Path(tmp) / 'xdg')},
                                       timeout=min(self.soffice_timeout, max(5, self._budget_left())))
                 self._spend(time.monotonic() - t0)
                 pdfs = sorted(out.glob('*.pdf'))

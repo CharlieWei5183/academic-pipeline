@@ -48,8 +48,11 @@ fixture 沿用 v0.16.1 的 build_fixture，再加 run 資料夾（scripts／repo
 """
 from __future__ import annotations
 
+import base64
 import collections
 import hashlib
+import io
+import os
 import html as html_mod
 import inspect
 import json
@@ -1314,6 +1317,310 @@ def test_run_reference(tmp: Path) -> None:
     print('  規格 14 run 參照 ok')
 
 
+# =====================================================================================================
+# 規格 15：「圖／表」欄的縮圖預覽（0.23.0 小修）
+# =====================================================================================================
+
+def _png_bytes(w: int = 900, h: int = 300, color=(40, 90, 200)) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (w, h), color).save(buf, format='PNG')
+    return buf.getvalue()
+
+
+def _pdf_bytes() -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (600, 400), (230, 90, 60)).save(buf, format='PDF')
+    return buf.getvalue()
+
+
+def _docx_bytes() -> bytes:
+    """手搭一份最小可讀的 .docx（zip ＋ 四個 XML），soffice 認得，不必裝 python-docx。"""
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument'
+          '.wordprocessingml.document.main+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+            '/officeDocument" Target="word/document.xml"/></Relationships>')
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+           + ''.join(f'<w:p><w:r><w:t>cluster C0{i} row</w:t></w:r></w:p>' for i in range(1, 6))
+           + '</w:body></w:document>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml', ct)
+        z.writestr('_rels/.rels', rels)
+        z.writestr('word/document.xml', doc)
+    return buf.getvalue()
+
+
+def preview_fixture(tmp: Path, name: str) -> Path:
+    """在 v0230 的 fixture 上另加五個「真的有位元組」的圖表：png 圖、只有 svg 的圖、只有 pdf 的圖、
+    只有 tsv 的表、docx 表。只有這一條規格用，不動其他規格的數字。"""
+    root = variant(tmp, name)
+    figdir = root / 'analysis/figures'
+    (figdir / 'p_raster.png').write_bytes(_png_bytes())
+    (figdir / 'p_only.svg').write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">'
+        '<rect width="200" height="80" fill="#2b6cb0"/></svg>\n', encoding='utf-8')
+    (figdir / 'p_only.pdf').write_bytes(_pdf_bytes())
+    (figdir / 'p_table.tsv').write_text('cluster\tdomain\tmembers\nC01\t溫度\tBIO1；BIO6\nC02\t降水\tBIO12\n',
+                                        encoding='utf-8')
+    (figdir / 'p_table.docx').write_bytes(_docx_bytes())
+    mpath = figdir / 'manifest.json'
+    man = json.loads(mpath.read_text(encoding='utf-8'))
+    base = {'type': 'figure', 'role': 'main', 'status': 'registered_not_reviewed',
+            'script': 'analysis/scripts/analyze.py'}
+    man['figures'] += [
+        {**base, 'id': 'P_raster', 'files': ['analysis/figures/p_raster.png', 'analysis/figures/p_only.svg'],
+         'figure_number': 'Fig. P1', 'caption': '有 png 就用 png。第二句。'},
+        {**base, 'id': 'P_svg', 'files': ['analysis/figures/p_only.svg'], 'figure_number': 'Fig. P2',
+         'caption': '只有 svg。'},
+        {**base, 'id': 'P_pdf', 'files': ['analysis/figures/p_only.pdf'], 'figure_number': 'Fig. P3',
+         'caption': '只有 pdf。'},
+        {**base, 'id': 'P_tsv', 'type': 'table', 'files': ['analysis/figures/p_table.tsv'],
+         'figure_number': 'Table P1', 'caption': '只有 tsv 的表。'},
+        {**base, 'id': 'P_docx', 'type': 'table',
+         'files': ['analysis/figures/p_table.docx', 'analysis/figures/p_table.tsv'],
+         'figure_number': 'Table P2', 'caption': '有 docx 的表。'},
+    ]
+    mpath.write_text(json.dumps(man, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    return root
+
+
+def test_preview(tmp: Path) -> None:
+    import submission_preview as PV
+    root = preview_fixture(tmp, 'preview')
+    cache = tmp / 'preview-cache'
+    old_cache = os.environ.get('XDG_CACHE_HOME')
+    os.environ['XDG_CACHE_HOME'] = str(cache)
+    have_pdftoppm, have_soffice = bool(PV.which('pdftoppm')), bool(PV.which('soffice') or PV.which('libreoffice'))
+    try:
+        # ---- (a) 各條路徑：png 圖、只有 svg 的圖、只有 pdf 的圖、只有 tsv 的表、docx 表 ----
+        pv = PV.Previewer(root, write_cache=False)
+        got = {fid: pv.preview(files, kind=kind, label=fid) for fid, files, kind in (
+            ('P_raster', ['analysis/figures/p_raster.png', 'analysis/figures/p_only.svg'], 'figure'),
+            ('P_svg', ['analysis/figures/p_only.svg'], 'figure'),
+            ('P_pdf', ['analysis/figures/p_only.pdf'], 'figure'),
+            ('P_tsv', ['analysis/figures/p_table.tsv'], 'table'),
+            ('P_docx', ['analysis/figures/p_table.docx', 'analysis/figures/p_table.tsv'], 'table'))}
+        assert got['P_raster']['route'] == 'raster' and got['P_raster']['source'].endswith('p_raster.png'), got['P_raster']
+        assert got['P_raster']['data_uri'].startswith('data:image/png;base64,')
+        assert got['P_svg']['route'] == 'svg' and got['P_svg']['mime'] == 'image/svg+xml', got['P_svg']
+        assert got['P_tsv']['route'] == 'text' and got['P_tsv']['bytes'] > 0, got['P_tsv']
+        assert '打包用原檔' in got['P_tsv']['note'], got['P_tsv']['note']
+        if have_pdftoppm:
+            assert got['P_pdf']['route'] == 'pdf' and got['P_pdf']['bytes'] > 0, got['P_pdf']
+        else:
+            assert got['P_pdf']['route'] == 'none', got['P_pdf']
+        if have_soffice and have_pdftoppm:
+            assert got['P_docx']['route'] == 'office' and 'docx' in got['P_docx']['note'], got['P_docx']
+        else:
+            assert got['P_docx']['route'] in ('text', 'none'), got['P_docx']
+        print(f'  （工具：pdftoppm {"有" if have_pdftoppm else "無"}、soffice {"有" if have_soffice else "無"}）')
+
+        # ---- (b) 縮圖寬度就是設定的顯示尺寸；不是篩選門檻（小圖照樣出得來）----
+        from PIL import Image
+        with Image.open(io.BytesIO(base64.b64decode(got['P_raster']['data_uri'].split(',', 1)[1]))) as im:
+            assert im.width == PV.PREVIEW_WIDTH, im.size
+        narrow = PV.Previewer(root, write_cache=False, width=120)
+        with Image.open(io.BytesIO(base64.b64decode(
+                narrow.preview(['analysis/figures/p_raster.png'])['data_uri'].split(',', 1)[1]))) as im2:
+            assert im2.width == 120, im2.size
+
+        # ---- (c) 預覽不進打包：package_files() 一列都不多，也沒有任何快取檔混進來 ----
+        v = view_of(root)
+        rows = S.package_files(v)
+        assert not any('preview' in r['packaged_path'] or 'cache' in r['source_path'] for r in rows)
+        assert all(Path(r['source_path']).exists() for r in rows), '打包一律複製原檔'
+        assert 'preview' not in inspect.getsource(S.package_files), 'package_files() 不該認得預覽'
+        assert 'submission_preview' not in (PLUGIN / BUILD).read_text(encoding='utf-8'), '打包腳本不匯入預覽模組'
+
+        # ---- (d) --dry-run：專案 root 與使用者快取都不寫任何檔 ----
+        shutil.rmtree(cache, ignore_errors=True)
+        stamp = tmp / 'preview-stamp'
+        stamp.write_text('x', encoding='utf-8')
+        before = {str(f): f.stat().st_mtime_ns for f in root.rglob('*') if f.is_file()}
+        proc = subprocess.run([sys.executable, str(SCRIPTS / 'render_progress.py'), str(root), '--dry-run'],
+                              capture_output=True, text=True, encoding='utf-8',
+                              env={**os.environ, 'XDG_CACHE_HOME': str(cache)})
+        assert proc.returncode == 0, (proc.stdout or '')[-400:] + (proc.stderr or '')[-800:]
+        after = {str(f): f.stat().st_mtime_ns for f in root.rglob('*') if f.is_file()}
+        assert before == after, 'dry-run 動到了專案裡的檔'
+        assert not cache.exists() or not list(cache.rglob('*.json')), 'dry-run 不該寫快取'
+        assert 'sub-thumb' in proc.stdout and 'data:image/png;base64,' in proc.stdout, '縮圖要內嵌進 HTML'
+
+        # ---- (e) 非 dry-run 才寫快取；第二次命中不重算 ----
+        run('skills/status/scripts/render_progress.py', root)   # XDG_CACHE_HOME 已在 os.environ 裡
+        cached = sorted(cache.rglob('*.json'))
+        assert cached, '正式 render 要寫快取'
+        pv2 = PV.Previewer(root, write_cache=True)
+        pv2.preview(['analysis/figures/p_raster.png'], kind='figure', label='P_raster')
+        assert pv2.stats['cache_hit'] == 1 and pv2.stats['computed'] == 0, pv2.stats
+        mt = {str(f): f.stat().st_mtime_ns for f in cached}
+        pv3 = PV.Previewer(root, write_cache=True)
+        for fid, files, kind in (('P_raster', ['analysis/figures/p_raster.png'], 'figure'),
+                                 ('P_tsv', ['analysis/figures/p_table.tsv'], 'table')):
+            pv3.preview(files, kind=kind, label=fid)
+        assert pv3.stats['computed'] == 0 and pv3.stats['cache_write'] == 0, pv3.stats
+        assert {str(f): f.stat().st_mtime_ns for f in cached} == mt, '命中快取不該重寫'
+        # 來源改了就失效（鍵含 size 與 mtime_ns）
+        (root / 'analysis/figures/p_raster.png').write_bytes(_png_bytes(880, 300, (200, 60, 40)))
+        pv4 = PV.Previewer(root, write_cache=False)
+        pv4.preview(['analysis/figures/p_raster.png'], kind='figure', label='P_raster')
+        assert pv4.stats['computed'] == 1 and pv4.stats['cache_hit'] == 0, pv4.stats
+
+        # ---- (f) 工具缺席：PATH 找不到 soffice／pdftoppm 就退到下一條；沒有 PIL 就退成原檔相對路徑 ----
+        empty_bin = tmp / 'empty-bin'
+        empty_bin.mkdir(exist_ok=True)
+        cold = tmp / 'cold-cache'          # 前面已經把這幾張存進快取了，退路要在沒有快取的情況下測
+        old_path = os.environ['PATH']
+        os.environ['PATH'] = str(empty_bin)
+        try:
+            pv5 = PV.Previewer(root, write_cache=False, cache_dir=cold)
+            assert pv5.preview(['analysis/figures/p_only.pdf'], kind='figure', label='P_pdf')['route'] == 'none'
+            assert pv5.preview(['analysis/figures/p_table.docx', 'analysis/figures/p_table.tsv'],
+                               kind='table', label='P_docx')['route'] == 'text', '沒有 soffice 就退到 tsv 畫表'
+            assert not pv5.warnings, pv5.warnings          # 工具不在是安靜退，不記提醒
+        finally:
+            os.environ['PATH'] = old_path
+        sys.modules['PIL'] = None                           # 假裝沒裝 PIL
+        try:
+            pv6 = PV.Previewer(root, write_cache=False, cache_dir=cold)
+            r6 = pv6.preview(['analysis/figures/p_raster.png'], kind='figure', label='P_raster')
+            assert r6['route'] == 'raster' and not r6['embedded'] and r6['src'].endswith('p_raster.png'), r6
+            assert not r6['data_uri'], r6
+            assert pv6.preview(['analysis/figures/p_table.tsv'], kind='table', label='P_tsv')['route'] == 'none'
+        finally:
+            del sys.modules['PIL']
+        # 真的失敗（檔頭說是 png、內容不是）才記提醒
+        bad = root / 'analysis/figures/p_bad.png'
+        bad.write_text('not a png\n', encoding='utf-8')
+        pv7 = PV.Previewer(root, write_cache=False, cache_dir=cold)
+        assert pv7.preview(['analysis/figures/p_bad.png'], kind='figure', label='P_bad')['route'] == 'none'
+        assert pv7.warnings and 'p_bad.png' in pv7.warnings[0], pv7.warnings
+        bad.unlink()
+
+        # ---- (g) IR 記路徑別、但不夾帶 data URI；HTML 有縮圖、燈箱與「無預覽」 ----
+        src = rp.Sources(root)
+        ir = rp.build_ir(root, src, '1970-01-01T00:00:00+00:00', write_cache=False)
+        assert not [e for e in rp.validate_ir(ir) if 'IR-17' in e], rp.validate_ir(ir)
+        figs = {f['entry']: f for c in ir['submission']['analyses']['cards'] for f in c['figures']}
+        assert figs['P_raster']['preview']['route'] == 'raster', figs['P_raster']['preview']
+        assert figs['P_svg']['preview']['route'] == 'svg'
+        assert figs['P_tsv']['preview']['route'] == 'text'
+        assert figs['G_main']['preview']['route'] == 'none', 'fixture 的假 svg／pdf 沒有位元組，做不出縮圖'
+        assert all(f['preview']['data_uri'] for f in (figs['P_raster'], figs['P_svg'], figs['P_tsv']))
+        stripped = rp.ir_for_json(ir)
+        sfigs = {f['entry']: f for c in stripped['submission']['analyses']['cards'] for f in c['figures']}
+        assert all(not f['preview']['data_uri'] for f in sfigs.values()), '磁碟上的 IR 不夾帶縮圖'
+        assert all(f['preview']['route'] for f in sfigs.values()), '走了哪條路徑要留在 IR'
+        assert 'data:image' not in json.dumps(stripped), stripped['submission']['source']
+        assert all(f['preview']['data_uri'] for f in (figs['P_raster'],)), 'ir_for_json 不得改到原 IR'
+        html = rp.render_html(ir, root, [])
+        i = html.index('<section id="tab-submission"')
+        sec = html[i:html.index('<script', i)]
+        assert sec.count('<div class="sub-thumb') >= 5 and 'class="sub-thumb is-table"' in sec
+        assert '無預覽' in sec and 'loading="lazy"' in sec
+        assert '<div id="sub-lightbox" hidden>' in html and "lbOpen(img.getAttribute('src')" in html
+        assert '.sub-fig-item.is-gone .sub-thumb img{filter:grayscale(1)' in html, '已移除的縮圖要變灰'
+        assert 'data-snode="f:' not in sec[sec.index('<div class="sub-thumb'):][:400], '縮圖不得多開檔案節點'
+        assert rp.render_html(ir, root, []) == html, '同一份 IR 兩次渲染要一致'
+        # --no-previews 關得掉，關掉時頁面上一張縮圖都沒有
+        ir_off = rp.build_ir(root, src, '1970-01-01T00:00:00+00:00', write_cache=False, previews=False)
+        off = {f['entry']: f for c in ir_off['submission']['analyses']['cards'] for f in c['figures']}
+        assert all('preview' not in f for f in off.values())
+        assert '<div class="sub-thumb' not in rp.render_html(ir_off, root, [])
+    finally:
+        if old_cache is None:
+            os.environ.pop('XDG_CACHE_HOME', None)
+        else:
+            os.environ['XDG_CACHE_HOME'] = old_cache
+    print('  規格 15 圖／表欄的縮圖預覽 ok')
+
+
+# =====================================================================================================
+# 規格 16：連帶變灰不給「↺」、缺檔清單顯示檔名＋所屬分析（0.23.0 小修 4a／4b）
+# =====================================================================================================
+
+def test_dep_and_missing(tmp: Path) -> None:
+    root = variant(tmp, 'dep', extra=True)
+    pkg = root / 'submission/package.yaml'
+    pkg.parent.mkdir(parents=True, exist_ok=True)
+    # 移除整個 run 資料夾底下的東西（資料夾層級）＋移除一個入口（它獨有的檔會連帶變灰）
+    # 第三筆刻意與第一筆重疊：同一個檔同時被「整個資料夾」與「它自己」蓋到
+    pkg.write_text('schema_version: 1\nexclude:\n'
+                   '  - {path: "analysis/runs/RUN_A/scripts", reason: "整個資料夾"}\n'
+                   '  - {entry: "G_ext", reason: "整個入口"}\n'
+                   '  - {path: "analysis/runs/RUN_A/scripts/a.py", reason: "這一支自己也寫了一筆"}\n',
+                   encoding='utf-8')
+    src = rp.Sources(root)
+    ir = rp.build_ir(root, src, '1970-01-01T00:00:00+00:00', write_cache=False)
+    sub = ir['submission']
+    gone = rp._sub_gone_map(sub)
+    nodes = sub['nodes']
+
+    # (a) 自己被移除的：照樣給「↺」，而且 data-ref 是差量裡真的寫了的那個識別
+    self_gone = 'analysis/runs/RUN_A/scripts'
+    assert nodes[self_gone]['excluded'], '差量直接移除了這個資料夾'
+    assert 'dep' not in gone.get(self_gone, {}), gone.get(self_gone)
+    chip_self = rp._sub_file_chip(sub, self_gone, gone=gone)
+    assert 'data-saction="restore"' in chip_self and 'sub-dep' not in chip_self, chip_self[:200]
+
+    # (b) 因為整個資料夾被移除而連帶變灰的成員：不給「↺」，改成「隨 X 移除」並點得到那個資料夾
+    dep_nodes = [n for n, x in gone.items() if 'dep' in x and x['dep'][0].startswith('f:')]
+    assert dep_nodes, gone
+    row = rp._sub_member_row(sub, dep_nodes[0], '', gone)
+    assert '↺' not in row and 'data-saction="restore"' not in row, row
+    assert 'sub-dep' in row and '隨 ' in row and '移除</span>' in row, row
+    assert f'data-sgoto="{gone[dep_nodes[0]]["dep"][0]}"' in row, row
+
+    # (b2) 同時被資料夾與自己兩條差量蓋到：`via` 取最具體的那一條，所以它照樣給「↺」、還原送自己那筆
+    both = 'analysis/runs/RUN_A/scripts/a.py'
+    assert nodes[both]['excluded'] and 'dep' not in gone.get(both, {}), gone.get(both)
+    row_both = rp._sub_member_row(sub, both, '', gone)
+    assert f'data-saction="restore" data-ref="{both}"' in row_both, row_both
+    assert both not in [n for n, x in gone.items() if 'dep' in x], 'package.yaml 每一條都要點得到'
+
+    # (c) 唯一引用它的入口被移除 → 上層是那個入口（圖表項自己有「↺」）
+    ent_dep = [n for n, x in gone.items() if 'dep' in x and x['dep'][0].startswith(('ef:', 'er:'))]
+    assert ent_dep, '移除 G_ext 之後，只被它引用的檔要連帶變灰'
+    chip_ent = rp._sub_file_chip(sub, ent_dep[0], gone=gone)
+    assert 'data-saction="restore"' not in chip_ent and 'data-sgoto="ef:G_ext"' in chip_ent, chip_ent[:300]
+
+    # (d) run 輸入群組整組移除 → 成員指到群組標籤（群組自己有「整組還原」）
+    gid = 'runinput:RUN_A'
+    sub_g = json.loads(json.dumps(sub))
+    members = sub_g['analyses']['group_unique'][gid]
+    for m in members:
+        sub_g['nodes'][m]['excluded'] = True
+        sub_g['excluded'].append({'kind': 'node', 'id': m, 'reason': '整組', 'via': m})
+    gone_g = rp._sub_gone_map(sub_g)
+    assert all(gone_g.get(m, {}).get('dep', ('', ''))[0] == f'g:{gid}' for m in members), gone_g
+    gchip = rp._sub_group_chip(sub_g, gid, gone_g)
+    assert 'data-saction="restore-group"' in gchip, '群組本身仍有「整組還原」'
+    assert gchip.count('data-saction="restore"') == 0, '成員不再各給一個「↺」'
+
+    # (e) 缺檔清單：檔名＋所屬分析，相對路徑只進 tooltip
+    html = rp.render_html(ir, root, [])
+    i = html.index('<section id="tab-submission"')
+    sec = html[i:html.index('<script', i)]
+    lis = re.findall(r'<li title="([^"]*)"><span class="goto" data-sgoto="f:[^"]*">'
+                     r'<code>([^<]*)</code></span>(?:<span class="mw">（([^）]*)）</span>)?</li>', sec)
+    assert lis, sec[sec.index('sub-missing'):][:400]
+    for tip, name, owner in lis:
+        assert '/' not in name, f'清單只印檔名，不印路徑：{name}'
+        assert name and name in tip, (name, tip)
+        assert owner, f'{name} 要標所屬分析'
+    assert any(o == 'RUN_A' for _t, _n, o in lis), lis
+    print('  規格 16 連帶移除與缺檔清單 ok')
+
+
 def test_existing_suites() -> None:
     """set_tier 相關的既有回歸整份跑一次，確認 ssot_actions_common 的改動沒壞舊動作。"""
     for name in ('run_v0200_regressions.py', 'run_v0190_regressions.py', 'run_v0180_regressions.py'):
@@ -1329,10 +1636,12 @@ def test_existing_suites() -> None:
 def main() -> int:
     print(f'=== v{V} 回歸：投稿檔案後端 ===')
     tmp = Path(tempfile.mkdtemp(prefix='v0230-'))
+    os.environ['XDG_CACHE_HOME'] = str(tmp / 'xdg')     # 縮圖快取寫在暫存區，不碰使用者真正的 ~/.cache
     try:
         for fn in (test_entries, test_bands, test_free_text, test_runs, test_external_and_kinds,
                    test_dedup, test_build, test_edit, test_existing, test_tab,
-                   test_stats_match_package, test_action_kinds, test_server_chain, test_run_reference):
+                   test_stats_match_package, test_action_kinds, test_server_chain, test_run_reference,
+                   test_preview, test_dep_and_missing):
             fn(tmp)
         test_existing_suites()
     finally:

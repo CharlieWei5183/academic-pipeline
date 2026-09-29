@@ -905,7 +905,10 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
             v.warnings.append(f'{PACKAGE_REL} 的 exclude entry {eid!r} 不是現有入口：這筆沒有作用')
     live_entries = {e['id'] for e in v.entries if not e['excluded']}
     for nid, node in v.nodes.items():
-        hit = next(((p, r) for p, r in ex_paths if nid == p or nid.startswith(p.rstrip('/') + '/')), None)
+        # 同一個節點可能同時被「整個資料夾」與「它自己」兩條差量蓋到：`via` 取**最具體**的那一條
+        # （路徑最長），還原才送得到真正該還原的那一筆，package.yaml 裡每一條也都能從頁面上點得到。
+        hits = [(p, r) for p, r in ex_paths if nid == p or nid.startswith(p.rstrip('/') + '/')]
+        hit = max(hits, key=lambda x: len(x[0])) if hits else None
         if hit is not None:
             node['excluded'] = True
             node['exclude_reason'] = hit[1]
