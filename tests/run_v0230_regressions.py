@@ -1069,6 +1069,9 @@ def test_run_reference(tmp: Path) -> None:
         {'id': 'G_ref', 'files': ['analysis/figures/g_ref.svg'], 'type': 'figure', 'role': 'main',
          'figure_number': 'Fig. 2', 'results_keys': [], 'status': 'registered_not_reviewed',
          'caption': '散文點名整個 run 的圖。',
+         # script 欄另外逐條點名 run 內的一支腳本：修好前它會同時落 code/（逐條）與 results/（資料夾），
+         # 「同一實體檔不複製兩份」那條斷言才咬得到重複本身，不只咬到資料夾節點的存在
+         'script': 'analysis/runs/RUN_REF/scripts/r1.R',
          'unregistered_sources': [
              '資料檔與舊 run analysis/runs/RUN_REF 逐位元相同（講出處，不是宣告整個資料夾都要上傳）',
              '數值取自 analysis/runs/RUN_REF/reports/deep.tsv；另一個 analysis/runs/RUN_BARE 也一併點名']})
