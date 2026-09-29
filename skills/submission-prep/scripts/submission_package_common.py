@@ -584,6 +584,12 @@ class _View:
         self.warnings: list[str] = []
         self.groups: dict[str, dict] = {}
         self.run_missing: dict[str, str] = {}   # 結果鍵 → run 資料夾（從未存在、但 script 欄找得到實體檔；只標徽章不當缺檔）
+        # 「哪個欄位追到哪幾個節點」的明細：`analyses` 分卡靠它決定一個檔該進哪一欄，不靠回頭解析 `via` 字串
+        # （`via` 在圖表 script 欄與結果鍵 script 欄都寫成 'script'，分不出是分析腳本還是作圖腳本）。
+        self.run_items: dict[str, dict] = {}    # run_id → {'scripts': nid, 'outputs': [nid], 'group': gid}
+        self.key_scripts: dict[str, list[str]] = {}    # 結果鍵 → script 欄追到的節點
+        self.key_runs: dict[str, str] = {}      # 結果鍵 → run_id 欄（含 historical 鍵；圖表的主要分析靠它判斷）
+        self.fig_fields: dict[str, dict] = {}   # 圖表 id → {'files': [...], 'values': [...], 'scripts': [...], 'sources': [...]}
 
     # ---- 節點 ----
 
@@ -647,8 +653,12 @@ class _View:
         return nid
 
     def add_field(self, value: Any, entry_id: str, tier: str, via: str, *, kind: str | None = None,
-                  from_manifest_files: bool = False, state: dict | None = None) -> tuple[int, int]:
-        """回 (resolve 到的檔數, 缺檔數)：呼叫端要判斷「這個欄位到底有沒有指到實體檔」。"""
+                  from_manifest_files: bool = False, state: dict | None = None,
+                  sink: list | None = None) -> tuple[int, int]:
+        """回 (resolve 到的檔數, 缺檔數)：呼叫端要判斷「這個欄位到底有沒有指到實體檔」。
+
+        `sink` 給就把這個欄位追到的節點 id 依序 append 進去（`analyses` 分卡用；run 參照展開出來的節點不進）。
+        """
         state = state if state is not None else {}
         found, missing, warns = extract_paths(value, self.res, state)
         for w in warns:
@@ -659,12 +669,16 @@ class _View:
                 # 散文點名 run 資料夾本身＝run 參照：照結果鍵 run_id 那一套展開，不把整個 run 收成一個節點
                 _expand_run(self, run_dir.name, run_dir, entry_id, tier, f'{via} 點名的 run')
                 continue
-            self.node(path, kind or classify(path, self.root, from_manifest_files), entry_id, tier, via)
+            nid = self.node(path, kind or classify(path, self.root, from_manifest_files), entry_id, tier, via)
+            if sink is not None and nid not in sink:
+                sink.append(nid)
         for raw in missing:
             k = kind or classify(Path(os.path.normpath(raw if os.path.isabs(raw) else str(self.root / raw))),
                                  self.root, from_manifest_files)
-            self.node(Path(raw), k, entry_id, tier, via, missing=True, raw=raw,
-                      note=f'{via} 引用，但檔案不存在')
+            nid = self.node(Path(raw), k, entry_id, tier, via, missing=True, raw=raw,
+                            note=f'{via} 引用，但檔案不存在')
+            if sink is not None and nid not in sink:
+                sink.append(nid)
         return len(found), len(missing)
 
 
@@ -677,21 +691,26 @@ def _expand_run(v: _View, run_id: str, run_dir: Path, entry_id: str, tier: str, 
 
     結果鍵的 `run_id` 欄與「散文點名 run 資料夾本身」共用這一份規則，兩條路徑展出來的節點完全一樣。
     """
+    item = v.run_items.setdefault(run_id, {'scripts': '', 'outputs': [], 'group': ''})
     scripts_dir = run_dir / 'scripts'
     scripts_nid = ''
     if scripts_dir.is_dir():
         scripts_nid = v.node(scripts_dir, 'code', entry_id, tier, f'{via}.scripts',
                              note='run 的腳本資料夾（宣告粒度＝run，整個資料夾一個節點）')
+        item['scripts'] = scripts_nid
     for name in ('report.md', 'status.json'):
         p = run_dir / name
         if p.is_file():
-            v.node(p, 'result', entry_id, tier, f'{via}.{name}')
+            nid = v.node(p, 'result', entry_id, tier, f'{via}.{name}')
+            if nid not in item['outputs']:
+                item['outputs'].append(nid)
     snap = run_dir / 'input_snapshot'
     if not snap.is_dir():
         return
     # 「這個 run 的輸入」是一個宣告單位 → 收成一個群組（組內各檔保留自己的 kind 與自己的節點）
     gid = f'{GROUP_PREFIX}{run_id}'
     v.group(gid, run_id, tier, entry_id, scripts_nid)
+    item['group'] = gid
     tables: list[Path] = []
     for child in sorted(snap.rglob('*')):
         if not child.is_file() or child.is_symlink():
@@ -713,8 +732,10 @@ def _expand_run(v: _View, run_id: str, run_dir: Path, entry_id: str, tier: str, 
 
 def _trace_result_key(v: _View, key: str, obj: dict, entry_id: str, tier: str, prefix: str) -> None:
     """一個結果鍵往回追的檔案：script 欄的路徑 ＋ run 資料夾內的宣告粒度節點。"""
-    n_found, _n_missing = v.add_field(obj.get('script'), entry_id, tier, f'{prefix}script', state={})
+    sink = v.key_scripts.setdefault(key, [])
+    n_found, _n_missing = v.add_field(obj.get('script'), entry_id, tier, f'{prefix}script', state={}, sink=sink)
     run_id = _text(obj.get('run_id'))
+    v.key_runs.setdefault(key, run_id)
     if not run_id:
         return
     rel = f'{RUNS_REL}/{run_id}'
@@ -794,19 +815,23 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
                  'status': _text(fig.get('status')), 'result_keys': [], 'badges': [], 'run_missing': [],
                  'excluded': False, 'exclude_reason': '', 'source': f'{MANIFEST_REL}#figures[{fid}]'}
         v.entries.append(entry)
+        ff = v.fig_fields.setdefault(fid, {'files': [], 'values': [], 'scripts': [], 'sources': []})
         files = [_text(x) for x in _list(fig.get('files')) if _text(x)] or ([_text(fig.get('file'))] if _text(fig.get('file')) else [])
         if not files:
             v.warnings.append(f'{MANIFEST_REL}#{fid} 沒有 files／file：這個入口沒有圖表檔可上傳')
         for rel in files:
             path = Path(os.path.normpath(rel if os.path.isabs(rel) else str(root / rel)))
             if path.exists():
-                v.node(path, 'figure', fid, tier, 'files')
+                nid = v.node(path, 'figure', fid, tier, 'files')
             else:
-                v.node(Path(rel), 'figure', fid, tier, 'files', missing=True, raw=rel, note='manifest 的 files 指到不存在的檔')
-        v.add_field(fig.get('script'), fid, tier, 'script', kind='code', state={})
-        v.add_field(fig.get('values_snapshot'), fid, tier, 'values_snapshot', kind='result', state={})
+                nid = v.node(Path(rel), 'figure', fid, tier, 'files', missing=True, raw=rel,
+                             note='manifest 的 files 指到不存在的檔')
+            if nid not in ff['files']:
+                ff['files'].append(nid)
+        v.add_field(fig.get('script'), fid, tier, 'script', kind='code', state={}, sink=ff['scripts'])
+        v.add_field(fig.get('values_snapshot'), fid, tier, 'values_snapshot', kind='result', state={}, sink=ff['values'])
         for name in ('registered_sources', 'unregistered_sources'):
-            v.add_field(fig.get(name), fid, tier, name, state={})
+            v.add_field(fig.get(name), fid, tier, name, state={}, sink=ff['sources'])
         for key in [_text(k) for k in _list(fig.get('results_keys')) if _text(k)]:
             obj = results.get(key)
             if obj is None:
@@ -983,7 +1008,424 @@ def derive(root: Path, key_bands: dict[str, str] | None = None, delta: dict[str,
     out['entry_bytes'] = entry_bytes
     out['node_files'] = node_files
     out['node_bytes'] = node_bytes
+    out['analyses'] = build_analyses(v, out)
     return out
+
+
+# =====================================================================================================
+# 依分析分卡（analyses）：0.23.0 第二次改版
+# =====================================================================================================
+# 一個「分析」＝一個 run（`analysis/runs/<run_id>`，或只是結果鍵 `run_id` 標籤、資料夾從未存在的那種）。
+# 分析集合＝入口（現行結果鍵、有 role 的圖表）往回追到的所有 run；追不到任何 run 的圖表與沒有 run_id 的
+# 結果鍵歸到所屬帶的「未歸屬分析」，沒有 attach_to 的手動加入檔歸到頁尾的「手動加入」。
+# 每張卡五欄：輸入資料｜分析腳本｜輸出結果｜作圖／表腳本｜圖／表。每個檔在頁面上只出現一次——被兩個以上
+# 分析引用的輸入資料與分析腳本移到頁面頂端的共用檔案區，卡內只留「共用 N 個」。
+ANA_COLS = ('input', 'script', 'output', 'figscript', 'figure')
+ANA_COL_LABEL = {'input': '輸入資料', 'script': '分析腳本', 'output': '輸出結果',
+                 'figscript': '作圖／表腳本', 'figure': '圖／表'}
+ANA_UNASSIGNED = 'unassigned:'      # 後面接 tier
+ANA_MANUAL = 'manual'
+# 圖表檔格式的顯示順序（向量優先；其餘照字母序接在後面）
+FIG_FMT_ORDER = ('svg', 'pdf', 'eps', 'png', 'tif', 'tiff', 'jpg', 'jpeg')
+
+
+def run_of_node(nid: str) -> str:
+    """節點落在哪個 run 之下（`analysis/runs/<X>/…` → X；run 資料夾本身也算 X）。不在 runs 之下回空字串。"""
+    if not nid.startswith(RUNS_REL + '/'):
+        return ''
+    return nid[len(RUNS_REL) + 1:].split('/')[0]
+
+
+def own_node(n: dict) -> bool:
+    """這個檔案節點在頁面上有沒有自己的標籤（節點粒度＝SSOT 的宣告粒度）。
+
+    缺檔與已移除一律保留自己的標籤——擋打包的清單要點得到、要還原也要點得到。其餘兩種情形收進上層：
+    落在某個資料夾節點之下（`under`，例如 run 的 `scripts/` 裡被 script 欄點名的腳本）；
+    只從某個 run 的輸入群組追到、沒有任何逐條宣告（`groups` 有值而 `itemized` 為 False）。
+    """
+    if n['missing'] or n['excluded']:
+        return True
+    if n['under']:
+        return False
+    return not (n['groups'] and not n['itemized'])
+
+
+def all_entries_map(nodes: dict[str, dict]) -> dict[str, list[str]]:
+    """每個節點的入口 ∪ 收在它底下（`under`）的檔案帶上來的入口。
+
+    被資料夾標籤收走的檔案不另開標籤，它的入口必須算進收它的那個資料夾標籤，否則「這張圖表用到那支腳本」
+    在頁面上就消失了。`under` 只指最深的那一層，所以往上逐層併，順便擋掉理論上不會出現的環。
+    """
+    out = {nid: list(n['entries']) for nid, n in nodes.items()}
+    for nid, n in sorted(nodes.items()):
+        if own_node(n) or not n['entries']:
+            continue
+        host, seen = n['under'], {nid}
+        while host and host in nodes and host not in seen:
+            seen.add(host)
+            for eid in n['entries']:
+                if eid not in out[host]:
+                    out[host].append(eid)
+            host = nodes[host]['under']
+    return out
+
+
+def fig_formats(nids: Iterable[str]) -> list[str]:
+    """圖表檔清單 → 格式縮寫（svg／pdf／png…）；向量優先，其餘照字母序。"""
+    fmts = {Path(nid).suffix.lstrip('.').lower() for nid in nids if Path(nid).suffix}
+    known = [f for f in FIG_FMT_ORDER if f in fmts]
+    return known + sorted(fmts - set(known))
+
+
+def _mode_pick(counts: dict[str, int], order_of) -> str:
+    """出現最多者；平手取 `order_of` 最小的（頁面順序在前）。空字串（未歸屬）只在沒有任何實體 run 時才會勝出。"""
+    real = {k: c for k, c in counts.items() if k}
+    table = real or counts
+    if not table:
+        return ''
+    top = max(table.values())
+    return min((k for k, c in table.items() if c == top), key=order_of)
+
+
+def build_analyses(v: _View, out: dict) -> dict:
+    """把 `entries`／`nodes`／`groups` 重排成「依分析分卡」。renderer 只負責畫，不重寫這裡的規則。"""
+    nodes: dict[str, dict] = out['nodes']
+    entries: list[dict] = out['entries']
+    groups: dict[str, dict] = out['groups']
+    order = {e['id']: i for i, e in enumerate(entries)}
+    ent_by_id = {e['id']: e for e in entries}
+    fig_ids = [e['id'] for e in entries if e['kind'] == 'figure']
+    res_ids = [e['id'] for e in entries if e['kind'] == 'result']
+    all_ent = all_entries_map(nodes)
+    node_files, node_bytes = out['node_files'], out['node_bytes']
+
+    # ---- 欄位明細（derive 收集好的，不回頭解析 via）----
+    fig_scripts = {fid: list((v.fig_fields.get(fid) or {}).get('scripts') or []) for fid in fig_ids}
+    fig_files = {fid: list((v.fig_fields.get(fid) or {}).get('files') or []) for fid in fig_ids}
+    fig_values = {fid: list((v.fig_fields.get(fid) or {}).get('values') or []) for fid in fig_ids}
+    fig_sources = {fid: list((v.fig_fields.get(fid) or {}).get('sources') or []) for fid in fig_ids}
+    fig_script_nodes = {n for lst in fig_scripts.values() for n in lst}
+    fig_source_nodes = {n for lst in fig_sources.values() for n in lst}
+    key_script_nodes = {n for lst in v.key_scripts.values() for n in lst}
+    run_script_nodes = {it['scripts'] for it in v.run_items.values() if it['scripts']}
+    consumed: dict[str, str] = {}       # 圖表檔與數值快照 → 收它的圖表（不另開標籤，放在圖表項底下）
+    fig_of_node: dict[str, str] = {}    # 節點 → 第一個用到它的圖表（頁面順序）
+    for fid in sorted(fig_ids, key=lambda x: order[x]):
+        for nid in fig_files[fid] + fig_values[fid]:
+            consumed.setdefault(nid, fid)
+            fig_of_node.setdefault(nid, fid)
+        for nid in fig_scripts[fid] + fig_sources[fid]:
+            fig_of_node.setdefault(nid, fid)
+    key_of_script: dict[str, str] = {}
+    for key in sorted(v.key_scripts, key=lambda k: order.get(k, 10 ** 6)):
+        for nid in v.key_scripts[key]:
+            key_of_script.setdefault(nid, key)
+
+    # ---- 一、每張圖表的主要分析：第一個 results_keys 所屬的 run；沒有就取來源檔落點最多的 run ----
+    primary: dict[str, str] = {}
+    fig_runs: dict[str, dict[str, int]] = {}
+    for fid in fig_ids:
+        cnt: dict[str, int] = {}
+        for nid in sorted(nodes):
+            if fid not in all_ent[nid]:
+                continue
+            r = run_of_node(nid)
+            if r:
+                cnt[r] = cnt.get(r, 0) + 1
+        fig_runs[fid] = cnt
+        run = ''
+        for it in ent_by_id[fid]['result_keys']:
+            run = v.key_runs.get(it['key']) or ''
+            if run:
+                break
+        if not run and cnt:
+            top = max(cnt.values())
+            # 平手取「掃這張圖表自己的節點（路徑序）時先出現的那個 run」——卡片的頁面順序這時還沒定，用穩定的路徑序
+            hit = {r for r in cnt if cnt[r] == top}
+            run = next(r for nid in sorted(nodes) if fid in all_ent[nid]
+                       for r in [run_of_node(nid)] if r in hit)
+        primary[fid] = run
+
+    # ---- 二、作圖腳本跟著它的圖表走：同一支作圖腳本的圖表併成一組，整組放同一張卡 ----
+    parent = {fid: fid for fid in fig_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    by_script: dict[str, list[str]] = {}
+    for fid in sorted(fig_ids, key=lambda x: order[x]):
+        for s in fig_scripts[fid]:
+            by_script.setdefault(s, []).append(fid)
+    for s in sorted(by_script):
+        group_fids = by_script[s]
+        for other in group_fids[1:]:
+            parent[find(other)] = find(group_fids[0])
+    comps: dict[str, list[str]] = {}
+    for fid in sorted(fig_ids, key=lambda x: order[x]):
+        comps.setdefault(find(fid), []).append(fid)
+    fig_card: dict[str, str] = {}
+    for _r, fids in comps.items():
+        cnt = {}
+        for f in fids:
+            cnt[primary[f]] = cnt.get(primary[f], 0) + 1
+        pick = _mode_pick(cnt, lambda r: min(order[f] for f in fids if primary[f] == r))
+        for f in fids:
+            fig_card[f] = pick
+
+    # ---- 三、卡片集合 ----
+    def unass(tier: str) -> str:
+        return ANA_UNASSIGNED + tier
+
+    def card_of_entry(eid: str) -> str:
+        e = ent_by_id.get(eid)
+        if e is None:
+            return ''
+        if e['kind'] == 'figure':
+            return fig_card.get(eid) or unass(e['tier'])
+        return _text(e.get('run_id')) or unass(e['tier'])
+
+    base_ids: list[str] = []
+    for rid in list(v.run_items) + [_text(ent_by_id[e].get('run_id')) for e in res_ids] + list(fig_card.values()):
+        if rid and rid not in base_ids:
+            base_ids.append(rid)
+
+    def resolve_homes(card_ids: set[str]) -> dict[str, str]:
+        """每個節點唯一的落卡。順序即優先序；解不出來的退到未歸屬／手動加入。"""
+        home: dict[str, str] = {}
+        pending: list[str] = []
+        for nid, n in nodes.items():
+            if nid in consumed:
+                home[nid] = card_of_entry(consumed[nid])
+                continue
+            r = run_of_node(nid)
+            if r in card_ids:
+                home[nid] = r
+                continue
+            if n['groups'] and not own_node(n):
+                gid = n['groups'][0]
+                rid = (groups.get(gid) or {}).get('run_id') or ''
+                if rid in card_ids:
+                    home[nid] = rid
+                    continue
+            if n['under']:
+                pending.append(nid)
+                continue
+            if nid in fig_of_node:
+                home[nid] = card_of_entry(fig_of_node[nid])
+                continue
+            if nid in key_of_script:
+                home[nid] = card_of_entry(key_of_script[nid])
+                continue
+            owners = [e for e in all_ent[nid] if e in ent_by_id]
+            if owners:
+                home[nid] = card_of_entry(min(owners, key=lambda x: order[x]))
+                continue
+            home[nid] = ANA_MANUAL if n['origin'] == 'added' else unass(n['tier'])
+        for _round in range(6):      # 收在資料夾節點裡的檔跟著收它的那個節點落卡（逐層往上）
+            left = [nid for nid in pending if nid not in home]
+            if not left:
+                break
+            for nid in left:
+                host = nodes[nid]['under']
+                if host in home:
+                    home[nid] = home[host]
+        for nid in pending:
+            home.setdefault(nid, unass(nodes[nid]['tier']))
+        return home
+
+    card_ids = set(base_ids)
+    home: dict[str, str] = {}
+    for _round in range(4):
+        home = resolve_homes(card_ids)
+        used = {home[nid] for nid in nodes}
+        keep = {aid for aid in card_ids if aid in used or aid in set(fig_card.values())
+                or any(_text(ent_by_id[e].get('run_id')) == aid for e in res_ids)}
+        if keep == card_ids:
+            break
+        card_ids = keep
+
+    # ---- 四、共用檔：被兩個以上分析引用的輸入資料與分析腳本 ----
+    col: dict[str, str] = {}
+    dual: set[str] = set()          # 兼作圖的分析腳本
+    figdata: set[str] = set()       # 作圖用的輸入資料
+    for nid, n in nodes.items():
+        if nid in consumed:
+            col[nid] = ''
+            continue
+        if n['kind'] == 'code':
+            # 分析腳本／作圖腳本只看「是哪個欄位點名的」：`script` 欄是自由文字，常順手點名資料與輸出檔，
+            # 所以先用 kind 篩掉非程式碼，再用欄位分兩欄；兩邊都點名的放分析腳本並標「兼作圖」。
+            named_fig = nid in fig_script_nodes
+            named_ana = nid in key_script_nodes or nid in run_script_nodes
+            col[nid] = 'figscript' if (named_fig and not named_ana) else 'script'
+            if named_fig and named_ana:
+                dual.add(nid)
+        elif nid in fig_source_nodes and not run_of_node(nid):
+            col[nid] = 'input'
+            figdata.add(nid)
+        elif n['kind'] == 'figure':
+            col[nid] = 'figure'
+        elif n['kind'] == 'data':
+            col[nid] = 'input'
+        else:
+            col[nid] = 'output'
+    using: dict[str, list[str]] = {}
+    for nid in nodes:
+        seen = [home[nid]] if home[nid] else []
+        for eid in all_ent[nid]:
+            c = card_of_entry(eid)
+            if c and c not in seen:
+                seen.append(c)
+        using[nid] = seen
+    shared = sorted(nid for nid in nodes
+                    if len(using[nid]) >= 2 and col.get(nid) in ('input', 'script') and not nodes[nid]['under'])
+    shared_set = set(shared)
+
+    # ---- 五、組卡 ----
+    cards: dict[str, dict] = {}
+
+    def card(aid: str) -> dict:
+        c = cards.get(aid)
+        if c is None:
+            run_id = aid if aid in card_ids else ''
+            c = {'id': aid, 'kind': 'run' if run_id else ('manual' if aid == ANA_MANUAL else 'unassigned'),
+                 'run_id': run_id, 'exists': bool(run_id) and (v.root / RUNS_REL / run_id).is_dir(),
+                 'tier': 'supplementary', 'order': 10 ** 6, 'plan_ids': [], 'entries': [],
+                 'result_keys': [], 'figures': [], 'also_figures': [],
+                 'cols': {k: [] for k in ANA_COLS}, 'groups': [], 'shared': {'input': [], 'script': []},
+                 'dual': [], 'figdata': [], 'badges': [], 'files': 0, 'bytes': 0}
+            cards[aid] = c
+        return c
+
+    for aid in base_ids:
+        if aid in card_ids:
+            card(aid)
+    for eid in sorted(res_ids, key=lambda x: order[x]):
+        e = ent_by_id[eid]
+        c = card(card_of_entry(eid))
+        c['result_keys'].append({'key': eid, 'tier': e['tier'], 'excluded': e['excluded'],
+                                 'historical': False, 'type': _text(e.get('type')),
+                                 'caption_first': e.get('caption_first') or ''})
+        if eid not in c['entries']:
+            c['entries'].append(eid)
+        pid = _text(e.get('plan_id'))
+        if pid and pid not in c['plan_ids']:
+            c['plan_ids'].append(pid)
+        for b in e['badges']:
+            if b not in c['badges']:
+                c['badges'].append(b)
+    for fid in sorted(fig_ids, key=lambda x: order[x]):
+        e = ent_by_id[fid]
+        c = card(card_of_entry(fid))
+        c['figures'].append({
+            'entry': fid, 'node_id': 'ef:' + fid, 'label': fid, 'type': _text(e.get('type')) or 'figure',
+            'figure_number': _text(e.get('figure_number')), 'tier': e['tier'], 'excluded': e['excluded'],
+            'caption_first': e.get('caption_first') or '', 'badges': list(e['badges']),
+            'files': [n for n in fig_files[fid] if n in nodes],
+            'values': [n for n in fig_values[fid] if n in nodes],
+            'formats': fig_formats(fig_files[fid]),
+            'result_keys': [dict(it) for it in e['result_keys']]})
+        if fid not in c['entries']:
+            c['entries'].append(fid)
+        for b in e['badges']:
+            if b not in c['badges']:
+                c['badges'].append(b)
+    for nid in sorted(nodes):
+        cl = col.get(nid)
+        if not cl:
+            continue
+        if nid in shared_set:
+            c = card(home[nid])
+            if nid not in c['shared'][cl]:
+                c['shared'][cl].append(nid)
+            for aid in using[nid]:
+                cc = card(aid)
+                if nid not in cc['shared'][cl]:
+                    cc['shared'][cl].append(nid)
+            continue
+        if not own_node(nodes[nid]):
+            continue
+        c = card(home[nid])
+        c['cols'][cl].append(nid)
+        if nid in dual:
+            c['dual'].append(nid)
+        if nid in figdata:
+            c['figdata'].append(nid)
+    for gid in sorted(groups):
+        rid = groups[gid]['run_id']
+        if rid in card_ids:
+            card(rid)['groups'].append(gid)
+    group_unique = {gid: [m for m in groups[gid]['members'] if m not in shared_set] for gid in groups}
+
+    # ---- 六、也用於：這個分析有貢獻、但圖表卡在別處 ----
+    for fid in sorted(fig_ids, key=lambda x: order[x]):
+        own_c = card_of_entry(fid)
+        rel: set[str] = set(r for r in fig_runs[fid] if r in card_ids)
+        for it in ent_by_id[fid]['result_keys']:
+            r = v.key_runs.get(it['key']) or ''
+            if r in card_ids:
+                rel.add(r)
+        for nid in sorted(nodes):
+            if fid in all_ent[nid] and home[nid] in card_ids:
+                rel.add(home[nid])
+        e = ent_by_id[fid]
+        for aid in sorted(rel - {own_c}):
+            card(aid)['also_figures'].append({
+                'entry': fid, 'node_id': 'ef:' + fid, 'label': fid,
+                'figure_number': _text(e.get('figure_number')), 'card': own_c})
+
+    # ---- 七、帶、順序、檔數 ----
+    for nid in nodes:
+        if nid in shared_set:
+            continue
+        c = cards.get(home[nid])
+        if c is None:
+            continue
+        c['files'] += node_files.get(nid, 0)
+        c['bytes'] += node_bytes.get(nid, 0)
+    for aid, c in cards.items():
+        tiers = [x['tier'] for x in c['figures']] + [x['tier'] for x in c['result_keys']]
+        if not tiers:
+            tiers = [nodes[nid]['tier'] for nid in nodes if home[nid] == aid] or ['supplementary']
+        c['tier'] = highest_tier(tiers)
+        if aid.startswith(ANA_UNASSIGNED):
+            c['tier'] = aid[len(ANA_UNASSIGNED):]
+        idx = [order[e] for e in c['entries']]
+        if not idx:
+            idx = [order[e] for nid in nodes if home[nid] == aid for e in all_ent[nid] if e in order]
+        c['order'] = min(idx) if idx else 10 ** 6
+        if c['run_id'] and not c['exists'] and RUN_MISSING_BADGE not in c['badges']:
+            c['badges'].append(RUN_MISSING_BADGE)
+        c['plan_ids'] = sorted(c['plan_ids'])
+        for k in ANA_COLS:
+            c['cols'][k] = sorted(set(c['cols'][k]))
+        for k in ('input', 'script'):
+            c['shared'][k] = sorted(set(c['shared'][k]))
+        c['dual'] = sorted(set(c['dual']))
+        c['figdata'] = sorted(set(c['figdata']))
+        c['also_figures'].sort(key=lambda x: order.get(x['entry'], 0))
+
+    ordered = sorted(cards.values(), key=lambda c: (TIER_RANK.get(c['tier'], 9), c['order'], c['id']))
+    manual = [c for c in ordered if c['kind'] == 'manual']
+    ordered = [c for c in ordered if c['kind'] != 'manual'] + manual      # 手動加入卡固定在頁尾
+    return {
+        'cards': ordered,
+        'shared': [{'node': nid, 'col': col[nid], 'cards': list(using[nid])} for nid in shared],
+        'group_unique': group_unique,
+        'home': home,
+        'stats': {
+            'cards': len(ordered),
+            'cards_by_tier': {t: sum(1 for c in ordered if c['tier'] == t) for t in TIERS},
+            'shared': len(shared),
+            'shared_files': sum(node_files.get(nid, 0) for nid in shared),
+            'shared_bytes': sum(node_bytes.get(nid, 0) for nid in shared),
+            'figures': sum(len(c['figures']) for c in ordered),
+            'result_keys': sum(len(c['result_keys']) for c in ordered),
+        },
+    }
 
 
 def packaged_path_of(node: dict, entries: list[dict]) -> str:
