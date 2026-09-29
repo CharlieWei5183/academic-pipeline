@@ -348,6 +348,21 @@ def test_external_and_kinds(tmp: Path) -> None:
     assert n['analysis/figures/g_ext.svg']['packaged_path'] == 'Extended_Data/G_ext/g_ext.svg'
     assert n['analysis/figures/g_supp.svg']['packaged_path'] == 'Supplementary/G_supp/g_supp.svg'
     assert n['analysis/runs/RUN_A/scripts']['packaged_path'] == 'code/analysis/runs/RUN_A/scripts'
+    # 0.23.0 小修 1a：root 外的檔一律歸 data（副檔名屬程式碼的仍是 code），只換落點資料夾
+    ext_nodes = [x for x in v['nodes'].values() if x['external']]
+    assert ext_nodes, '沒有 root 外的節點可驗'
+    for x in ext_nodes:
+        want = 'code' if (Path(x['id']).suffix.lower() in S.CODE_SUFFIXES or 'scripts' in Path(x['id']).parts) else 'data'
+        assert x['kind'] == want, (x['id'], x['kind'], want)
+        assert x['packaged_path'].startswith(S.KIND_DIR[want] + '/'), x['packaged_path']
+    assert n[far_id]['kind'] == 'data' and n[far_id]['packaged_path'].startswith('data/external/abs')
+    # classify() 直接驗：root 外不是 code 就是 data，不再掉進 result
+    assert S.classify(Path(far_id), root) == 'data'
+    assert S.classify(FAR / 'x.R', root) == 'code', 'root 外但副檔名是程式碼 → 仍 code'
+    assert S.classify(root / 'analysis/runs/RUN_A/vals.tsv', root) == 'result', 'root 內不受影響'
+    # 檔數與位元組不變：拿同一份 view 的列去比，落點集合變了但實體檔的多重集合一樣
+    rows = S.package_files(v)
+    assert sorted(r['source_path'] for r in rows) == sorted(r['source_path'] for r in S.package_files(view_of(root)))
     print('  規格 5 external 與分類 ok')
 
 
@@ -702,6 +717,215 @@ def test_tab(tmp: Path) -> None:
     print('  規格 10 投稿檔案分頁 ok')
 
 
+# =====================================================================================================
+# 規格 11：摘要列的檔數與位元組＝打包同一套算法（0.23.0 小修 1b）
+# =====================================================================================================
+
+def test_stats_match_package(tmp: Path) -> None:
+    root = variant(tmp, 'stats')
+    v = view_of(root)
+    rows = S.package_files(v)
+    assert v['stats']['files'] == len(rows), (v['stats']['files'], len(rows))
+    assert v['stats']['bytes'] == sum(r['bytes'] for r in rows), (v['stats']['bytes'], sum(r['bytes'] for r in rows))
+    # package_files() 會在落點衝突時記 warning；derive() 收尾跑過一次、打包再跑一次，同一條不得重複
+    before = list(v['warnings'])
+    S.package_files(v)
+    S.package_files(v)
+    assert v['warnings'] == before, '重複呼叫 package_files() 追加了重複的 warning'
+    assert len(v['warnings']) == len(set(v['warnings'])), v['warnings']
+    # 分頁摘要列印的就是同一個數字
+    html = (root / 'PROGRESS.html').read_text(encoding='utf-8') if (root / 'PROGRESS.html').is_file() else ''
+    if html:
+        assert f'<b>總計</b> {len(rows)} 個檔' in html, '摘要列的檔數與 package_files() 不一致'
+    print('  規格 11 摘要列與打包同一套數字 ok')
+
+
+# =====================================================================================================
+# 規格 12：兩種動作 kind 的登記與 validator
+# =====================================================================================================
+
+def test_action_kinds(tmp: Path) -> None:
+    root = variant(tmp, 'kinds')
+    import progress_server as ps
+    assert tuple(C.ACTIONS) == C.ACTION_KINDS == ps.ACTION_KINDS == rp.INBOX_ACTION_KINDS, '三處登記必須同序'
+    assert C.ACTION_KINDS[-3:] == ('package_edit', 'package_build', 'batch'), C.ACTION_KINDS
+    assert all(k in rp.INBOX_KINDS for k in C.ACTION_KINDS)
+    assert C.action_script('package_edit') == SUB / 'package_edit.py'
+    assert C.action_script('package_build') == SUB / 'build_submission_package.py'
+    assert C.action_script('set_tier') == SCRIPTS / 'set_tier.py', '既有 kind 的腳本路徑不變'
+    for kind in ('package_edit', 'package_build'):
+        assert C.ACTIONS[kind]['stage'] == 'submission-prep'
+
+    def bad(kind, payload, anchor_txt):
+        norm, err = C.validate_payload(root, kind, payload)
+        assert norm is None and anchor_txt in err, (kind, payload, err)
+
+    def good(kind, payload):
+        norm, err = C.validate_payload(root, kind, payload)
+        assert not err, (kind, payload, err)
+        return norm
+
+    # package_edit：四個動作欄只能填一個
+    bad('package_edit', {}, '四個都是空的')
+    bad('package_edit', {'exclude': ['a'], 'restore': ['b']}, '一次要做多種請改用 batch')
+    bad('package_edit', [], 'package_edit 需要 payload object')
+    bad('package_edit', {'include': [{'path': 'data/raw.csv', 'tier': 'nope', 'kind': 'data'}]}, 'tier 須為')
+    bad('package_edit', {'include': [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'nope'}]}, 'kind 須為')
+    bad('package_edit', {'include': [{'path': 'nope/zz.tsv', 'tier': 'main', 'kind': 'data'}]}, '不存在')
+    bad('package_edit', {'include': [{'path': '/etc/hostname', 'tier': 'main', 'kind': 'data'}]}, '與其上一層之外')
+    bad('package_edit', {'include': [{'path': 'a', 'tier': 'main', 'kind': 'data'},
+                                     {'path': 'b', 'tier': 'main', 'kind': 'data'}]}, '一次只能一筆')
+    bad('package_edit', {'exclude': ['a', '']}, '非空字串')
+    bad('package_edit', {'restore': ['a', 'b']}, '一次只能一筆')
+    bad('package_edit', {'exclude': ['a'], 'reason': 5}, 'reason 須為字串')
+    assert good('package_edit', {'exclude': ['a', 'b', 'a']})['exclude'] == ['a', 'b'], '保留順序去重'
+    inc = good('package_edit', {'include': [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'data', 'note': 'n'}]})
+    assert inc['include'] == [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'data', 'note': 'n'}]
+    # root 上一層的檔可以加入（投稿包收 root 與 root.parent）
+    good('package_edit', {'include': [{'path': (tmp / 'ext_sib/x.csv').as_posix(), 'tier': 'main', 'kind': 'data'}]})
+    # argv 與 title
+    assert C.ACTIONS['package_edit']['argv']({'exclude': ['a', 'b'], 'reason': 'r'}) == \
+        ['--exclude', 'a', '--exclude', 'b', '--reason', 'r']
+    assert C.ACTIONS['package_edit']['argv']({'include': [{'path': 'p', 'tier': 'main', 'kind': 'data', 'attach_to': 'E'}]}) == \
+        ['--include', 'p', '--tier', 'main', '--kind', 'data', '--attach-to', 'E']
+    assert C.ACTIONS['package_edit']['title']({'exclude': ['a', 'b']})[2] == '', 'target 必須留空（分頁節點不在關聯圖 IR 裡）'
+    assert C.pkg_op_of({'exclude_entry': ['E1']}) == ('exclude-entry', 'E1')
+    # package_build：形狀錯誤，以及「有缺檔就在驗證階段擋掉」——不必等 dry-run 跑完
+    bad('package_build', {'out': 'x'}, '只接受 no_zip 與 reason')
+    bad('package_build', {'no_zip': 'yes'}, 'no_zip 須為 true 或 false')
+    blocking = list(S.derive(root)['blocking_missing'])
+    assert blocking, 'fixture 本來就帶幾個缺檔，這條才有得驗'
+    bad('package_build', {}, '個納入中的缺檔會擋住打包')
+    assert C.ACTIONS['package_build']['argv']({'no_zip': True}) == ['--no-zip']
+    assert C.ACTIONS['package_build']['argv']({}) == []
+    # 缺檔移掉之後才放行（直接寫差量檔，不繞 CLI——這裡驗的是 validator，不是 package_edit 的鏈）
+    pkg = root / 'submission/package.yaml'
+    pkg.parent.mkdir(parents=True, exist_ok=True)
+    pkg.write_text('schema_version: 1\ninclude: []\nexclude:\n'
+                   + ''.join(f'  - {{path: "{x}", reason: "回歸測試"}}\n' for x in blocking), encoding='utf-8')
+    assert not S.derive(root)['blocking_missing']
+    assert good('package_build', {}) == {}
+    assert good('package_build', {'no_zip': True}) == {'no_zip': True}
+    # package_build 不能進 batch（run_batch.py 走同一個 validator）
+    norm, err = C.validate_payload(root, 'batch', {'actions': [{'kind': 'package_build', 'payload': {}}]})
+    assert norm is None and '不能放進批次' in err and '打包要讀' in err, err
+    assert 'package_build' not in err.split('kind 須為')[-1] if 'kind 須為' in err else True
+    # package_edit 可以進 batch，而且第二項起仍走嚴格驗證（路徑不接力）
+    norm, err = C.validate_payload(root, 'batch', {'actions': [
+        {'kind': 'package_edit', 'payload': {'exclude': ['analysis/figures/vals.tsv']}},
+        {'kind': 'package_edit', 'payload': {'exclude': ['data/raw.csv']}}]})
+    assert not err, err
+    assert len(norm['actions']) == 2
+    norm, err = C.validate_payload(root, 'batch', {'actions': [
+        {'kind': 'package_edit', 'payload': {'exclude': ['a']}},
+        {'kind': 'package_edit', 'payload': {'exclude': ['a'], 'restore': ['b']}}]})
+    assert norm is None and 'actions[1]' in err, err
+    # token：server 端算的要與兩支腳本各自比的那個逐字相同
+    import argparse
+    import package_edit as PE
+    for payload, ns in (
+            ({'exclude': ['data/raw.csv']},
+             argparse.Namespace(include='', exclude=['data/raw.csv'], exclude_entry='', restore='',
+                                tier='', kind='', attach_to='', note='', reason='', inbox='IN-007')),
+            ({'restore': ['G_main']},
+             argparse.Namespace(include='', exclude=[], exclude_entry='', restore='G_main',
+                                tier='', kind='', attach_to='', note='', reason='', inbox='IN-007'))):
+        assert C.action_token(root, 'package_edit', payload, 'IN-007') == \
+            PE.token_of(root, {'op': PE.parse_op(ns)}, 'IN-007'), payload
+    v = S.derive(root)
+    assert C.action_token(root, 'package_build', {}, 'IN-008') == S.package_token(root, S.package_files(v))
+    print('  規格 12 兩種動作 kind 的登記與 validator ok')
+
+
+# =====================================================================================================
+# 規格 13：對真實 progress_server 的 POST 全鏈
+# =====================================================================================================
+
+def test_server_chain(tmp: Path) -> None:
+    import threading
+    import urllib.error
+    import urllib.request
+    import progress_server as ps
+    root = variant(tmp, 'srvchain')
+    # 缺檔會擋打包，先用衍生規則看有哪些，之後逐一移除
+    blocking = list(S.derive(root)['blocking_missing'])
+    srv = ps.make_server(root, '127.0.0.1', 0, allow_apply=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+
+    def post(path, body=None):
+        req = urllib.request.Request(f'http://127.0.0.1:{port}{path}',
+                                     data=json.dumps(body).encode('utf-8') if body is not None else None,
+                                     method='POST' if body is not None else 'GET')
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('Origin', f'http://127.0.0.1:{port}')
+        try:
+            with urllib.request.urlopen(req, timeout=900) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    try:
+        st, d = post('/api/ping')
+        assert st == 200 and d['actions_enabled'] is True, d
+        # (1) 壞 payload 一律 4xx 並回清楚訊息
+        for payload, anchor_txt in (
+                ({'kind': 'package_edit', 'payload': {'exclude': ['a'], 'include': [{'path': 'data/raw.csv', 'tier': 'main', 'kind': 'data'}]}}, '一次要做多種請改用 batch'),
+                ({'kind': 'package_edit', 'payload': {'include': [{'path': '/etc/hostname', 'tier': 'main', 'kind': 'data'}]}}, '與其上一層之外'),
+                ({'kind': 'batch', 'payload': {'actions': [{'kind': 'package_build', 'payload': {}}]}}, '不能放進批次')):
+            st, d = post('/api/inbox', payload)
+            assert st == 400 and anchor_txt in (d.get('error') or ''), (st, d)
+        # (2) package_edit 全鏈：建立 → dry-run（不寫檔）→ 壞 token 409 → apply
+        pkg = root / 'submission/package.yaml'
+        target = 'analysis/figures/vals.tsv'
+        before = pkg.read_text(encoding='utf-8') if pkg.is_file() else None
+        n_dec_before = (root / 'decisions.yaml').read_text(encoding='utf-8').count('- id: D-')
+        st, d = post('/api/inbox', {'kind': 'package_edit',
+                                    'payload': {'exclude': [target], 'reason': '回歸測試：移出投稿包'}})
+        assert st == 201 and d['ok'], d
+        iid = d['id']
+        st, d = post('/api/actions/dry-run', {'id': iid})
+        assert st == 200 and d['ok'] and d.get('token'), d
+        now = pkg.read_text(encoding='utf-8') if pkg.is_file() else None
+        assert now == before, 'dry-run 不得寫 package.yaml'
+        token = d['token']
+        st, d = post('/api/actions/apply', {'id': iid, 'token': 'deadbeefdeadbeefdeadbeef'})
+        assert st == 409, (st, d)
+        st, d = post('/api/actions/apply', {'id': iid, 'token': token})
+        assert st == 200 and d['ok'] and d.get('decision'), d
+        after = pkg.read_text(encoding='utf-8')
+        assert after != before and target in after, after
+        assert (root / 'decisions.yaml').read_text(encoding='utf-8').count('- id: D-') == n_dec_before + 1
+        # (3) package_build：先把擋打包的缺檔移掉，再打包（含 zip）
+        if blocking:
+            st, d = post('/api/inbox', {'kind': 'package_edit',
+                                        'payload': {'exclude': blocking, 'reason': '回歸測試：移除缺檔'}})
+            assert st == 201, d
+            bid = d['id']
+            st, d = post('/api/actions/dry-run', {'id': bid})
+            assert st == 200 and d['ok'], d
+            st, d = post('/api/actions/apply', {'id': bid, 'token': d['token']})
+            assert st == 200 and d['ok'], d
+        st, d = post('/api/inbox', {'kind': 'package_build', 'payload': {}, 'reason': '回歸測試：打包'})
+        assert st == 201 and d['ok'], d
+        bld = d['id']
+        st, d = post('/api/actions/dry-run', {'id': bld})
+        assert st == 200 and d['ok'] and d.get('token'), d
+        summary = d['summary']
+        for anchor_txt in ('入口（各帶）', '要複製', '輸出：'):
+            assert anchor_txt in summary, summary[:400]
+        st, d = post('/api/actions/apply', {'id': bld, 'token': d['token']})
+        assert st == 200 and d['ok'] and d.get('decision'), d
+        outs = sorted((root / 'submission').glob('package_*'))
+        outs = [x for x in outs if x.is_dir()]
+        assert outs, list((root / 'submission').iterdir())
+        assert (outs[-1] / 'MANIFEST.tsv').is_file(), list(outs[-1].iterdir())
+        assert list((root / 'submission').glob('*.zip')), '預設要壓 zip'
+    finally:
+        srv.shutdown()
+    print('  規格 13 server POST 全鏈 ok')
+
+
 def test_existing_suites() -> None:
     """set_tier 相關的既有回歸整份跑一次，確認 ssot_actions_common 的改動沒壞舊動作。"""
     for name in ('run_v0200_regressions.py', 'run_v0190_regressions.py', 'run_v0180_regressions.py'):
@@ -719,7 +943,8 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix='v0230-'))
     try:
         for fn in (test_entries, test_bands, test_free_text, test_runs, test_external_and_kinds,
-                   test_dedup, test_build, test_edit, test_existing, test_tab):
+                   test_dedup, test_build, test_edit, test_existing, test_tab,
+                   test_stats_match_package, test_action_kinds, test_server_chain):
             fn(tmp)
         test_existing_suites()
     finally:

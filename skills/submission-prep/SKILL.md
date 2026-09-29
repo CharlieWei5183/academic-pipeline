@@ -43,6 +43,26 @@ metadata:
    - **依賴掃描**：Python import 掃描產 requirements.txt（已安裝套件附版本）或 R 套件清單；掃不到即列待辦。
    - **隨機種子檢查**：scripts 中未見顯式種子＝warning，向使用者確認是否影響重現。
    - **`data/` 不自動隨包**——是否附原始資料由使用者依期刊政策、隱私與授權決定；`derived/` 比照辦理。
+3b. **投稿檔案分頁與打包（0.23.0）**：上一條的重現性包給的是「怎麼重跑」，這一條給的是「要上傳哪些檔」。`PROGRESS.html` 的第四個分頁「投稿檔案」（`#submission`）把投稿要上傳的檔案整份列出來，看過沒問題就在頁面上按鈕打包。
+
+   - **清單是衍生的，不是手寫的**：入口＝`analysis/figures/manifest.json` 裡 role 屬 main／extended／supplementary 的圖表 ＋ `analysis/results.json` 的現行結果鍵，從入口往回追 `script` 欄、run 的 `scripts/`／`report.md`／`status.json`／`input_snapshot/`，以及快照 hash 表逐 cell 指到的來源檔。規則只有一份：`scripts/submission_package_common.py` 的 `derive()`。
+   - **`submission/package.yaml` 只記手動差量**：`include`（手動加入）與 `exclude`（移除），不存整份清單，每次都重算再套。移除是可逆的——被移除的項目在分頁上仍列出、標「已移除」，還原就回到衍生規則算出來的樣子。這個檔**不在 `rerun_all` 的 fingerprint 雜湊範圍**，改它不會讓 validation 或 results 過期。
+   - **兩支 CLI**（分頁上的按鈕就是代跑這兩支，旁邊都寫著等效命令）：
+
+     ```bash
+     # 看清單（不寫任何檔）；確認後改 --apply 才真的複製
+     python3 <skill路徑>/scripts/build_submission_package.py <root> --dry-run
+     python3 <skill路徑>/scripts/build_submission_package.py <root> --apply [--no-zip]
+
+     # 清單增刪：一次一個動作，--exclude 可重複；一次 apply 記一筆 D#
+     python3 <skill路徑>/scripts/package_edit.py <root> --exclude <路徑> --reason <理由> --dry-run
+     python3 <skill路徑>/scripts/package_edit.py <root> --include <路徑> --tier <帶> --kind <分類> --dry-run
+     python3 <skill路徑>/scripts/package_edit.py <root> --restore <路徑或入口 id> --dry-run
+     ```
+
+   - **打包產出**：`submission/package_<日期>/`，含逐檔 sha256 的 `MANIFEST.tsv`、README、`results_subset.json` 與依賴清單，預設壓成 zip（`--no-zip` 可關）。**有納入中的缺檔一律拒絕打包**（exit 1）：先移除那些節點，或補上替代檔。未見顯式隨機種子的腳本照舊只記 warning。
+   - **與步驟 3 的 `build_repro_package.py` 差在哪**：那支是**重現性包**，目的是讓人重跑你的分析，所以 `data/` 與 `derived/` **不自動隨包**——附不附原始資料由使用者依期刊政策、隱私與授權逐次決定。這一支是**投稿上傳包**，目的是把期刊要的檔案一次交齊，所以**預設帶資料**：清單是從結果往回追出來的，資料檔本來就在裡面。兩者的判斷位置不同——那邊是「打包時才問」，這邊是「使用者已經在網頁上逐項看過了」，不想附的在分頁上移除掉就好，移除還是可逆的。所以這一支不重複問一次，也不把 `data/` 特別挑出來。兩支並存、各自產出，互不取代。
+
 4. **presubmission integrity gate**：題目摘要與作者／聲明定稿後回呼 integrity-check `presubmission`。必須有真實 evidence；外部相似度項只能 external/manual verified。執行：
 
    ```bash
