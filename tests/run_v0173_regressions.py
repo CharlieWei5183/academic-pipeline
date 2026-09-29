@@ -246,7 +246,8 @@ def test_frontend(tmp: Path) -> None:
                    "if(ui.extra){var ex=ui.extra()||{};", '預覽後再填也可以'):
         assert anchor in html, anchor
     assert "if(stagedBatchId)stagedInvalidate();renderStaged();});}" not in html, '理由欄不得再作廢批次'
-    assert html.count('function stagedInvalidate(') == 1 and html.count('function stagedPreview(') == 1 and html.count("'/api/inbox'") == 3
+    # 0.23.0：投稿檔案分頁的打包也送一筆 package_build 到 /api/inbox，字面數由 3 變 4
+    assert html.count('function stagedInvalidate(') == 1 and html.count('function stagedPreview(') == 1 and html.count("'/api/inbox'") == 4
     js = _js_of(html)
     node = shutil.which('node')
     if not node:

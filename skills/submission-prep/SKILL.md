@@ -43,7 +43,7 @@ metadata:
    - **依賴掃描**：Python import 掃描產 requirements.txt（已安裝套件附版本）或 R 套件清單；掃不到即列待辦。
    - **隨機種子檢查**：scripts 中未見顯式種子＝warning，向使用者確認是否影響重現。
    - **`data/` 不自動隨包**——是否附原始資料由使用者依期刊政策、隱私與授權決定；`derived/` 比照辦理。
-3b. **投稿檔案分頁與打包（0.23.0）**：上一條的重現性包給的是「怎麼重跑」，這一條給的是「要上傳哪些檔」。`PROGRESS.html` 的第四個分頁「投稿檔案」（`#submission`）把投稿要上傳的檔案整份列出來，看過沒問題就在頁面上按鈕打包。
+3b. **投稿檔案分頁與打包（0.23.0）**：上一條的重現性包給的是「怎麼重跑」，這一條給的是「要上傳哪些檔」。`PROGRESS.html` 的第四個分頁「投稿檔案」（`#submission`）把投稿要上傳的檔案整份列出來——依帶分三段、每個入口一張列卡，卡內四格「資料｜程式碼｜結果｜圖表」，看過沒問題就在頁面上按鈕打包。
 
    - **清單是衍生的，不是手寫的**：入口＝`analysis/figures/manifest.json` 裡 role 屬 main／extended／supplementary 的圖表 ＋ `analysis/results.json` 的現行結果鍵，從入口往回追 `script` 欄、run 的 `scripts/`／`report.md`／`status.json`／`input_snapshot/`，以及快照 hash 表逐 cell 指到的來源檔。規則只有一份：`scripts/submission_package_common.py` 的 `derive()`。
    - **`submission/package.yaml` 只記手動差量**：`include`（手動加入）與 `exclude`（移除），不存整份清單，每次都重算再套。移除是可逆的——被移除的項目在分頁上仍列出、標「已移除」，還原就回到衍生規則算出來的樣子。這個檔**不在 `rerun_all` 的 fingerprint 雜湊範圍**，改它不會讓 validation 或 results 過期。

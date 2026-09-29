@@ -153,7 +153,8 @@ def test_frontend(tmp: Path) -> None:
                    "kind:'batch',payload:{actions:actions,reason:stagedReason()}", "if(formOnDrop){openActionForm(cand.kind,cand.payload,cand.options);return;}",
                    '使用者於進度頁面批次拖放（IN-xxx）', 'id="act-stage"', 'id="act-submit"', '單獨送出並預覽</button>', '#toast a.toast-undo{', 'window.__apFormOnDrop='):
         assert anchor in html, anchor
-    assert html.count('function toast(') == 1 and html.count('function stageAdd(') == 1 and html.count("'/api/inbox'") == 3
+    # 0.23.0：投稿檔案分頁的打包也送一筆 package_build 到 /api/inbox，字面數由 3 變 4
+    assert html.count('function toast(') == 1 and html.count('function stageAdd(') == 1 and html.count("'/api/inbox'") == 4
     assert 'http://' not in html
     js = _js_of(html)
     node = shutil.which('node')
