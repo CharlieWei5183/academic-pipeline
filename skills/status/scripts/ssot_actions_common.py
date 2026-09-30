@@ -26,7 +26,12 @@ except ImportError:
     sys.exit(2)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+import progress_paths as PL  # noqa: E402  進度頁面與備份的落點（0.24.0）
+
 PLUGIN_ROOT = SCRIPT_DIR.parents[2]
+LAYOUT_VERSION = PL.VERSION   # 0.24.0：progress/ 與 backups/ 版面
 SCRIPTS = {
     'seal_artifact': PLUGIN_ROOT / 'skills/study-design/scripts/seal_artifact.py',
     'check_plan': PLUGIN_ROOT / 'skills/study-design/scripts/check_plan.py',
@@ -40,7 +45,10 @@ SCRIPTS = {
 }
 # stale guard 與 server token 用的 SSOT 檔（相對 root）；缺檔以空字串計。
 TOKEN_FILES = ('project.yaml', 'decisions.yaml', 'analysis/results.json', 'analysis/validation.yaml',
-               'analysis/plans/index.yaml', 'analysis/figures/manifest.json', 'analysis/extended-data.yaml', 'PROGRESS.inbox.yaml')   # 0.20.0 加 extended-data.yaml
+               'analysis/plans/index.yaml', 'analysis/figures/manifest.json', 'analysis/extended-data.yaml')   # 0.20.0 加 extended-data.yaml
+# 收件匣另外算：0.24.0 起落點是 progress/PROGRESS.inbox.yaml，舊版面的專案在遷移前還在根目錄，
+# 所以 token 一律用 locate() 找到的那一份（雜湊的 key 固定寫新落點，遷移前後 token 才不會無故變動）。
+TOKEN_INBOX_KEY = PL.NEW['inbox']
 CJK_NUM = '零一二三四五六七八九十'
 # 批次模式（run_batch.py 0.17.0）：由 run_batch.py 對每個子步驟設這個環境變數＝'1'——子步驟 --apply 時跳過自己的工作區 dry-run（整串已在
 # run_batch 的同一個工作區跑過）、step_finish 不重畫（run_batch 最後重畫一次）；--daily-log 由 run_batch 不傳給子步驟、只在最後追記一段。
@@ -101,6 +109,8 @@ def ssot_token(root: Path, extra: str = '') -> str:
     h = hashlib.sha256()
     for rel in TOKEN_FILES:
         h.update(rel.encode('utf-8') + b'\0' + sha256_file(root / rel).encode('utf-8') + b'\n')
+    h.update(TOKEN_INBOX_KEY.encode('utf-8') + b'\0'
+             + sha256_file(PL.locate(root, 'inbox')).encode('utf-8') + b'\n')
     h.update(extra.encode('utf-8'))
     return h.hexdigest()[:24]
 
@@ -157,12 +167,18 @@ def count_prefixed(output: str, prefix: str) -> int:
 # ---------- 備份與還原 ----------
 
 class Backups:
-    """每個要改的檔先複製成 `<檔>.pre_<tag>_backup`（撞名時加 _2、_3）；失敗時 restore() 逐檔還原並回報。
+    """每個要改的檔先複製成 `<root>/backups/<相對路徑>.pre_<tag>_backup`（撞名時加 _2、_3）；
+    失敗時 restore() 逐檔還原並回報。
+
+    0.24.0 起備份不再放在原檔旁邊，改集中到 `<root>/backups/`，目錄結構照原檔相對 root 的路徑鋪開
+    （例如 `analysis/figures/manifest.json` → `backups/analysis/figures/manifest.json.pre_<tag>_backup`）。
+    `root` 省略、或原檔不在 root 之下（例如專案根之外的 daily log）時維持 0.23.1 的舊行為：放原檔旁邊。
 
     新建的檔（原本不存在）記在 created，還原時刪除。"""
 
-    def __init__(self, tag: str) -> None:
+    def __init__(self, tag: str, root: Path | str | None = None) -> None:
         self.tag = re.sub(r'[^A-Za-z0-9_]+', '_', tag).strip('_').lower()
+        self.root = Path(root) if root is not None else None
         self.saved: list[tuple[Path, Path]] = []
         self.created: list[Path] = []
         self._seen: set[Path] = set()
@@ -175,11 +191,15 @@ class Backups:
         if not path.exists():
             self.created.append(path)
             return None
-        dest = path.with_name(f'{path.name}.pre_{self.tag}_backup')
-        n = 1
-        while dest.exists():
-            n += 1
-            dest = path.with_name(f'{path.name}.pre_{self.tag}_backup_{n}')
+        if self.root is None:
+            dest = path.with_name(f'{path.name}.pre_{self.tag}_backup')
+            n = 1
+            while dest.exists():
+                n += 1
+                dest = path.with_name(f'{path.name}.pre_{self.tag}_backup_{n}')
+        else:
+            dest = PL.backup_dest(self.root, path, self.tag)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, dest)
         self.saved.append((path, dest))
         return dest
@@ -342,7 +362,7 @@ def append_decision(root: Path, entry: dict[str, Any], backups: Backups | None =
 # ---------- 收件匣 ----------
 
 def inbox_items(root: Path) -> list[dict[str, Any]]:
-    data = load_yaml(root / 'PROGRESS.inbox.yaml')
+    data = load_yaml(PL.locate(root, 'inbox'))
     if not isinstance(data, dict):
         return []
     return [it for it in (data.get('items') or []) if isinstance(it, dict)]
@@ -384,6 +404,11 @@ def set_inbox_reason(root: Path, item_id: str, reason: str) -> str:
 BATCH_NO_RENDER_NOTE = f'批次模式（{BATCH_STEP_ENV}=1）：中間步驟不重畫，由 run_batch.py 最後重畫一次'
 
 
+def RENDER_OUTPUTS(root: Path) -> tuple[Path, ...]:
+    """兩支 renderer 的產出（0.24.0 起都在 progress/）：備份、before／after 一律用這個順序。"""
+    return (PL.path(root, 'html'), PL.path(root, 'ir'), PL.path(root, 'timeline'))
+
+
 def rerender(root: Path) -> list[str]:
     if batch_step():   # 0.17.0：批次的子步驟一律不重畫（包含不經 step_finish 的 set_figure_role.py）
         return [BATCH_NO_RENDER_NOTE]
@@ -416,11 +441,19 @@ def append_daily_log(path: Path, block: str) -> None:
 
 # 這些相對路徑會被鏈改到或被 checker 寫到 → 實體複製；其餘頂層項目一律 symlink 回原根（fingerprint 只跳過
 # 檔案層級的 symlink，目錄 symlink 會被 rglob 走進去，因此雜湊值與原根相同；dry-run 結束整個工作區刪除）。
-COPY_FILES = ('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'PROGRESS.inbox.yaml', 'PROGRESS.ir.json',
-              'PROGRESS.html', 'DECISIONS-TIMELINE.md', 'analysis/results.json', 'analysis/validation.yaml',
-              'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml',   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
-              'submission/package.yaml')   # 0.22.0：package_edit 改的檔，同理不得寫穿 symlink
+COPY_FILES = (('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'analysis/results.json', 'analysis/validation.yaml',
+               'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml',   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
+               'submission/package.yaml')   # 0.22.0：package_edit 改的檔，同理不得寫穿 symlink
+              # 0.24.0：進度頁面的六個檔，新落點與舊落點都列進來。舊版面的專案在遷移前檔案還在根目錄，
+              # 若只列新落點，根目錄那幾個檔會被當成「其他頂層項目」symlink 回原根——工作區裡的
+              # ensure_progress_layout() 接著 os.replace 搬的就是那個 symlink，之後往
+              # progress/ 寫就會寫穿回原專案。兩邊都實體複製，dry-run 才真的碰不到原根。
+              + tuple(PL.NEW[k] for k in PL.ORDER) + tuple(PL.LEGACY[k] for k in PL.ORDER))
 COPY_DIRS = ('analysis/plans', 'evaluations', 'reviews')
+# 0.24.0：這幾個頂層項目在工作區裡一律不 symlink、也不複製——`backups/` 動輒幾十 MB 且 dry-run 的備份
+# 不得寫進原專案（symlink 會寫穿），`Backups` 自己會在工作區裡把它建出來；`progress/` 由 COPY_FILES
+# 逐檔複製必要的那幾個，不整包帶（`progress/logs/` 的歷史 server log 每次 dry-run 都複製沒有意義）。
+SKIP_TOP = (PL.BACKUPS_DIR, PL.DIR)
 # 這幾層底下沒被複製的項目要逐一 symlink（父層因為 COPY_FILES 有子項而變成實體目錄）
 RELINK_DIRS = ('analysis', 'analysis/figures', 'submission')
 # 0.23.1：工作區標記檔，內容＝原本的專案根絕對路徑。工作區的上一層是 /tmp，凡是拿「專案根的上一層」
@@ -453,7 +486,7 @@ def make_workspace(root: Path) -> Path:
     """建 dry-run 工作區：要改的檔實體複製、其餘 symlink。回傳工作區路徑（呼叫端負責刪除）。"""
     ws = Path(tempfile.mkdtemp(prefix='ssot-dryrun-'))
     root = root.resolve()
-    copied_top: set[str] = set()
+    copied_top: set[str] = set(SKIP_TOP)
     for rel in COPY_FILES + COPY_DIRS:
         copied_top.add(rel.split('/')[0])
     for child in sorted(root.iterdir()):
@@ -1331,8 +1364,11 @@ class Chain:
 
     def __init__(self, root: Path, action: str, tag: str, log_rel: str, args: dict[str, Any], did: str, date: str, dry: bool) -> None:
         self.root = root.resolve()
+        # 0.24.0：動作鏈一開始就把舊版面搬成 progress/ 版面。apply 時上游已經做過（no-op）；
+        # dry-run 時 root 是暫存工作區，遷移就發生在工作區裡，原專案不受影響。
+        self.layout_notes = PL.ensure_progress_layout(self.root)
         self.did, self.date, self.dry = did, date, dry
-        self.backups = Backups(tag)
+        self.backups = Backups(tag, self.root)
         self.log = RunLog(self.root, log_rel, action, args)
         self.log.doc['dry_run'] = dry
         self.log.doc['decision_id'] = did
@@ -1561,7 +1597,7 @@ def step_decision(ch: Chain, entry: dict[str, Any]) -> int:
 
 def step_finish(ch: Chain, inbox_id: str, inbox_note: str, daily_log: str, daily_block_fn) -> None:
     if inbox_id:
-        inbox_path = ch.root / 'PROGRESS.inbox.yaml'
+        inbox_path = PL.path(ch.root, 'inbox')
         ch.before(inbox_path)
         ch.backup(inbox_path)
         resolve_inbox(ch.root, inbox_id, ch.did, inbox_note)
@@ -1570,13 +1606,13 @@ def step_finish(ch: Chain, inbox_id: str, inbox_note: str, daily_log: str, daily
     if batch_step():
         ch.note(BATCH_NO_RENDER_NOTE)
     else:
-        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-            ch.backup(ch.root / name)
-            ch.before(ch.root / name)
+        for pth in RENDER_OUTPUTS(ch.root):
+            ch.backup(pth)
+            ch.before(pth)
         for n in rerender(ch.root):
             ch.note(n)
-        for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-            ch.after(ch.root / name)
+        for pth in RENDER_OUTPUTS(ch.root):
+            ch.after(pth)
     ch.summary['files'] = sorted({f for s in ch.log.doc['steps'] for f in s['files']})
     ch.summary['backups'] = ch.backups.listing(ch.root)
     if daily_log and not ch.dry:
@@ -1616,6 +1652,11 @@ def check_inbox_pending(root: Path, inbox_id: str) -> dict[str, Any] | None:
 
 def action_main(name: str, version: str, args, root: Path, check_preconditions, token_extra: str, run_chain, print_summary) -> int:
     """dry-run／apply 的共同流程：前置條件 → token → 工作區 dry-run →（apply）核對 token → 對 root 執行。"""
+    # 0.24.0：apply 前先把舊版面搬成 progress/ 版面，之後的 token 與前置條件都以新落點為準；
+    # --dry-run 不動原根（工作區裡由 Chain 自己遷移）。
+    if not args.dry_run:
+        for note in PL.ensure_progress_layout(root):
+            print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
         ctx = check_preconditions(root, args)
     except ChainError as exc:

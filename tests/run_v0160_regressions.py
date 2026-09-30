@@ -377,8 +377,8 @@ def test_apply_reassign_full_chain(tmp: Path) -> None:
     assert '    - id: AQ2          # 前 SQ1（D-003 降為附錄，依收件匣 IN-001 裁定；AQ1 不動、sub_questions 保留 SQ1 空號不重編）' in text, text
     assert '  # 2026-09-15 D-003：SQ1 已降為附錄問題 AQ2；主問題現為 SQ2' in text
     proj = plan_common.load_yaml(root / 'project.yaml')
-    old = plan_common.load_yaml(root / 'project.yaml.pre_sq1_to_aq2_backup')
-    assert old == plan_common.load_yaml(root / '_base/../apply/project.yaml.pre_sq1_to_aq2_backup') if False else True
+    old = plan_common.load_yaml(root / 'backups/project.yaml.pre_sq1_to_aq2_backup')
+    assert old == plan_common.load_yaml(root / 'backups/_base/../apply/project.yaml.pre_sq1_to_aq2_backup') if False else True
     sq_ids = [x['id'] for x in proj['goals']['sub_questions']]
     aq = proj['goals']['appendix_questions']
     assert sq_ids == ['SQ2'] and [x['id'] for x in aq] == ['AQ1', 'AQ2']
@@ -426,7 +426,7 @@ def test_apply_reassign_full_chain(tmp: Path) -> None:
             assert b['plan_id'] == 'AQ2-v1' and a['plan_id'] == 'SQ1-v1'
             a.pop('plan_id'), b.pop('plan_id')
         assert a == b, k
-    assert (root / 'analysis/results.json').stat().st_size == (root / 'analysis/results.json.pre_sq1_to_aq2_backup').stat().st_size
+    assert (root / 'analysis/results.json').stat().st_size == (root / 'backups/analysis/results.json.pre_sq1_to_aq2_backup').stat().st_size
     # 4 validation.yaml：V1 改掛、reaffirmed 標記、頂層註解、fingerprint
     val = plan_common.load_yaml(root / 'analysis/validation.yaml')
     vtext = (root / 'analysis/validation.yaml').read_text(encoding='utf-8')
@@ -478,21 +478,21 @@ def test_apply_reassign_full_chain(tmp: Path) -> None:
     assert dtext.startswith(DECISIONS) and '    decision: |-\n      (1) project.yaml' in dtext
     assert len(dtext) - len(DECISIONS) < 3500, len(dtext) - len(DECISIONS)
     # 9 收件匣、run log、重畫、daily log
-    inbox = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']
+    inbox = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']
     assert inbox[0]['status'] == 'done' and inbox[0]['resolved_by'] == 'D-003' and inbox[0]['payload'] == {'from': 'SQ1', 'to': '', 'primary_model': ''}
     log = json.loads((root / 'reviews/reassign-SQ1-AQ2-2026-09-15.json').read_text(encoding='utf-8'))
     assert log['result'] == 'ok' and log['dry_run'] is False and [s['step'] for s in log['steps']] == list(range(1, 10))
     assert all(s['status'] == 'ok' for s in log['steps']) and log['decision_id'] == 'D-003'
     assert log['steps'][0]['files']['project.yaml']['before'] and log['steps'][0]['files']['project.yaml']['after'] != log['steps'][0]['files']['project.yaml']['before']
-    assert set(log['backups']) >= {'project.yaml.pre_sq1_to_aq2_backup', 'analysis/plans/index.yaml.pre_sq1_to_aq2_backup', 'analysis/results.json.pre_sq1_to_aq2_backup',
-                                   'analysis/validation.yaml.pre_sq1_to_aq2_backup', 'evaluations/goals-snapshot.json.pre_sq1_to_aq2_backup', 'GLOSSARY.md.pre_sq1_to_aq2_backup',
-                                   'decisions.yaml.pre_sq1_to_aq2_backup', 'PROGRESS.inbox.yaml.pre_sq1_to_aq2_backup'}
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    assert set(log['backups']) >= {'backups/project.yaml.pre_sq1_to_aq2_backup', 'backups/analysis/plans/index.yaml.pre_sq1_to_aq2_backup', 'backups/analysis/results.json.pre_sq1_to_aq2_backup',
+                                   'backups/analysis/validation.yaml.pre_sq1_to_aq2_backup', 'backups/evaluations/goals-snapshot.json.pre_sq1_to_aq2_backup', 'backups/GLOSSARY.md.pre_sq1_to_aq2_backup',
+                                   'backups/decisions.yaml.pre_sq1_to_aq2_backup', 'backups/progress/PROGRESS.inbox.yaml.pre_sq1_to_aq2_backup'}   # 0.24.0：收件匣在 progress/ 底下
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert ir['graph']['question_aliases'].get('SQ1') == 'AQ2' and 'q:AQ2' in {n['id'] for n in ir['graph']['nodes']}
-    assert (root / 'DECISIONS-TIMELINE.md').is_file() and 'D-003' in (root / 'DECISIONS-TIMELINE.md').read_text(encoding='utf-8')
+    assert (root / 'progress/DECISIONS-TIMELINE.md').is_file() and 'D-003' in (root / 'progress/DECISIONS-TIMELINE.md').read_text(encoding='utf-8')
     dl = daily.read_text(encoding='utf-8')
     assert dl.startswith('# Daily Log 2026-09-15\n\n## 既有段落\n- 不得被覆寫\n') and f'## reassign_question.py {V}：SQ1 降為附錄問題 AQ2（D-003）' in dl
-    assert '- project.yaml\n' in dl and '- project.yaml.pre_sq1_to_aq2_backup' in dl
+    assert '- project.yaml\n' in dl and '- backups/project.yaml.pre_sq1_to_aq2_backup' in dl   # 0.24.0：備份落 backups/
     # checker 全過
     run('skills/study-design/scripts/check_plan.py', root, '--require-confirmed', '--results', 'analysis/results.json')
     out = run('skills/validate-results/scripts/check_validation.py', root)
@@ -552,8 +552,8 @@ def test_primary_model_and_role(tmp: Path) -> None:
     d = plan_common.load_yaml(root / 'decisions.yaml')['decisions'][-1]
     assert d['id'] == 'D-004' and d['stage'] == 'figure-design' and d['question'] == 'main' and d['checkpoint'] == '圖表 role 改定：F_a → supplementary、F_c → extended'
     assert d['links'][:3] == ['F_a', 'F_c', 'analysis/figures/manifest.json'] and 'D-002' in d['links']
-    assert (root / 'analysis/figures/manifest.json.pre_role_20260915_backup').read_text(encoding='utf-8') == before
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    assert (root / 'backups/analysis/figures/manifest.json.pre_role_20260915_backup').read_text(encoding='utf-8') == before
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     nodes = {n['id']: n for n in ir['graph']['nodes']}
     assert nodes['f:F_a']['band'] == 'supp' and nodes['f:F_c']['band'] == 'ext'
     out = run('skills/status/scripts/check_decisions.py', root / 'decisions.yaml', root / 'project.yaml')
@@ -615,9 +615,9 @@ def test_inbox_payload_and_check_inbox(tmp: Path) -> None:
     assert ps.validate_submission(root, {'kind': 'comment', 'target': 'q:SQ1', 'title': 't', 'body': 'b'})[0]['payload'] == {}
     assert ps.validate_submission(root, {'kind': 'bogus', 'title': 't', 'body': 'b'})[1].startswith('kind 須為 new_question／new_analysis／comment／reassign／')
     iid = ps.append_item(root, **item)
-    text = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
+    text = (root / 'progress/PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     assert f'  - id: "{iid}"' in text and '    payload: {"from": "SQ2", "primary_model": "M2", "to": "AQ3"}' in text and 'schema_version: 1' in text
-    data = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')
+    data = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')
     assert data['items'][-1]['payload'] == {'from': 'SQ2', 'to': 'AQ3', 'primary_model': 'M2'} and data['items'][0]['payload'] == {'from': 'SQ1', 'to': '', 'primary_model': ''}
     # check_inbox：建議命令、payload 檢查
     out = run('skills/status/scripts/check_inbox.py', root)
@@ -625,12 +625,12 @@ def test_inbox_payload_and_check_inbox(tmp: Path) -> None:
     assert f'可直接：python3 reassign_question.py {root} --from SQ2 --to AQ3 --primary-model M2 --inbox {iid} --dry-run' in out, out
     assert 'WARNING' not in out
     # 手寫一筆壞 payload → WARNING；--resolve 仍只改四行且 payload 不動
-    (root / 'PROGRESS.inbox.yaml').write_text(text + ps.format_item({'id': 'IN-003', 'at': 'x', 'kind': 'set_role', 'target': 'f:F_a', 'title': 't', 'body': 'b',
+    (root / 'progress/PROGRESS.inbox.yaml').write_text(text + ps.format_item({'id': 'IN-003', 'at': 'x', 'kind': 'set_role', 'target': 'f:F_a', 'title': 't', 'body': 'b',
                                                                       'author': '', 'payload': {'figure': 'F_a', 'role': 'nope'}, 'status': 'pending'}), encoding='utf-8')
     out = run('skills/status/scripts/check_inbox.py', root)
     assert 'WARNING IN-003: payload 不合法（F_a 的 role 須為 main／extended／supplementary 之一）' in out, out
     out = run('skills/status/scripts/check_inbox.py', root, '--resolve', iid, '--by', 'D-009', '--note', 'n')
-    data = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')
+    data = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')
     assert data['items'][1]['status'] == 'done' and data['items'][1]['payload'] == {'from': 'SQ2', 'to': 'AQ3', 'primary_model': 'M2'}
     # renderer：IR item 帶 payload、HTML 有面板與表單、file:// 說明
     out = run('skills/status/scripts/render_progress.py', root, '--dry-run', '--json', stdout_only=True)
@@ -702,16 +702,16 @@ def test_server_endpoints(tmp: Path) -> None:
         orig = p.read_text(encoding='utf-8')
         p.write_text(orig + '# touched\n', encoding='utf-8')
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': token})
-        assert st == 409 and 'SSOT 狀態已改變' in d['error'] and not (root / 'PROGRESS.actions.log').exists()
+        assert st == 409 and 'SSOT 狀態已改變' in d['error'] and not (root / 'progress/PROGRESS.actions.log').exists()
         p.write_text(orig, encoding='utf-8')
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': token})
         assert st == 200 and d['ok'] is True and d['decision'] == 'D-003' and d['run_log'] == 'reviews/set-figure-role-' + re.search(r'set-figure-role-(\d{4}-\d{2}-\d{2}\w*)\.json', d['run_log']).group(1) + '.json', d
         m = json.loads((root / 'analysis/figures/manifest.json').read_text(encoding='utf-8'))
         assert {f['id']: f.get('role') for f in m['figures']}['F_b'] == 'supplementary'
-        log = (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().split('\t')
+        log = (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().split('\t')
         assert log[1:] == ['IN-002', 'set_figure_role.py', 'ok', 'D-003'], log
         assert f'## set_figure_role.py {V}：圖表 role 改定（D-003）' in daily.read_text(encoding='utf-8')
-        assert plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'][1]['status'] == 'done'
+        assert plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'][1]['status'] == 'done'
         assert _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': token})[0] == 400   # 已結案
         # reassign 也能經 server 走完
         st, d = _post(port, '/api/actions/dry-run', {'id': 'IN-001'})
@@ -719,7 +719,7 @@ def test_server_endpoints(tmp: Path) -> None:
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-001', 'token': d['token']})
         assert st == 200 and d['ok'] and d['decision'] == 'D-004', d
         assert [x['id'] for x in plan_common.load_yaml(root / 'project.yaml')['goals']['appendix_questions']] == ['AQ1', 'AQ2']
-        assert (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').count('\n') == 2
+        assert (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').count('\n') == 2
         # Origin 非本機 → 403
         req = urllib.request.Request(f'http://127.0.0.1:{port}/api/actions/dry-run', data=b'{"id":"IN-001"}', method='POST')
         req.add_header('Content-Type', 'application/json')
@@ -746,7 +746,7 @@ def need(rel: str, *anchors: str) -> None:
 
 def test_docs_registered() -> None:
     need('CHANGELOG.md', '## 0.16.0', 'reassign_question.py', 'set_figure_role.py', '/api/actions/dry-run', '/api/actions/apply', '--allow-apply',
-         'PROGRESS.actions.log', 'run_v0160_regressions.py', 'ssot_actions_common.py')
+         'progress/PROGRESS.actions.log', 'run_v0160_regressions.py', 'ssot_actions_common.py')
     need('README.md', 'reassign_question.py', 'set_figure_role.py', '--allow-apply', 'run_v0160_regressions.py')
     need('skills/status/SKILL.md', 'reassign_question.py', 'set_figure_role.py', '--dry-run', '--allow-apply', '不得人工重做', '不得整本讀 decisions.yaml')
     need('tests/README.md', 'run_v0160_regressions.py')

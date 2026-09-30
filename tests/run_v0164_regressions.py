@@ -99,7 +99,7 @@ def test_new_item_same_plan(tmp: Path) -> None:
     if log is not None:
         assert log['args']['new_item'] == DEFAULT_K2 and log['args']['to_item'] == 'R3' and log['args']['mode'] == 'B', log['args']
     checkers(root)
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     n = {x['id']: x for x in ir['graph']['nodes']}
     agg = n['r:SQ1-v2#R3#secondary']   # 0.19.0 宣告粒度：k2 進 SQ1-v2#R3 的聚合節點（1 鍵 → label 即鍵名）；逐鍵節點 r:k2 不再建
     assert 'r:k2' not in n and agg['band'] == 'main' and agg['parent'] == 'p:SQ1-v2#R3' and agg['subtype'] == 'secondary_group' and agg['label'] == 'k2', agg
@@ -132,7 +132,7 @@ def test_new_item_cross_plan(tmp: Path) -> None:
     proj = plan_common.load_yaml(root / 'project.yaml')
     assert 'results:k2' in (proj['goals']['appendix_questions'][0].get('links') or []) or 'results:k2' not in json.dumps(proj['goals']['sub_questions'], ensure_ascii=False)
     checkers(root)
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     n = {x['id']: x for x in ir['graph']['nodes']}
     agg = n['r:AQ1-v2#R2#secondary']   # 0.19.0 聚合節點
     assert 'r:k2' not in n and agg['band'] == 'supp' and agg['parent'] == 'p:AQ1-v2#R2' and [k['key'] for k in agg['meta']['keys']] == ['k2'], agg
@@ -164,7 +164,7 @@ def test_payload_and_server(tmp: Path) -> None:
         assert st == 400 and '互斥' in d['error'], (st, d)
         st, d = _post(port, '/api/inbox', {'kind': 'move_result', 'payload': {'key': 'k2', 'to_plan': 'SQ1-v1', 'new_item': DEFAULT_K2}, 'reason': '降為補充結果'})
         assert st == 201 and d['ok'] and d['id'] == 'IN-002', (st, d)
-        items = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']
+        items = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']
         it = next(x for x in items if x['id'] == 'IN-002')
         assert it['kind'] == 'move_result' and it['payload'] == {'key': 'k2', 'to_plan': 'SQ1-v1', 'to_item': '', 'new_item': DEFAULT_K2} and it['target'] == 'r:k2', it
         assert it['title'] == '搬結果：k2 → SQ1-v1 新增子分析', it['title']
@@ -189,7 +189,7 @@ def test_payload_and_server(tmp: Path) -> None:
 def test_drag_band_candidates(tmp: Path) -> None:
     root = fixture(tmp, 'drag')
     run('skills/status/scripts/render_progress.py', root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="act-mr-dest-wrap"', 'id="act-mr-dest"', '放到哪裡（拖到區帶時選）', 'function mrFill(', 'function nextRid(', 'openActionForm(cand.kind,cand.payload,cand.options)',
                    '新增一個敏感性子分析（補充結果）', "'補充結果：'+key+' 由主要結果降為次要結果'", '升回本 plan 的 outputs（', '已在 Supplementary（附錄問題',
                    '沒有主問題的 active plan 可以收 ', '或拖到 Main／Supplementary 帶再從下拉選落點', '主要結果拖到 Supplementary 帶（或次要結果拖到 Main 帶）＝放開後從下拉選落點'):
@@ -204,7 +204,7 @@ def test_drag_band_candidates(tmp: Path) -> None:
     js_path.write_text(js, encoding='utf-8')
     proc = subprocess.run([node, '--check', str(js_path)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',
                                                'activePlanOf', 'listOrder', 'dragCandidate', 'isAgg', 'aggKeys',
                                                'bandSource', 'edInherited', 'qBand', 'resultOwnerOf', 'derivedBandOf', 'derivedBand', 'tierCand'))   # 0.19.0：聚合節點輔助函式；0.20.0：ED 歸屬
@@ -293,7 +293,7 @@ def test_headless_band_drop(tmp: Path) -> bool:
         st = json.loads(T3._wait(ws, T3._STATE_JS, lambda s: json.loads(s)['sum'] and not json.loads(s)['sum'].startswith('預覽中')))
         assert st['id'] == 'IN-002' and st['err'] == '' and st['apply'] is False, st
         assert 'k2（SQ1-v1 的主要結果）→ SQ1-v1 新增的 R3；B 型、次要結果（新增子分析 R3：「' + DEFAULT_K2 + '」）' in st['sum'] and re.search(r'^token: [0-9a-f]{24}$', st['sum'], re.M), st['sum']
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['payload'] == {'key': 'k2', 'to_plan': 'SQ1-v1', 'to_item': '', 'new_item': DEFAULT_K2} and 'headless 拖到區帶' in it['body'], it
         ws.eval("window.__oldPage=1;document.getElementById('act-dismiss').click();'ok'")
         T3._wait(ws, "!window.__oldPage && document.readyState==='complete' && !document.getElementById('inbox-new').disabled && document.getElementById('act-form').hidden", bool, timeout=60)

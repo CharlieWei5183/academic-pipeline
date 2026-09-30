@@ -298,7 +298,7 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
                 f'總位元組 {S.human_bytes(before["bytes"])} → {S.human_bytes(after["bytes"])}、'
                 f'缺檔（納入中）{before["missing"]} → {after["missing"]}\n'
                 f'(3) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}\n'
-                '(4) PROGRESS.html／PROGRESS.ir.json／DECISIONS-TIMELINE.md 重畫；清單本身只記差量，'
+                '(4) progress/PROGRESS.html／progress/PROGRESS.ir.json／progress/DECISIONS-TIMELINE.md 重畫；清單本身只記差量，'
                 '每次由 submission_package_common.derive() 重算再套')
     body = str((ctx['inbox'] or {}).get('body') or '').strip()
     reasons = []
@@ -378,7 +378,8 @@ def daily_log_block(args: argparse.Namespace, ctx: dict[str, Any], did: str, fil
 
 def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: str, date: str, dry: bool) -> dict[str, Any]:
     root = root.resolve()
-    backups = C.Backups(f'pkgedit_{date.replace("-", "")}')
+    C.PL.ensure_progress_layout(root)   # 0.24.0：工作區與原根都先搬成 progress/ 版面（idempotent）
+    backups = C.Backups(f'pkgedit_{date.replace("-", "")}', root)
     log_rel = C.unique_report_path(root, 'package-edit', date, '.json')
     log = C.RunLog(root, log_rel, 'package_edit', {'op': ctx['op']['op'], 'target': ctx['op']['target'],
                                                    'inbox': args.inbox or '', 'version': VERSION})
@@ -425,7 +426,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
         e = log.step(3, '收件匣結案')
         if args.inbox:
-            inbox_path = root / 'PROGRESS.inbox.yaml'
+            inbox_path = C.PL.path(root, 'inbox')
             log.file_before(e, inbox_path)
             backups.backup(inbox_path)
             C.resolve_inbox(root, args.inbox, did, f'package_edit.py {VERSION}：{op_sentence(ctx)}；{did}')
@@ -439,12 +440,12 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         if C.batch_step():
             e['notes'].append(C.BATCH_NO_RENDER_NOTE)
         else:
-            for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-                backups.backup(root / name)
-                log.file_before(e, root / name)
+            for pth in C.RENDER_OUTPUTS(root):
+                backups.backup(pth)
+                log.file_before(e, pth)
             e['notes'].extend(C.rerender(root))
-            for name in ('PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'):
-                log.file_after(e, root / name)
+            for pth in C.RENDER_OUTPUTS(root):
+                log.file_after(e, pth)
         summary['files'] = sorted({f for s in log.doc['steps'] for f in s['files']})
         summary['backups'] = backups.listing(root)
         if args.daily_log and not dry:
@@ -531,6 +532,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER 專案根目錄不存在: {args.root}')
         return 2
     root = root.resolve()
+    # 0.24.0：apply 才真的動檔案，所以只在這裡把舊版面（檔案堆在專案根）搬成 progress/ 版面；
+    # --dry-run 不動原根，遷移改在暫存工作區裡發生（見 make_workspace 與 progress_paths.py）。
+    if not args.dry_run:
+        for note in C.PL.ensure_progress_layout(root):
+            print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
         ctx = check_preconditions(root, args)
     except ChainError as exc:

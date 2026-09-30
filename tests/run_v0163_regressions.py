@@ -53,7 +53,7 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def inbox_status(root: Path) -> dict[str, tuple[str, str]]:
-    return {it['id']: (it['status'], it.get('note') or '') for it in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']}
+    return {it['id']: (it['status'], it.get('note') or '') for it in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']}
 
 
 # ---------- /api/inbox/dismiss ----------
@@ -73,9 +73,9 @@ def test_dismiss_endpoint(tmp: Path) -> None:
         assert st == 200 and d == {**d, 'ok': True, 'id': 'IN-002', 'status': 'dismissed', 'note': DEFAULT_NOTE} and 'IN-002 → dismissed' in d['summary'], (st, d)
         after = tree_hashes(root)
         changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
-        assert changed <= {'PROGRESS.inbox.yaml', 'PROGRESS.ir.json', 'PROGRESS.html', 'DECISIONS-TIMELINE.md'}, changed
+        assert changed <= {'progress/PROGRESS.inbox.yaml', 'progress/PROGRESS.ir.json', 'progress/PROGRESS.html', 'progress/DECISIONS-TIMELINE.md'}, changed
         assert inbox_status(root)['IN-002'] == ('dismissed', DEFAULT_NOTE)
-        ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+        ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
         assert {it['id']: it['status'] for it in ir['inbox']['items']}['IN-002'] == 'dismissed', 'dismiss 後要重畫進度產物'
         assert _post(port, '/api/ping')[1]['inbox_pending'] == 2
         # 自訂 note
@@ -138,10 +138,10 @@ def test_dismiss_endpoint(tmp: Path) -> None:
 def test_dialog_anchors(tmp: Path) -> None:
     root = fixture(tmp, 'anchors')
     run('skills/status/scripts/render_progress.py', root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="act-preview-box" hidden', '<pre id="act-summary" class="act-summary">', 'id="act-dismiss"', 'id="act-keep"', 'id="act-apply" disabled',
                    'id="act-submit-row"', 'id="act-submit"', '送出並預覽</button>', 'id="act-item-id"', 'pre.act-summary{', 'pre.act-summary:empty{display:none}',
-                   '按「送出並預覽」先在 PROGRESS.inbox.yaml 加一筆'):
+                   '按「送出並預覽」先在 progress/PROGRESS.inbox.yaml 加一筆'):
         assert anchor in html, anchor
     assert '#actions-panel pre.act-summary' not in html, '摘要樣式要面板與對話框共用'
     assert '送入收件匣</button>' not in html
@@ -343,14 +343,14 @@ def test_headless_drop_preview(tmp: Path) -> bool:
         assert st['id'] == 'IN-002' and st['box'] is False and st['row'] is True and st['reason'] is True and st['err'] == '', st
         assert 'k2（SQ1-v1 的主要結果）→ SQ2-v1 outputs' in st['sum'] and re.search(r'^token: [0-9a-f]{24}$', st['sum'], re.M), st['sum']
         assert st['apply'] is False and st['keep'] is False and st['dis'] is False, st
-        assert inbox_status(root)['IN-002'][0] == 'pending' and 'headless 放開預覽' in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'][1]['body']
+        assert inbox_status(root)['IN-002'][0] == 'pending' and 'headless 放開預覽' in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'][1]['body']
         before = tree_hashes(root)
         ws.eval("window.__oldPage=1;document.getElementById('act-dismiss').click();'ok'")
         # 撤回成功 → 對話框關、頁面自己 reload：等新頁面（沒有 __oldPage 記號）回來
         _wait(ws, "!window.__oldPage && document.readyState==='complete' && !document.getElementById('inbox-new').disabled && document.getElementById('act-form').hidden", bool, timeout=60)
         assert inbox_status(root)['IN-002'] == ('dismissed', DEFAULT_NOTE)
         after = tree_hashes(root)
-        assert {k for k in set(before) | set(after) if before.get(k) != after.get(k)} <= {'PROGRESS.inbox.yaml', 'PROGRESS.ir.json', 'PROGRESS.html', 'DECISIONS-TIMELINE.md'}
+        assert {k for k in set(before) | set(after) if before.get(k) != after.get(k)} <= {'progress/PROGRESS.inbox.yaml', 'progress/PROGRESS.ir.json', 'progress/PROGRESS.html', 'progress/DECISIONS-TIMELINE.md'}
         # (b) r:r2 拖到 p:AQ1-v1#R1（B 型）→ 摘要 → 外面改 SSOT → 套用 409 → 自動重跑預覽 → 再套用 → done
         d = json.loads(ws.eval(_drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1#R1')))   # 0.19.0：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵，走單筆流程）
         assert not d.get('missing') and d['formHidden'] is False and d['title'] == '搬結果：r2 → AQ1-v1 R1' and 'B 型' in d['item'], d
@@ -375,7 +375,7 @@ def test_headless_drop_preview(tmp: Path) -> bool:
         assert (root / 'analysis/plans/AQ1-v2.yaml').exists() and (root / 'analysis/plans/SQ1-v2.yaml').exists()
         d3 = decision(root, 'D-003')
         assert '收件匣 IN-003 結案' in d3['decision'] and '收件匣 IN-003 原文：「' in d3['reason'], d3
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-003', 'move_result.py', 'ok', 'D-003']], log
     finally:
         ws.close()

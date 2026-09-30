@@ -289,7 +289,7 @@ def test_bands(tmp: Path) -> None:
     assert entry(v2, 'cur_b')['tier'] == 'extended', entry(v2, 'cur_b')['tier']
     assert entry(v2, 'cur_a')['tier'] == 'main'
     # 注入 IR 節點（renderer 用自己建好的 IR）與自己建一次，結果相同
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     injected = S.bands_from_ir_nodes(ir['graph']['nodes'])
     assert injected == v2['key_bands'], '注入 IR 與自己 build_ir 的歸帶結果必須相同'
     assert S.derive(root, key_bands=injected)['stats'] == v2['stats']
@@ -512,7 +512,7 @@ def test_build(tmp: Path) -> None:
     assert 'MANIFEST.tsv' in d['decision'] and str(len(rows) - 1) in d['decision'], d['decision']
     assert 'submission-prep' in run('skills/status/scripts/check_decisions.py', root / 'decisions.yaml', root / 'project.yaml')
     assert 'build_submission_package.py' in log.read_text(encoding='utf-8')
-    assert any(p.name.startswith('decisions.yaml.pre_pkgbuild_') for p in root.iterdir()), '改 SSOT 前要備份'
+    assert any(p.name.startswith('decisions.yaml.pre_pkgbuild_') for p in (root / 'backups').iterdir()), '改 SSOT 前要備份（0.24.0 起落在 backups/）'
 
     # 第二次打包 → _2，永不覆寫
     run(BUILD, root, '--apply', '--no-zip')
@@ -1025,7 +1025,7 @@ def test_stats_match_package(tmp: Path) -> None:
     assert v['warnings'] == before, '重複呼叫 package_files() 追加了重複的 warning'
     assert len(v['warnings']) == len(set(v['warnings'])), v['warnings']
     # 分頁摘要列印的就是同一個數字
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8') if (root / 'PROGRESS.html').is_file() else ''
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8') if (root / 'progress/PROGRESS.html').is_file() else ''
     if html:
         assert f'<b>總計</b> {len(rows)} 個檔' in html, '摘要列的檔數與 package_files() 不一致'
     print('  規格 11 摘要列與打包同一套數字 ok')

@@ -25,7 +25,7 @@ schema 驗證 → 自含 `PROGRESS.html`）的測試：完整 fixture 的逐站�
 階段 4「自動觸發」追加 plugin 級 `hooks/hooks.json`（`SessionEnd` → `progress_hook.py`）與
 `skills/status/scripts/progress_hook.py` 的測試：hook 從 stdin JSON 取 `cwd`，在 cwd 本身或其一層
 子目錄找含 `project.yaml` 的專案根（跳過 `archive/`），依序 subprocess 兩支 renderer，只多寫
-`<root>/.progress-hook.log`；一律 exit 0、stdout 為空、renderer 失敗只進 log、
+`<root>/progress/logs/hook.log`（0.24.0；舊落點 `.progress-hook.log` 第一次跑時自動搬過去）；一律 exit 0、stdout 為空、renderer 失敗只進 log、
 `ACADEMIC_PIPELINE_PROGRESS_HOOK=off` 為逃生口。fixture 一律 `tempfile`，斷言讀磁碟實際產出，
 並逐檔 sha256 確認 SSOT 未被碰。
 """
@@ -49,8 +49,8 @@ RENDERER = PLUGIN / "skills/status/scripts/render_progress.py"
 HOOK = PLUGIN / "skills/status/scripts/progress_hook.py"
 HOOKS_JSON = PLUGIN / "hooks/hooks.json"
 HOOK_ENV = "ACADEMIC_PIPELINE_PROGRESS_HOOK"
-HOOK_LOG = ".progress-hook.log"
-HOOK_OUTPUTS = ("PROGRESS.ir.json", "PROGRESS.html", "DECISIONS-TIMELINE.md")
+HOOK_LOG = "progress/logs/hook.log"
+HOOK_OUTPUTS = ("progress/PROGRESS.ir.json", "progress/PROGRESS.html", "progress/DECISIONS-TIMELINE.md")
 STATS_RE = re.compile(r"共 (\d+) 筆記錄，其中 (\d+) 筆有完整四軸")
 LEGACY_FIELD = "prob" + "lem"  # 已停用的舊欄位名，拆開寫以免 git grep 誤中
 CLOSE_SENTENCE = "收尾必記一筆 D#"
@@ -536,13 +536,13 @@ def test_render_full_project() -> None:
         before = _sha_tree(root)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        assert "DECISIONS-TIMELINE.md 已寫入" in out and "結果: 完成" in out, out
+        assert "progress/DECISIONS-TIMELINE.md 已寫入" in out and "結果: 完成" in out, out
         after = _sha_tree(root)
         # 雜湊紅線：fixture 內所有檔案執行前後逐檔相同，只多出 DECISIONS-TIMELINE.md
-        assert set(after) - set(before) == {"DECISIONS-TIMELINE.md"}, (before, after)
+        assert set(after) - set(before) == {"progress/DECISIONS-TIMELINE.md"}, (before, after)
         for rel, digest in before.items():
             assert after[rel] == digest, f"SSOT 被改動: {rel}"
-        raw = (root / "DECISIONS-TIMELINE.md").read_bytes()
+        raw = (root / "progress/DECISIONS-TIMELINE.md").read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf"), "產出檔開頭是 BOM"
         assert b"\r" not in raw, "產出檔含 CR"
         assert raw.endswith(b"\n") and not raw.endswith(b"\n\n"), "檔尾須恰一個換行"
@@ -574,7 +574,7 @@ def test_render_full_project() -> None:
         # 冪等：再跑一次，除產生時間外相同
         rc2, _, _ = run_renderer(root)
         assert rc2 == 0
-        second = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        second = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("產生時間："))
         assert strip(progress) == strip(second), "重跑後內容不冪等"
 
@@ -585,7 +585,7 @@ def test_render_old_format_project() -> None:
         _write_render_project(root, RENDER_OLD)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         rows = _table_rows(progress)
         assert len(rows) == 3, rows
         ids = [r.split(" | ")[0].lstrip("| ") for r in rows]
@@ -615,7 +615,7 @@ def test_render_empty_and_missing_decisions() -> None:
             assert rc == 0, out + err
             if variant == "missing":
                 assert "INFO decisions.yaml 不存在，視為 0 筆" in out, out
-            progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+            progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
             assert _stats(progress) == (0, 0), progress
             assert "| 編號 | 日期 | 階段 | 方法 | 問題 | 執行憑據 |" in progress, progress
             assert _table_rows(progress) == [], progress
@@ -634,7 +634,7 @@ def test_render_dry_run_touches_nothing() -> None:
         rc, out, err = run_renderer(root, "--dry-run")
         assert rc == 0, out + err
         assert _sha_tree(root) == before, "dry-run 改動了目錄"
-        assert not (root / "DECISIONS-TIMELINE.md").exists(), "dry-run 不得落 DECISIONS-TIMELINE.md"
+        assert not (root / "progress/DECISIONS-TIMELINE.md").exists(), "dry-run 不得落 DECISIONS-TIMELINE.md"
         assert "## 記錄表" in out and "## 統計" in out, out
         assert len(_table_rows(out)) == 3, out
         # dry-run + json：只印 JSON、不寫
@@ -665,7 +665,7 @@ def test_render_json_output() -> None:
         assert data["rows"][0]["question"] == "main" and data["rows"][0]["exec_issue"] == ""
         assert data["rows"][1]["id"] == "D-003" and data["rows"][1]["exec_issue"].startswith("封存前")
         # --json 單獨用仍寫檔
-        assert (root / "DECISIONS-TIMELINE.md").exists(), "--json 單獨使用時仍須寫檔"
+        assert (root / "progress/DECISIONS-TIMELINE.md").exists(), "--json 單獨使用時仍須寫檔"
 
 
 def test_render_mermaid_unsafe_skips_block() -> None:
@@ -675,7 +675,7 @@ def test_render_mermaid_unsafe_skips_block() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING 時間軸略過" in out and "D-001" in out, out
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         rows = _table_rows(progress)
         assert len(rows) == 2, rows
         assert "| D-001 | 2026-07-10 | analyze-data | GLMM: 負二項 | SQ1 | a.py |" in progress, progress
@@ -694,7 +694,7 @@ def test_render_gantt_section_order_and_undated() -> None:
         _write_render_project(root, RENDER_SECTIONS)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 8, progress
         # section 順序：main → SQ2 → SQ10（整數序，非字串序）→ AQ1 → 自由文字 → unknown
         assert _sections(progress) == ["main", "SQ2", "SQ10", "AQ1", "其他", "unknown"], _sections(progress)
@@ -717,7 +717,7 @@ def test_render_gantt_all_undated() -> None:
         _write_render_project(root, RENDER_ALL_UNDATED)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 2, progress
         assert "```mermaid" not in progress, progress
         assert "無已知日期的記錄，略過時間軸。" in progress, progress
@@ -736,7 +736,7 @@ def test_render_gantt_unsafe_section_skips_block() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING 時間軸略過：section「SQ1: 主結果」" in out, out
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert len(_table_rows(progress)) == 1, progress
         assert "| D-001 | 2026-07-10 | analyze-data | m | SQ1: 主結果 |  |" in progress, progress
         assert "```mermaid" not in progress, progress
@@ -750,14 +750,14 @@ def test_render_results_link_missing() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
         assert "WARNING D-001" in out and "results.nope" in out, out
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "results.nope（analysis/results.json 無此鍵）" in progress, progress
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write_render_project(root, RENDER_MISSING_KEY, results=False)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "results.nope（無 analysis/results.json）" in progress, progress
         assert "analysis/results.json（無）" in progress, progress
 
@@ -768,7 +768,7 @@ def test_render_exec_issue_without_question() -> None:
         _write_render_project(root, RENDER_EXEC_ISSUE_NO_QUESTION)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        progress = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        progress = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert "| D-001 | 2026-07-10 | analyze-data | 清快取後重跑 | unknown › rerun 讀到舊快取 | a.py |" in progress, progress
         # question 缺 → 問題軸不算有值、不算完整四軸
         assert _stats(progress) == (1, 0), progress
@@ -790,23 +790,28 @@ def test_render_blockers() -> None:
         rc, out, err = run_renderer(root)
         assert rc == 2 and "BLOCKER decisions.yaml 無法解析" in out + err, out + err
         assert "Traceback" not in out + err
-        assert _sha_tree(root) == before and not (root / "DECISIONS-TIMELINE.md").exists()
+        assert _sha_tree(root) == before and not (root / "progress/DECISIONS-TIMELINE.md").exists()
 
 
 def test_render_docs_registered() -> None:
-    files = ("DECISIONS-TIMELINE.md", "PROGRESS.ir.json", "PROGRESS.html")
+    # 0.24.0：三個產生物搬進 <root>/progress/。README 與 status SKILL.md 寫完整相對路徑；
+    # project-init 的資料夾樹把它們縮排在 progress/ 底下（樹裡只有檔名），0.11.0 的 CHANGELOG 段是歷史、
+    # 仍寫當時的檔名——所以這裡分兩組檢查，兩組都不放寬。
+    bare = ("DECISIONS-TIMELINE.md", "PROGRESS.ir.json", "PROGRESS.html")
+    files = tuple("progress/" + f for f in bare)
     scripts = ("render_progress.py", "render_decisions_timeline.py")
     need("README.md", *files, *scripts)
     assert "`PROGRESS.md`" not in text("README.md"), "README 不得再登記舊檔名 PROGRESS.md"
     body = text("skills/project-init/SKILL.md")
     tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
-    for f in files:
+    assert "progress/" in tree and "backups/" in tree, "project-init 步驟 4 的資料夾樹缺 progress/ 或 backups/"
+    for f in bare:
         assert f in tree, f"project-init 步驟 4 的資料夾樹缺 {f}"
     assert "PROGRESS.md " not in tree and "PROGRESS.md\n" not in tree, "project-init 樹不得再列舊檔名 PROGRESS.md"
     need("skills/status/SKILL.md", *files, *scripts)
     changelog = text("CHANGELOG.md")
     section = changelog[changelog.index("## 0.11.0"):changelog.index("## 0.10.0")]
-    for token in files + scripts:
+    for token in bare + scripts:
         assert token in section, f"CHANGELOG 0.11.0 段缺 {token}"
     need("tests/README.md", *files, *scripts)
     # 關聯分頁與 graph IR 的登記
@@ -960,9 +965,9 @@ def test_timeline_renamed() -> None:
         _write_render_project(root, RENDER_FULL)
         rc, out, err = run_renderer(root)
         assert rc == 0, out + err
-        assert "=== render_decisions_timeline:" in out and "DECISIONS-TIMELINE.md 已寫入" in out, out
-        assert (root / "DECISIONS-TIMELINE.md").is_file() and not (root / "PROGRESS.md").exists()
-        body = (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+        assert "=== render_decisions_timeline:" in out and "progress/DECISIONS-TIMELINE.md 已寫入" in out, out
+        assert (root / "progress/DECISIONS-TIMELINE.md").is_file() and not (root / "PROGRESS.md").exists()
+        body = (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
         assert body.startswith("# 渲染測試專案 決策時間軸\n"), body[:60]
         assert "進度時間軸" not in body, "決策時間軸檔內不得再出現舊標題"
         assert "skills/status/scripts/render_decisions_timeline.py" in body, body[:300]
@@ -978,15 +983,15 @@ def test_progress_full_fixture() -> None:
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
         assert out.startswith("=== render_progress: "), out
-        assert "PROGRESS.ir.json 已寫入" in out and "PROGRESS.html 已寫入" in out and "結果: 完成" in out, out
+        assert "progress/PROGRESS.ir.json 已寫入" in out and "progress/PROGRESS.html 已寫入" in out and "結果: 完成" in out, out
         assert "Traceback" not in out + err
         after = _sha_tree(root)
         # 雜湊紅線：fixture 內所有檔執行前後逐檔相同，只多出兩個產出檔
-        assert set(after) - set(before) == {"PROGRESS.ir.json", "PROGRESS.html"}, (before, after)
+        assert set(after) - set(before) == {"progress/PROGRESS.ir.json", "progress/PROGRESS.html"}, (before, after)
         for rel, digest in before.items():
             assert after[rel] == digest, f"SSOT 被改動: {rel}"
-        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         assert _embedded_ir(html_text) == ir, "HTML 內嵌 IR 與 PROGRESS.ir.json 不一致"
         assert ir["schema_version"] == 1 and ir["project_root"] == str(root.resolve())
         assert ir["project"]["title"] == "里程圖測試專案" and ir["project"]["current_stage"] == "evaluate"
@@ -1083,14 +1088,14 @@ def test_progress_empty_fixture() -> None:
         assert rc == 0, out + err
         assert "WARNING project.yaml 無 goals，只有專案層泳道" in out, out
         assert "INFO decisions.yaml 不存在" in out, out
-        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         assert [l["id"] for l in ir["lanes"]] == ["project"]
         states = {n["stage"]: n["state"] for n in ir["lanes"][0]["nodes"]}
         assert states["project-init"] == "done" and states["project-init"] != ""
         assert all(v == "pending" for k, v in states.items() if k != "project-init"), states
         assert ir["stats"]["by_state"] == {"done": 1, "expired": 0, "blocked": 0, "pending": 16, "unknown": 0}
         assert ir["project"]["current_stage"] == "" and not any(n["current"] for n in ir["lanes"][0]["nodes"])
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         assert "無研究問題泳道" in html_text and "（state.next_stage 未填）" in html_text
     # 完全空目錄（連 project.yaml 都沒有）也 exit 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -1113,7 +1118,7 @@ def test_progress_unparseable_is_unknown() -> None:
         assert rc == 0, out + err
         assert "WARNING analysis/plans/index.yaml 無法解析" in out and "WARNING analysis/validation.yaml 無法解析" in out, out
         assert "Traceback" not in out + err
-        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         for lane in ir["lanes"][1:]:
             n = _nodes(lane)
             assert n["study-design"]["state"] == "unknown" and "無法解析" in n["study-design"]["summary"], n["study-design"]
@@ -1143,13 +1148,13 @@ def test_progress_flags_orthogonal() -> None:
         assert "<html" not in out
         rc, out, err = run_progress(root, "--ir-only")
         assert rc == 0, out + err
-        assert set(_sha_tree(root)) - set(before) == {"PROGRESS.ir.json"}, "--ir-only 只得多出 IR 檔"
-        assert "PROGRESS.ir.json 已寫入" in out and "PROGRESS.html 已寫入" not in out and "結果: 完成" in out, out
+        assert set(_sha_tree(root)) - set(before) == {"progress/PROGRESS.ir.json"}, "--ir-only 只得多出 IR 檔"
+        assert "progress/PROGRESS.ir.json 已寫入" in out and "progress/PROGRESS.html 已寫入" not in out and "結果: 完成" in out, out
         # --json 單獨用仍寫檔、stdout 只有 JSON、診斷走 stderr
-        (root / "PROGRESS.ir.json").unlink()
+        (root / "progress/PROGRESS.ir.json").unlink()
         rc, out, err = run_progress(root, "--json")
         assert rc == 0, out + err
-        assert json.loads(out)["stats"]["lanes"] == 4 and (root / "PROGRESS.html").is_file() and (root / "PROGRESS.ir.json").is_file()
+        assert json.loads(out)["stats"]["lanes"] == 4 and (root / "progress/PROGRESS.html").is_file() and (root / "progress/PROGRESS.ir.json").is_file()
         assert "=== render_progress" not in out
 
 
@@ -1159,7 +1164,7 @@ def test_progress_html_self_contained_and_escaped() -> None:
         _write_ir_project(root)
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        raw = (root / "PROGRESS.html").read_bytes()
+        raw = (root / "progress/PROGRESS.html").read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw, "HTML 有 BOM 或 CR"
         html_text = raw.decode("utf-8")
         for token in ("http://", "https://", "<link ", 'src="http'):
@@ -1171,10 +1176,10 @@ def test_progress_html_self_contained_and_escaped() -> None:
         assert "<script>alert" not in html_text, "SSOT 字串未逸出"
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_text, "靜態表格須 html.escape"
         assert "\\u003cscript>alert(1)\\u003c/script>" in html_text, "內嵌 JSON 的 < 須逸出成 \\u003c"
-        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         assert ir["lanes"][1]["question"] == "問題一 <script>alert(1)</script>", "IR 內原文須保留"
         assert _embedded_ir(html_text)["lanes"][1]["question"] == "問題一 <script>alert(1)</script>"
-        ir_raw = (root / "PROGRESS.ir.json").read_bytes()
+        ir_raw = (root / "progress/PROGRESS.ir.json").read_bytes()
         assert not ir_raw.startswith(b"\xef\xbb\xbf") and b"\r" not in ir_raw and ir_raw.endswith(b"}\n")
 
 
@@ -1184,12 +1189,12 @@ def test_progress_deterministic() -> None:
         _write_ir_project(root)
         rc, _, _ = run_progress(root)
         assert rc == 0
-        first_html = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        first_ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        first_html = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
+        first_ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         rc, _, _ = run_progress(root)
         assert rc == 0
-        second_html = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        second_ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        second_html = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
+        second_ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         g1, g2 = first_ir["generated_at"], second_ir["generated_at"]
         strip = lambda t, g: [l for l in t.splitlines() if g not in l]
         assert strip(first_html, g1) == strip(second_html, g2), "重跑後 HTML 除 generated_at 外不相同"
@@ -1226,7 +1231,7 @@ def test_progress_ir_validation_gate() -> None:
             rc = module.main([str(root)])
         assert rc == 2, buf.getvalue()
         assert "BLOCKER IR 驗證失敗: IR-05 lanes[2].nodes[3].state" in buf.getvalue(), buf.getvalue()
-        assert _sha_tree(root) == before and not (root / "PROGRESS.ir.json").exists() and not (root / "PROGRESS.html").exists()
+        assert _sha_tree(root) == before and not (root / "progress/PROGRESS.ir.json").exists() and not (root / "progress/PROGRESS.html").exists()
     # 根目錄不存在 → exit 2
     with tempfile.TemporaryDirectory() as tmp:
         rc, out, err = run_progress(Path(tmp) / "nope")
@@ -1434,9 +1439,9 @@ def test_graph_layout_deterministic() -> None:
         assert json.dumps(a, ensure_ascii=False, sort_keys=False) == json.dumps(b, ensure_ascii=False, sort_keys=False), "graph 兩次不同"
         rc, _, _ = run_progress(root)
         assert rc == 0
-        first = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        first = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         rc, _, _ = run_progress(root)
-        second = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        second = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         strip = lambda t: [l for l in t.splitlines() if "產生時間" not in l and '"generated_at"' not in l]
         assert strip(first) == strip(second)
 
@@ -1447,7 +1452,7 @@ def test_graph_html_tab() -> None:
         _write_ir_project(root)
         rc, out, err = run_progress(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         for token in ('id="tab-relations"', 'id="tab-milestones"', "<svg", 'data-node-id="q:SQ1"', 'data-node-id="r:legacy_key"',
                       "共用關係", "導覽", "Shift", 'data-tab="relations"', 'id="graph-search"', 'id="toggle-dec"', "關聯圖：節點",
                       "顯示舊版計畫", "顯示全部邊", 'id="toggle-old"', 'id="toggle-alledges"', "敏感性子分析", "v2（1 舊版）"):
@@ -1458,7 +1463,7 @@ def test_graph_html_tab() -> None:
             assert token not in html_text, f"HTML 不得含 {token}"
         # 邊全為直角折線（M … L … Q 圓角），無三次貝茲
         edge_ds = re.findall(r'<path class="edge[^>]*? d="([^"]*)"', html_text)
-        assert len(edge_ds) == len(json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]["edges"])
+        assert len(edge_ds) == len(json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]["edges"])
         assert all(d.startswith("M") and (" H" in d or " L" in d or " V" in d) and " C" not in d for d in edge_ds), [d for d in edge_ds if " C" in d or (" H" not in d and " L" not in d and " V" not in d)][:3]   # v0.15.0：對照短垂線只有 V
         assert any(" Q" in d for d in edge_ds), "至少一條邊有圓角轉折"
         # 預設隱藏的邊帶 off、收合的節點帶 gone、未驗證旁路帶 st-dashed、state 底色與符號
@@ -1517,7 +1522,7 @@ def test_graph_validation_gate() -> None:
         with contextlib.redirect_stdout(buf):
             rc = module.main([str(root)])
         assert rc == 2 and "BLOCKER IR 驗證失敗: IR-13" in buf.getvalue(), buf.getvalue()
-        assert _sha_tree(root) == before and not (root / "PROGRESS.ir.json").exists() and not (root / "PROGRESS.html").exists()
+        assert _sha_tree(root) == before and not (root / "progress/PROGRESS.ir.json").exists() and not (root / "progress/PROGRESS.html").exists()
 
 
 def test_graph_empty_fixtures() -> None:
@@ -1534,8 +1539,8 @@ def test_graph_empty_fixtures() -> None:
                               "band_main_nodes": 2, "band_ext_nodes": 0, "band_supp_nodes": 0,
                               "crossings": 0, "edge_node_overlaps": 0, "strips": 1}   # v0.18.1：沒有問題就沒有問題帶；0.19.0：report 節點（pending）永遠在，落 main 的孤兒帶
         rc, out, err = run_progress(root)
-        assert rc == 0 and (root / "PROGRESS.html").is_file(), out + err
-        assert "<svg" in (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert rc == 0 and (root / "progress/PROGRESS.html").is_file(), out + err
+        assert "<svg" in (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "project.yaml").write_text(IR_PROJECT.replace('      links: ["results:k1", "results:legacy_key"]\n', ""), encoding="utf-8")
@@ -1604,9 +1609,9 @@ def _log_lines(root: Path) -> list[str]:
 def _assert_all_outputs(root: Path) -> None:
     for name in HOOK_OUTPUTS:
         assert (root / name).is_file(), f"hook 未產出 {name}"
-    assert (root / "PROGRESS.html").stat().st_size > 0
-    json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
-    assert "決策時間軸" in (root / "DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
+    assert (root / "progress/PROGRESS.html").stat().st_size > 0
+    json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
+    assert "決策時間軸" in (root / "progress/DECISIONS-TIMELINE.md").read_text(encoding="utf-8")
 
 
 def test_hook_registered() -> None:
@@ -1652,7 +1657,7 @@ def test_hook_project_in_subdir() -> None:
         for rel, digest in before.items():
             assert after[rel] == digest, f"{rel} 被 hook 改動"
         # 沒有任何東西寫到 cwd 本身
-        assert not (base / HOOK_LOG).exists() and not (base / "PROGRESS.html").exists()
+        assert not (base / HOOK_LOG).exists() and not (base / "progress/PROGRESS.html").exists()
 
 
 def test_hook_project_is_cwd() -> None:
@@ -1710,8 +1715,8 @@ def test_hook_renderer_failure_is_logged() -> None:
         _write_hook_project(proj, decisions=": : :\n")
         rc, out, _ = run_hook({"cwd": tmp, "session_id": "t5"})
         assert rc == 0 and out == ""
-        assert (proj / "PROGRESS.html").is_file() and (proj / "PROGRESS.ir.json").is_file(), "另一支成功仍應產出"
-        assert not (proj / "DECISIONS-TIMELINE.md").exists()
+        assert (proj / "progress/PROGRESS.html").is_file() and (proj / "progress/PROGRESS.ir.json").is_file(), "另一支成功仍應產出"
+        assert not (proj / "progress/DECISIONS-TIMELINE.md").exists()
         lines = _log_lines(proj)
         assert len(lines) == 2, lines
         assert lines[0].split("\t")[2:4] == ["render_progress.py", "ok"], lines[0]
@@ -1733,7 +1738,7 @@ def test_hook_env_off() -> None:
             assert _sha_tree(Path(tmp)) == before, f"{HOOK_ENV}={value!r} 仍落檔"
         # 其他值不算關閉
         rc, out, _ = run_hook({"cwd": tmp, "session_id": "t6"}, env_extra={HOOK_ENV: "on"})
-        assert rc == 0 and out == "" and (proj / "PROGRESS.html").is_file()
+        assert rc == 0 and out == "" and (proj / "progress/PROGRESS.html").is_file()
 
 
 def test_hook_skips_archive() -> None:
@@ -1753,13 +1758,13 @@ def test_hook_skips_archive() -> None:
         _write_hook_project(base / "aa_proj")
         rc, out, _ = run_hook({"cwd": tmp, "session_id": "t7"})
         assert rc == 0 and out == ""
-        assert (base / "aa_proj/PROGRESS.html").is_file() and (base / "aa_proj" / HOOK_LOG).is_file()
-        assert not (base / "zz_proj/PROGRESS.html").exists() and not (base / "archive/PROGRESS.html").exists()
+        assert (base / "aa_proj/progress/PROGRESS.html").is_file() and (base / "aa_proj" / HOOK_LOG).is_file()
+        assert not (base / "zz_proj/progress/PROGRESS.html").exists() and not (base / "archive/progress/PROGRESS.html").exists()
         # (d) --find-only 只印根到 stderr、不跑 renderer、不寫 log
         _write_hook_project(base / "solo")
         rc, out, err = run_hook({"cwd": str(base / "solo")}, "--find-only")
         assert rc == 0 and out == "" and err.strip() == str((base / "solo").resolve())
-        assert not (base / "solo" / HOOK_LOG).exists() and not (base / "solo/PROGRESS.html").exists()
+        assert not (base / "solo" / HOOK_LOG).exists() and not (base / "solo/progress/PROGRESS.html").exists()
         rc, out, err = run_hook({"cwd": str(base / "archive")}, "--find-only")
         assert rc == 0 and out == "" and err.strip() == ""
 
@@ -1777,7 +1782,9 @@ def test_hook_hash_redline() -> None:
         (proj / "methodology").mkdir()
         (proj / "methodology/route.yaml").write_text("primary: quantitative\n", encoding="utf-8")
         # 也預放一份舊的產物與舊 log，確認產物被覆寫、log 被追加而非覆寫
-        (proj / "PROGRESS.html").write_text("stale", encoding="utf-8")
+        # 0.24.0：產物與 log 都在 progress/ 底下，預放之前要先把資料夾建出來
+        (proj / HOOK_LOG).parent.mkdir(parents=True, exist_ok=True)
+        (proj / "progress/PROGRESS.html").write_text("stale", encoding="utf-8")
         (proj / HOOK_LOG).write_text("old-line\n", encoding="utf-8")
         before = _sha_tree(proj)
         ssot = {k: v for k, v in before.items() if k not in HOOK_OUTPUTS and k != HOOK_LOG}
@@ -1786,10 +1793,10 @@ def test_hook_hash_redline() -> None:
         after = _sha_tree(proj)
         for rel, digest in ssot.items():
             assert after[rel] == digest, f"SSOT {rel} 被 hook 改動"
-        assert after["PROGRESS.html"] != before["PROGRESS.html"], "產物應被重算覆寫"
+        assert after["progress/PROGRESS.html"] != before["progress/PROGRESS.html"], "產物應被重算覆寫"
         lines = _log_lines(proj)
         assert lines[0] == "old-line" and len(lines) == 3, lines
-        assert set(after) - set(before) == {"PROGRESS.ir.json", "DECISIONS-TIMELINE.md"}
+        assert set(after) - set(before) == {"progress/PROGRESS.ir.json", "progress/DECISIONS-TIMELINE.md"}
 
 
 def test_hook_log_rotation() -> None:
@@ -1797,6 +1804,7 @@ def test_hook_log_rotation() -> None:
         proj = Path(tmp) / "proj"
         _write_hook_project(proj)
         filler = ("x" * 99 + "\n") * (2200)  # 220 KB > 200 KB
+        (proj / HOOK_LOG).parent.mkdir(parents=True, exist_ok=True)   # 0.24.0：log 在 progress/logs/
         (proj / HOOK_LOG).write_text(filler, encoding="utf-8")
         rc, out, _ = run_hook({"cwd": str(proj), "session_id": "t9"})
         assert rc == 0 and out == ""
@@ -1809,20 +1817,25 @@ def test_hook_log_rotation() -> None:
 
 
 def test_hook_docs_registered() -> None:
+    # 0.24.0：hook log 搬到 progress/logs/hook.log。README／SKILL／tests README 寫完整相對路徑；
+    # 0.11.0 的 CHANGELOG 段是歷史，仍寫當時的 `.progress-hook.log`，所以那一段用舊名檢查。
     tokens = (HOOK_LOG, "progress_hook.py", "SessionEnd", HOOK_ENV, "hooks/hooks.json")
+    old_tokens = (".progress-hook.log",) + tokens[1:]
     readme = text("README.md")
     need("README.md", *tokens)
     block = readme[readme.index("## 主要事實與治理 artifacts"):readme.index("## 相容性與升級")]
-    assert HOOK_LOG in block, "README artifacts block 缺 .progress-hook.log"
+    assert HOOK_LOG in block, "README artifacts block 缺 progress/logs/hook.log"
     assert "自動重算" in readme and "逃生口" in readme
     body = text("skills/project-init/SKILL.md")
     tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
-    assert HOOK_LOG in tree and "hook" in tree, "project-init 步驟 4 的資料夾樹缺 .progress-hook.log"
+    # 0.24.0：資料夾樹把 log 縮排在 progress/ 底下，樹裡寫的是 `logs/hook.log`（progress/ 另外斷言過）
+    assert "logs/hook.log" in tree and "progress/" in tree and "hook" in tree, \
+        "project-init 步驟 4 的資料夾樹缺 progress/logs/hook.log"
     need("skills/status/SKILL.md", "SessionEnd", "progress_hook.py", HOOK_LOG, HOOK_ENV)
     changelog = text("CHANGELOG.md")
     section = changelog[changelog.index("## 0.11.0"):changelog.index("## 0.10.0")]
     assert "9. **" in section, "CHANGELOG 0.11.0 段缺第 9 條"
-    for token in tokens:
+    for token in old_tokens:
         assert token in section, f"CHANGELOG 0.11.0 段缺 {token}"
     need("tests/README.md", *tokens, "自動觸發")
     # frontmatter 與版號未動
@@ -1926,7 +1939,7 @@ def main() -> int:
     test_hook_log_rotation()
     print("[regression] progress_hook log 超過 200 KB → 截成最後 100 KB 對齊換行再追加: pass")
     test_hook_docs_registered()
-    print("[regression] 登記：README artifacts block／自動重算段、project-init 樹、status SKILL、CHANGELOG 第 9 條、tests README 含 .progress-hook.log／progress_hook.py／SessionEnd／逃生口；版號 0.10.2 未動: pass")
+    print("[regression] 登記：README artifacts block／自動重算段、project-init 樹、status SKILL、CHANGELOG 第 9 條、tests README 含 progress/logs/hook.log／progress_hook.py／SessionEnd／逃生口；版號 0.10.2 未動: pass")
     print("PASS v0.11.0 regressions")
     return 0
 

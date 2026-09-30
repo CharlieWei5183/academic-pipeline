@@ -48,7 +48,7 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def pending_ids(root: Path) -> list[str]:
-    return [it['id'] for it in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if it['status'] == 'pending']
+    return [it['id'] for it in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if it['status'] == 'pending']
 
 
 def rows_of(html: str) -> dict[str, str]:
@@ -82,7 +82,7 @@ def test_html_rows(tmp: Path) -> None:
     ids = pending_ids(root)
     assert len(ids) == 10 and ids[0] == 'IN-001', ids   # IN-001 是 fixture 的 reassign → 十種 kind 各一筆
     run(RENDER, root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     rows = rows_of(html)
     assert sorted(rows) == sorted(ids), (sorted(rows), ids)
     for iid, row in rows.items():
@@ -98,7 +98,7 @@ def test_html_rows(tmp: Path) -> None:
     root0 = fixture(tmp, 'html0')
     run('skills/status/scripts/check_inbox.py', root0, '--dismiss', 'IN-001', '--note', '清空')
     run(RENDER, root0)
-    html0 = (root0 / 'PROGRESS.html').read_text(encoding='utf-8')
+    html0 = (root0 / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert 'class="act-dismiss-row"' not in html0 and 'id="actions-dismiss-hint"' in html0 and '沒有待套用的結構化項目' in html0
 
 
@@ -107,7 +107,7 @@ def test_html_rows(tmp: Path) -> None:
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'frontend')
     run(RENDER, root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function actDismissRow(id){', f"actPost(DISMISS_PATH,{{id:id,note:'{NOTE}'}})", "toast('已撤回 '+id);setTimeout(function(){location.reload();},1500);",
                    "var dr=e.target.closest('.act-dismiss-row');if(dr&&!dr.disabled){actDismissRow(dr.getAttribute('data-id'));return;}",
                    f"document.querySelectorAll('.act-dismiss-row'),function(b){{b.disabled=false;b.title='{TITLE_ON}';}}",
@@ -178,7 +178,7 @@ def test_headless(tmp: Path) -> bool:
         assert inbox_status(root)['IN-001'][0] == 'pending' and inbox_status(root)['IN-003'][0] == 'pending'
         after = T3.tree_hashes(root)
         changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
-        assert changed <= {'PROGRESS.inbox.yaml', 'PROGRESS.ir.json', 'PROGRESS.html', 'DECISIONS-TIMELINE.md'}, changed   # SSOT 不動
+        assert changed <= {'progress/PROGRESS.inbox.yaml', 'progress/PROGRESS.ir.json', 'progress/PROGRESS.html', 'progress/DECISIONS-TIMELINE.md'}, changed   # SSOT 不動
         # (3) server 回錯：把 IN-003 先用命令列撤回，頁面那列還在（沒重載）→ 按撤回 → 錯誤寫在該列摘要區、鈕恢復、不重載
         run('skills/status/scripts/check_inbox.py', root, '--dismiss', 'IN-003', '--note', '先從命令列撤回')
         ws.eval("window.__oldPage=1;document.querySelector('#actions-panel tr[data-act-id=\"IN-003\"] .act-dismiss-row').click();'ok'")
@@ -193,7 +193,7 @@ def test_headless(tmp: Path) -> bool:
         # (4) file:// 開啟（未連上 server）：撤回鈕停用、title 說明
         run(RENDER, root)
         _post(port, '/api/inbox', {'kind': 'set_role', 'payload': {'figure': 'F_b', 'role': 'main'}})
-        ws.send('Page.navigate', url=(root / 'PROGRESS.html').resolve().as_uri())
+        ws.send('Page.navigate', url=(root / 'progress/PROGRESS.html').resolve().as_uri())
         T3._wait(ws, "document.readyState==='complete'&&!!document.querySelector('#actions-panel tr[data-act-id]')", bool, timeout=60)
         s4 = _row_state(ws, 'IN-001')
         assert s4['exists'] and s4['dr'] == {'dis': True, 'title': TITLE_OFF} and s4['pv']['dis'] is True, s4

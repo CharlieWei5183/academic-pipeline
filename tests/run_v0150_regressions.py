@@ -544,8 +544,8 @@ def test_html_and_chrome_parity() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        g = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
+        g = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
         nodes = {n["id"]: n for n in g["nodes"]}
         bands = _band_attrs(html_text)
         assert bands["_class"] == "bands" and [b for b in bands if b != "_class"] == ["main", "ext", "supp"]
@@ -593,7 +593,7 @@ def test_html_and_chrome_parity() -> None:
         def edge_trunks(h):
             return dict(re.findall(r'<path class="edge[^"]*" data-idx="(\d+)"[^>]*? data-trunk="([^"]*)"', h))
         trunk_re = r'<path class="trunk[^"]*" data-trunk="([^"]*)" data-gap="(\d+)" data-lane="(\d+)" d="([^"]*)"'
-        dom = dump(root / "PROGRESS.html")
+        dom = dump(root / "progress/PROGRESS.html")
         if "<svg" not in dom:
             print("  （headless Chrome 未回 DOM，略過 Python／JS 版面比對）")
             return

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """進度頁面本機伺服器：讓 PROGRESS.html 的表單能把「新問題／新分析／意見」送進收件匣。
 
+0.24.0 起進度頁面的現用檔全部在 `<root>/progress/`（`PROGRESS.html`、`PROGRESS.ir.json`、
+`PROGRESS.inbox.yaml`、`PROGRESS.actions.log`、`DECISIONS-TIMELINE.md`），落點集中在
+`progress_paths.py`；伺服器啟動時先呼叫 `ensure_progress_layout()` 把舊版面（檔案堆在專案根）搬過去。
+`GET /` 仍直接回 HTML 內容，頁面裡的圖用 `../analysis/...` 這種相對路徑——瀏覽器把多餘的 `../`
+夾在原點，解出 `/analysis/...`，正好落在下面的靜態檔路由，`file://` 直接開也對。
+
 用法: python3 progress_server.py <project-root> [--port N] [--host 127.0.0.1] [--allow-apply] [--daily-log <path>]
 
 設計（收件匣模式）:
-    瀏覽器 PROGRESS.html ─POST /api/inbox─► 本程式（127.0.0.1）─append─► <root>/PROGRESS.inbox.yaml
+    瀏覽器 PROGRESS.html ─POST /api/inbox─► 本程式（127.0.0.1）─append─► <root>/progress/PROGRESS.inbox.yaml
     下次 session：status skill 讀收件匣 → 逐筆呈使用者裁決 → 由既有 skill 進 SSOT（記 D#／建 plan／改 goals）
                                           → check_inbox.py --resolve 標 done
     結構化動作（0.16.0；0.16.1 加四種；0.16.2 加 move_result）：kind 為 reassign（主問題降為附錄問題，payload {from, to?, primary_model?}）、
@@ -28,14 +34,14 @@
 
 安全邊界:
 - 只綁 loopback：--host 只接受 127.0.0.1／localhost／::1，其餘印 BLOCKER 並 exit 2。
-- 預設只寫一個檔：<root>/PROGRESS.inbox.yaml（append-only；每筆 IN-### 連號）。不碰 goals／plans／results／
+- 預設只寫一個檔：<root>/progress/PROGRESS.inbox.yaml（append-only；每筆 IN-### 連號）。不碰 goals／plans／results／
   validation／claims／decisions 等任何 SSOT；三個進度產物由 render_progress.py 重算（GET / 時觸發）。
 - 兩個 actions 端點預設關閉（403）；只有啟動時加 --allow-apply 才開。開了之後改 SSOT 的也不是本程式，而是被代跑的
-  腳本（它們自己備份、失敗還原、寫 reviews/ 的步驟紀錄）；每次 apply 另追記 <root>/PROGRESS.actions.log
+  腳本（它們自己備份、失敗還原、寫 reviews/ 的步驟紀錄）；每次 apply 另追記 <root>/progress/PROGRESS.actions.log
   （tab 分隔：時間、id、腳本、結果、D#）。--daily-log <path> 透傳給腳本（apply 時在該檔尾端 append 一段）。
 - 同一時間只跑一個 action（程序內 lock）；子程序有 timeout（dry-run 600 秒、apply 1800 秒）。
 - 靜態檔只提供 root 底下、副檔名在白名單內的檔；resolve 後跑出 root 或路徑含 `..` 一律 403。
-- 收件匣寫入用 fcntl.flock 鎖住專案根目錄的 fd，寫暫存檔再 os.replace，避免並行寫入互相覆蓋。
+- 收件匣寫入用 fcntl.flock 鎖住專案根目錄的 fd，寫暫存檔（與收件匣同一資料夾）再 os.replace，避免並行寫入互相覆蓋。
 - POST /api/inbox 若帶 Origin header，必須是 http://127.0.0.1:<port>／http://localhost:<port>／http://[::1]:<port>，
   否則 403 不寫檔；Content-Type 必須以 application/json 開頭，否則 415 不寫檔；不回任何 CORS header，
   其他網頁對本機發的跨來源 POST 會在瀏覽器 preflight 就失敗。
@@ -45,13 +51,13 @@
 
 端點:
 - 啟動時（綁好埠、印 URL 前）先跑一次 render_progress.py <root>，失敗只記 stderr、照常啟動
-- GET  /            先重跑 render_progress.py <root>（timeout 20 秒；失敗回上次的 PROGRESS.html 並記 stderr），再回 HTML
+- GET  /            先重跑 render_progress.py <root>（timeout 20 秒；失敗回上次的 progress/PROGRESS.html 並記 stderr），再回 HTML
 - GET  /<相對路徑>   root 底下的靜態檔（svg／png／jpg／jpeg／pdf／json／yaml／md／html／css／js／tsv／csv／txt）
 - GET  /api/ping     {"ok": true, "root": "...", "inbox_pending": n, "actions_enabled": bool, "next_aq": "AQ5", "next_sq": "SQ6"}
 - GET  /api/inbox    收件匣 JSON
 - POST /api/inbox    JSON body {kind, target, title, body, author?} → {"ok": true, "id": "IN-002"}；錯誤回 4xx／5xx
                      {"ok": false, "error": "..."}，不寫檔（Origin 非本機來源 403、Content-Type 非 JSON 415）；
-                     核對 target 時若 PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
+                     核對 target 時若 progress/PROGRESS.ir.json 不存在或無法解析，先重算一次再核對，仍失敗才 400。
                      十一種結構化 kind（0.18.0 加 demote_plan、0.20.0 加 set_tier） 另帶 payload（見上），title／body 自動生成（body 可附 reason）、target 可省略（batch 一律空）
                      （reassign／promote 取 q:<from>、set_role 取 f:<figure>、move_plan 取 p:<plan>、move_sensitivity 取
                      p:<plan>#<item>、reorder 取 q:<order[0]>、move_result 與 nest_result 取 r:<key>、demote_plan 取 p:<plan>、set_tier 取 node）；payload 由 ssot_actions_common.validate_payload() 驗（from 存在於對應
@@ -92,9 +98,12 @@ except ImportError:
     print('需要 PyYAML: pip install pyyaml --break-system-packages')
     sys.exit(2)
 
-INBOX_NAME = 'PROGRESS.inbox.yaml'
-IR_NAME = 'PROGRESS.ir.json'
-HTML_NAME = 'PROGRESS.html'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import progress_paths as PL  # noqa: E402  進度頁面檔案的落點（0.24.0 起集中在 <root>/progress/）
+
+INBOX_NAME = PL.NEW['inbox']    # progress/PROGRESS.inbox.yaml
+IR_NAME = PL.NEW['ir']
+HTML_NAME = PL.NEW['html']
 ACTION_KINDS = ('reassign', 'promote', 'set_role', 'move_plan', 'move_sensitivity', 'reorder', 'move_result', 'nest_result', 'demote_plan', 'set_tier', 'package_edit', 'package_build', 'batch')   # 與 ssot_actions_common.ACTIONS 同序；set_tier（0.20.0）＝set_tier.py；package_edit／package_build（0.23.0）＝submission-prep 的兩支；batch（0.17.0）＝run_batch.py
 KINDS = ('new_question', 'new_analysis', 'comment') + ACTION_KINDS
 ROLES = ('main', 'extended', 'supplementary')
@@ -110,7 +119,7 @@ RENDER_TIMEOUT = 20
 INBOX_HEADER = ('# 進度頁面收件匣——由 progress_server.py 寫入、status skill 處理；不是事實來源，進 SSOT 須經人工確認。\n'
                 'schema_version: 1\nitems:\n')
 ITEM_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'payload', 'status', 'resolved_by', 'resolved_at', 'note')
-ACTIONS_LOG_NAME = 'PROGRESS.actions.log'
+ACTIONS_LOG_NAME = PL.NEW['actions_log']   # progress/PROGRESS.actions.log
 DRYRUN_TIMEOUT, APPLY_TIMEOUT = 600, 1800
 ID_RE = re.compile(r'IN-(\d{3,})$')
 
@@ -135,8 +144,12 @@ def format_item(item: dict) -> str:
 
 
 def load_inbox(root: Path) -> tuple[str, dict | None, str]:
-    """回傳 (原文, 解析後 dict 或 None, 錯誤字串)。缺檔 → ('', None, '')。"""
-    path = root / INBOX_NAME
+    """回傳 (原文, 解析後 dict 或 None, 錯誤字串)。缺檔 → ('', None, '')。
+
+    0.24.0：讀一律走 PL.locate()——新落點在就讀新的，否則讀舊版面那份（純讀，不搬）。
+    寫一律寫新落點，而伺服器在啟動時已先呼叫 ensure_progress_layout()，所以正常情況下兩者一致。
+    """
+    path = PL.locate(root, 'inbox')
     if not path.is_file():
         return '', None, ''
     text = path.read_text(encoding='utf-8')
@@ -189,11 +202,13 @@ class RootLock:
 
 def write_inbox_text(root: Path, text: str) -> None:
     """寫暫存檔再 os.replace（呼叫端須先持有 RootLock）。"""
-    fd, tmp = tempfile.mkstemp(prefix='.PROGRESS.inbox.', suffix='.tmp', dir=str(root))
+    dest = PL.path(root, 'inbox')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.PROGRESS.inbox.', suffix='.tmp', dir=str(dest.parent))
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(text)
-        os.replace(tmp, root / INBOX_NAME)
+        os.replace(tmp, dest)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -254,7 +269,7 @@ def rerender(root: Path, why: str = '') -> bool:
 
 
 def ir_node_ids(root: Path) -> set[str] | None:
-    path = root / IR_NAME
+    path = PL.locate(root, 'ir')
     if not path.is_file():
         return None
     try:
@@ -429,7 +444,9 @@ def batch_item_with_reason(item: dict, reason: str) -> dict:
 
 
 def append_actions_log(root: Path, item_id: str, script: str, result: str, decision: str) -> None:
-    with (root / ACTIONS_LOG_NAME).open('a', encoding='utf-8') as fh:
+    dest = PL.path(root, 'actions_log')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open('a', encoding='utf-8') as fh:
         fh.write('\t'.join([now_iso(), item_id, script, result, decision]) + '\n')
 
 
@@ -493,7 +510,7 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
             self.do_GET()
 
         def _serve_root(self) -> None:
-            html_path = root / HTML_NAME
+            html_path = PL.locate(root, 'html')
             rerender(root, f'GET /，失敗則回上次的 {HTML_NAME}')
             if not html_path.is_file():
                 return self._json(503, {'ok': False, 'error': f'{HTML_NAME} 不存在且無法重算'})
@@ -665,7 +682,7 @@ def make_server(root: Path, host: str = '127.0.0.1', port: int = 0, allow_apply:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='進度頁面本機伺服器：只綁 loopback、只寫 PROGRESS.inbox.yaml')
+    parser = argparse.ArgumentParser(description='進度頁面本機伺服器：只綁 loopback、只寫 progress/PROGRESS.inbox.yaml')
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
     parser.add_argument('--port', type=int, default=8765, help='埠號（0＝自動選）')
     parser.add_argument('--host', default='127.0.0.1', help='只接受 127.0.0.1／localhost／::1')
@@ -679,6 +696,9 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         print(f'BLOCKER 專案根目錄不存在: {args.root}', file=sys.stderr)
         return 2
+    # 0.24.0：綁埠之前先把舊版面搬成 progress/ 版面（之後 render／收件匣寫入都只認新落點）。
+    for note in PL.ensure_progress_layout(root.resolve()):
+        print(f'{now_iso()} 版面遷移 {note}', file=sys.stderr)
     try:
         server = make_server(root, args.host, args.port, args.allow_apply, args.daily_log)
     except OSError as exc:

@@ -255,7 +255,7 @@ def test_alias_html_and_chrome() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         for token in ("<dt>舊 id</dt><dd>", "<dt>問題</dt><dd>", "已併入", "index 寫 ", 'data-node-id="q:AQ2"', 'data-node-id="p:SQ1-v2"'):
             assert token in html_text, f"HTML 缺 {token}"
         assert 'data-node-id="q:SQ1"' not in html_text
@@ -266,7 +266,7 @@ def test_alias_html_and_chrome() -> None:
             print("  （無 headless Chrome，略過 Python／JS 版面比對）")
             return
         proc = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000", "--dump-dom",
-                               f"file://{root / 'PROGRESS.html'}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
+                               f"file://{root / 'progress/PROGRESS.html'}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
         dom = proc.stdout
         if "<svg" not in dom:
             print("  （headless Chrome 未回 DOM，略過 Python／JS 版面比對）")

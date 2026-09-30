@@ -1,5 +1,99 @@
 # CHANGELOG
 
+## 0.24.0（2026-09-30）
+
+把進度頁面的現用檔搬進 `<root>/progress/`、把所有備份搬進 `<root>/backups/`。專案根本來會被 plugin 的工作檔
+佔掉六個位置（`PROGRESS.html`、`PROGRESS.ir.json`、`PROGRESS.inbox.yaml`、`PROGRESS.actions.log`、
+`.progress-hook.log`、`DECISIONS-TIMELINE.md`），備份又一個個寫在原檔旁邊（`<檔>.pre_<tag>_backup`），用久了
+根目錄幾乎看不出哪些是研究檔。這一版只改落點，SSOT 的內容與結構、IR、頁面版面、衍生規則、打包內容全部不動。
+
+1. **落點集中在一個模組**：新增 `skills/status/scripts/progress_paths.py`——`NEW`／`LEGACY` 兩張表、`path()`／
+   `paths()` 給新落點、`locate()` 給「現在該讀哪一份」（新落點在就新的，否則舊落點在就舊的）、
+   `backup_dest()` 給備份落點、`ensure_progress_layout()` 做一次性遷移。這支只用標準庫，不依賴 PyYAML——
+   `progress_hook.py` 在缺套件的環境也要能跑完並維持「一律 exit 0、stdout 永不輸出」的契約。
+   十三支程式（`render_progress`／`render_decisions_timeline`／`progress_server`／`progress_hook`／
+   `check_inbox`／`ssot_actions_common`／`set_tier`／`set_figure_role`／`reassign_question`／`run_batch`／
+   `submission_preview`／`build_submission_package`／`package_edit`）與 `hooks/hooks.json` 全部改用它，
+   不再各自拼字串。
+2. **新版面**（六個檔的完整相對路徑）：`progress/PROGRESS.html`、`progress/PROGRESS.ir.json`、
+   `progress/PROGRESS.inbox.yaml`、`progress/PROGRESS.actions.log`、`progress/DECISIONS-TIMELINE.md`，
+   hook 的執行紀錄改成 `progress/logs/hook.log`。
+3. **舊版面自動遷移，不必手動搬**：所有會寫檔的入口（兩支 renderer、server 啟動、SessionEnd hook、
+   `check_inbox.py`、各動作腳本與 `action_main()` 的 `--apply`、`Chain.__init__`）第一件事就是
+   `ensure_progress_layout(root)`。**逐檔判斷，不看 `progress/` 這個資料夾在不在**——有人先把舊的 server log
+   放進 `progress/logs/`，那個資料夾就已經存在了，以它為判準會整批漏搬。三種情形：
+   - 舊檔在、新檔不在 → `os.replace` 搬過去，內容不變。
+   - 兩邊都在，產生物（html／ir.json／timeline／hook log）→ 新的為準，舊的搬到
+     `backups/<原名>.pre_layout_migration_backup`（撞名加 `_2`…），**不刪**。這在實務上會發生：升版後仍在跑的
+     舊版 Claude session 結束時，舊版 SessionEnd hook 還是會把這三個檔寫回專案根。
+   - 兩邊都在，使用者資料（`PROGRESS.inbox.yaml`、`PROGRESS.actions.log`）→ **一份都不動**，本次用新的那份，
+     並在 hook log 記一條警告。收件匣是使用者從頁面送出的待處理動作，不能由程式挑一份丟掉。
+   `--dry-run` 一律不遷移：讀取走 `locate()` 自動回退到舊落點，所以舊版面的專案也預覽得動，而且預覽不會
+   因為「讀一下」就改動原專案。動作腳本的 dry-run 在 `make_workspace()` 的暫存工作區裡遷移，作用在工作區內。
+4. **備份落點**：`Backups(tag, root)` 改寫到 `<root>/backups/<原檔相對 root 的路徑>.pre_<tag>_backup`
+   （撞名規則不變，`_2`、`_3`…），目錄結構照原檔的相對路徑鋪開；`restore()` 照記錄的路徑還原，
+   `listing()`（＝`reviews/*.json` 的 `backups` 清單與 daily log 的「備份檔」段）自然記新路徑。
+   `root` 省略、或原檔不在 root 之下（例如專案根之外的 daily log）時**維持 0.23.1 的舊行為**：放原檔旁邊。
+   計算相對路徑時刻意不 `resolve()` 兩邊——工作區裡沒被實體複製的項目是指回原根的 symlink，resolve 之後備份
+   會寫進原專案，那是 dry-run 最不該做的事。決策條目裡提到備份的地方仍只寫**檔名**（`bk.name`），不寫路徑。
+5. **`backups/` 與 `progress/` 不是專案檔**：`make_workspace()` 兩個都不 symlink（`SKIP_TOP`）——`backups/`
+   在真實專案動輒幾十 MB 且 symlink 會讓 dry-run 的備份寫穿回原根，`progress/` 只由 `COPY_FILES` 帶必要的
+   那幾個檔（新舊兩種落點都列，舊版面的專案在工作區裡才不會搬到 symlink）。`extract_paths()` 加一條過濾：
+   落在這兩個資料夾底下的路徑一律不建節點，所以不進 `derive()`、不進 `package_files()`。`progress_hook.py` 的
+   `SKIP_DIRS` 加這兩個名字。`rerun_all.py` 的 fingerprint 只走 `data/` 與 `analysis/scripts/`、`check_gate.py`
+   與 `check_validation.py` 只走宣告到的路徑，本來就碰不到，測試把這四條都釘住。這是跨專案的同一條規則，
+   不設門檻、沒有逐專案設定。
+6. **HTML 移下一層之後圖還看得到**：`PROGRESS.html` 從專案根搬到 `progress/`，IR 的 `meta.file` 仍是相對 root
+   的路徑，所以顯示時前面多一層 `../`（Python 端 `HTML_BASE_UP`、JS 端 `FIGBASE`，兩邊同值）。`file://` 開
+   `<root>/progress/PROGRESS.html` 時 `../analysis/figures/x.svg` 就是 `<root>/analysis/figures/x.svg`；用
+   `progress_server.py` 開時頁面在 `/`，瀏覽器把多餘的 `../` 夾在原點、解出 `/analysis/figures/x.svg`，正好是
+   server 的靜態檔路由。**server 的路由一行都不用改**，也不需要重導。IR 內容不變（`meta.file` 照舊是相對 root）。
+7. **`ssot_token()` 跨遷移不變**：`TOKEN_FILES` 不再直接列收件匣，改以固定的 key（新落點字串）搭配
+   `locate()` 找到的那份檔內容算雜湊。換句話說，搬家不會讓 token 變、不會讓已經預覽過的動作被判成過期。
+   不過 0.23.1 算出的 token 與 0.24.0 不同（多了這一段），升版當下若有未套用的預覽，重跑一次 `--dry-run` 即可。
+8. **VERSION 常數刻意不動**：本 repo 的慣例是每支腳本的 `VERSION` 標「這支腳本自己的行為規格屬於哪一版」，
+   並由那一版的測試釘住（`run_v0160` 取 `reassign_question.VERSION`、`run_v0200` 釘 `set_tier`、`run_v0231` 釘
+   三支 submission-prep）。這次改的是共用落點而不是各腳本自己的規格，所以版號記在
+   `progress_paths.VERSION`＝`ssot_actions_common.LAYOUT_VERSION`＝`0.24.0`，既有常數維持原值，
+   那些測試的斷言一個都不放寬。
+9. **測試**：新增 `tests/run_v0240_regressions.py`（規格 1–9，見 `tests/README.md`）。既有測試裡斷言舊路徑的
+   地方**只改路徑、不放寬斷言**，逐處如下：
+   - 22 支 `run_v0*` 的路徑字面：`'PROGRESS.html'` 等五個檔名前面加 `progress/`、備份字面前面加 `backups/`。
+   - `run_v0110`：`HOOK_LOG` 常數由 `.progress-hook.log` 改成 `progress/logs/hook.log`（含 README／
+     project-init／tests README 的登記斷言訊息）。
+   - `run_v0190` `test_patch_equivalence`：0.18.2 的歷史 renderer 寫的是專案根那份 HTML（那時還沒有
+     `progress/`），所以比對前先清掉 copytree 帶過來的新版面那份，並改從 `old_dir/'PROGRESS.html'` 讀；
+     `rp.HTML_NAME`／`rp.IR_NAME`（檔名）改用新的 `rp.HTML_REL`／`rp.IR_REL`（相對路徑）。
+   - `run_v0200` `test_missing_file_equals_0190`：0.19.0 的歷史模組只認根目錄那份收件匣，比對前補一份同內容
+     的舊落點，讓兩邊讀到同一份；兩邊的 IR 仍要逐字相同。
+   - `run_v0230` `test_build`：「改 SSOT 前要備份」從掃專案根改成掃 `backups/`。
+   - `run_v0231` `test_registration`：CHANGELOG 的斷言從 `startswith('## 0.23.1（')` 改成「`## 0.23.1（`
+     那一節仍在」，與 `run_v0190`／`run_v0200` 對既往版本的寫法一致——只有當時最新的那一版才用 `startswith`。
+   - `run_v0110`：`HOOK_LOG` 之外，`test_render_docs_registered` 與 `test_hook_docs_registered` 各分兩組
+     檢查——README／status SKILL／tests README 用完整相對路徑，project-init 的資料夾樹與 0.11.0 的
+     CHANGELOG 段（歷史）用當時的檔名；`"aa_proj/PROGRESS.html"` 這類合成字面加上 `progress/`；
+     預放舊產物與舊 log 之前先 `mkdir` 出 `progress/logs/`。
+   - `run_v0160`：daily log 的「備份檔」那一行改成 `- backups/project.yaml.pre_…`；CHANGELOG 的
+     `progress/PROGRESS.actions.log` anchor 由本版第 2 條列出完整路徑後即滿足。
+   - `run_v0161`：`test_apply_reorder` 的 `allowed` 集合改成 `backups/progress/<檔名>.pre_…`（三個產生物
+     在 `progress/` 底下，備份就落在 `backups/progress/`）。
+   - `run_v0163`：對話框錨點字串跟著頁面文案改成「先在 progress/PROGRESS.inbox.yaml 加一筆」。
+   - `run_v0170`：`PROGRESS.html.pre_set_figure_role*` 的空檢查同時看 `backups/progress/`。
+   - `run_v0120`：`check_inbox` 的三句訊息（INFO 不存在／BLOCKER 無法解析／WARNING 無法解析）加上
+     `progress/` 前綴。**注意**：這支的 `test_embed_figures_flag`「預設不得內嵌圖檔」在 0.23.1
+     （1fc6ee9）上就已經是紅的——0.23.0 的投稿分頁縮圖本來就以 data URI 內嵌，那條斷言寫在那個功能之前。
+     與本版無關，本版不動它。
+   - 五處會變成空斷言的地方補上 `backups/` 那一半（`run_v0161`／`run_v0162`／`run_v0165`／`run_v0180` 的
+     `not list(root.glob('*_backup'))`、`run_v0170` 的 `analysis/figures/*_backup`）——備份不再落在原檔旁邊，
+     只看舊位置的話這些斷言永遠成立、等於失效。
+10. **對已在跑的環境，升版順序要對**：先更新 plugin、**停掉正在跑的舊版 `progress_server.py`**、再開新的，
+    最後才去動頁面。理由是收件匣會分裂：專案遷移之後，還在跑的 0.23.1 server 的 `load_inbox()` 在專案根找不到
+    收件匣，下一次從頁面送出就會在專案根**重新開一份從 `IN-001` 開始**的 `PROGRESS.inbox.yaml`；之後任何入口的
+    `ensure` 看到兩份使用者資料，依規則一份都不動、只記警告——於是同時存在兩份收件匣、id 還撞號，只能人工合。
+    另外，舊版 server 的每次 `GET /` 與仍在跑的舊版 session 結束時的 hook 都會把三個產生物寫回專案根，下一次
+    入口把它們收進 `backups/`，次數多的話會累積一批 `pre_layout_migration_backup_N`（內容都是舊頁面，可自行
+    清理）。若專案的 `.gitignore` 原本忽略根目錄的 `PROGRESS.*`，那些 pattern 不會 match `progress/`，要自己補。
+
 ## 0.23.1（2026-09-29）
 
 修 0.23.0 的「投稿檔案」批次預覽：在 PROGRESS 頁面把幾個移除動作送成一批，預覽第一步就擋下來，訊息是

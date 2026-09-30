@@ -77,7 +77,7 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def graph(root: Path) -> dict:
-    return json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    return json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
 
 
 def strips_by_key(g: dict) -> dict:
@@ -120,11 +120,11 @@ def test_ir_strip_assignment(tmp: Path) -> None:
         if n['type'] == 'decision' or nid == 'q:main':
             continue
         assert (n['band'], n['strip']) in sk, nid
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert '、問題帶 7、' in html and 'data-strip="q:SQ1"' in html and 'data-strip=""' in html
     out = run('skills/status/scripts/render_progress.py', root)
     assert '、問題帶 7、' in out, out[-400:]
-    assert rp.validate_ir(json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
+    assert rp.validate_ir(json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
     print('[regression] IR：strip 指派（plan／群／子分析／驗證／結果／次要／圖表／孤兒／跨問題共用取 goals 最前／別帶問題各成一帶）、graph.strips、stats.strips、摘要句: pass')
 
 
@@ -182,15 +182,15 @@ def test_layout_strips(tmp: Path) -> None:
     assert [n['id'] for n in sorted((n for n in g['nodes'] if n['type'] == 'decision'), key=lambda n: n['order'])] == ['d:D-003', 'd:D-004', 'd:D-001', 'd:D-002']
     assert g['stats']['crossings'] == 0 and g['stats']['edge_node_overlaps'] == 0, g['stats']
     # SVG：相鄰兩帶之間各一條淡色細線（在空隙正中）；第一條帶之前不畫
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     lines = re.findall(r'<line class="strip-divider" data-band="(\w+)" data-strip="([^"]*)" x1="\d+" y1="([\d.]+)"', html)
     expect = [(n['band'], n['question'], f'{(p["y1"] + n["y0"]) / 2:g}') for p, n in zip(g['strips'], g['strips'][1:]) if p['band'] == n['band']]
     assert lines == expect and len(lines) == 4, (lines, expect)
     assert '<g id="graph-strips">' in html and '#graph-strips line.strip-divider{' in html
     # 決定性
-    before = (root / 'PROGRESS.ir.json').read_text(encoding='utf-8')
+    before = (root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8')
     run('skills/status/scripts/render_progress.py', root)
-    after = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    after = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert after['graph']['strips'] == g['strips'] and [n['y'] for n in after['graph']['nodes']] == [n['y'] for n in g['nodes']], '不決定性'
     del before
     print('[regression] 版面：帶首列對齊、帶高／帶間距（STRIP_GAP）、問題節點在首列、q:main 居中、order 不跨帶、dummy 在目標帶、決策落帶／排最後、crossings == 0、分隔線、決定性: pass')
@@ -200,7 +200,7 @@ def test_layout_strips(tmp: Path) -> None:
 
 def test_validate_ir(tmp: Path) -> None:
     root = fixture(tmp, 'validate')
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert rp.validate_ir(ir) == []
 
     def bad(mut) -> list[str]:
@@ -245,7 +245,7 @@ def _node_script(js: str, g: dict, body: str) -> str:
 
 def test_js_restrip(tmp: Path) -> None:
     root = fixture(tmp, 'js')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function stripsOf(', 'function decisionStrip(', 'function stripKey(', 'function stripNow(', 'function restripStaged(',
                    "if(typeof restripStaged==='function')restripStaged();", 'var STRIP_GAP=ROW_GAP;', "stripsEl=document.getElementById('graph-strips')",
                    "n.strip0=n.strip||'';", 'stripBoxes.push({band:band,question:s,y0:y,y1:y1})', "if(strips.indexOf('')<0)decY=placeDecisions(band+'||6',decY);",
@@ -312,7 +312,7 @@ console.log(JSON.stringify(out));
 
 def test_headless_parity(tmp: Path) -> None:
     root = fixture(tmp, 'chrome')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     chrome = shutil.which('google-chrome') or shutil.which('chromium') or shutil.which('chromium-browser')
     if not chrome:
         print('  （無 headless Chrome，略過 relayout 與 Python 的比對）')
@@ -326,7 +326,7 @@ def test_headless_parity(tmp: Path) -> None:
     def strip_lines(h: str) -> list:
         return re.findall(r'<line class="strip-divider" data-band="(\w+)" data-strip="([^"]*)" x1="(\d+)" y1="([\d.]+)" x2="(\d+)" y2="([\d.]+)"', h)
 
-    dom = dump(root / 'PROGRESS.html')
+    dom = dump(root / 'progress/PROGRESS.html')
     if '<svg' not in dom:
         print('  （headless Chrome 未回 DOM，略過）')
         return

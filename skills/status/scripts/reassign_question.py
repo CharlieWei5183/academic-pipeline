@@ -367,7 +367,7 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
         f'(5) rerun waiver：{waiver_rel or "未重登（無 waiver 決策）"}{"，仍是 waived、不是 pass；state.analysis.rerun 舊值推進 previous_waiver" if waiver_rel else ""}\n'
         f'(6) check_coverage：{"TAMPER 只有 " + to + " 新增、" + src + " 被移除兩筆 → --update-snapshot → 0 tamper" if ctx["remaining"] else "sub_questions 已空、無法執行，快照由腳本直接寫入"}\n'
         f'(7) GLOSSARY.md §10.4：主子問題列改「{remaining}」、補 {to} 一列\n'
-        f'(8)(9) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；PROGRESS.html／PROGRESS.ir.json／DECISIONS-TIMELINE.md 重畫；'
+        f'(8)(9) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；progress/PROGRESS.html／progress/PROGRESS.ir.json／progress/DECISIONS-TIMELINE.md 重畫；'
         f'所有改到的檔備份為 <檔名>.pre_{src.lower()}_to_{to.lower()}_backup')
     body = str((ctx['inbox'] or {}).get('body') or '').strip()
     reason_parts = []

@@ -389,7 +389,7 @@ def test_layout_bands() -> None:
         assert min(n["y"] for n in g["nodes"] if not n["collapsed"]) == rp.GRAPH_PAD
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         assert '<g id="graph-bands" class="bands off">' in html_text and 'data-node-id="q:SQ1"' in html_text
         assert 'class="band-title off" data-band="ext"' in html_text and 'class="band-title off" data-band="supp"' in html_text and 'class="band-title" data-band="main"' in html_text
         assert re.search(r'data-node-id="q:SQ1"[^>]*transform="translate\(400,20\)"', html_text), "無 supp 時 SQ 欄從 GRAPH_PAD 起"
@@ -421,8 +421,8 @@ def test_html_bands_and_panel() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
-        g = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
+        g = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
         nodes = {n["id"]: n for n in g["nodes"]}
         bands = _band_attrs(html_text)
         vis_main = [n for n in g["nodes"] if n["band"] == "main" and not n["collapsed"] and n["type"] != "decision"]
@@ -476,7 +476,7 @@ def test_html_bands_and_panel() -> None:
             proc = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000", "--dump-dom",
                                    f"file://{path}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
             return proc.stdout
-        dom = dump(root / "PROGRESS.html")
+        dom = dump(root / "progress/PROGRESS.html")
         if "<svg" not in dom:
             print("  （headless Chrome 未回 DOM，略過 Python／JS 版面比對）")
             return

@@ -141,7 +141,7 @@ def test_apply_a_then_b(tmp: Path) -> None:
     assert {'SQ2', 'SQ1', 'results.k2', 'analysis/plans/SQ2-v2.yaml', 'analysis/plans/SQ1-v2.yaml', 'reviews/move-result-k2-SQ2-v1-2026-09-15.json'} <= set(d['links'])
     log = json.loads((root / 'reviews/move-result-k2-SQ2-v1-2026-09-15.json').read_text(encoding='utf-8'))
     assert log['result'] == 'ok' and log['dry_run'] is False and [s['step'] for s in log['steps']] == list(range(1, 10)) and all(s['status'] == 'ok' for s in log['steps'])
-    assert (root / 'analysis/results.json.pre_move_result_k2_to_sq2_v1_backup').is_file()
+    assert (root / 'backups/analysis/results.json.pre_move_result_k2_to_sq2_v1_backup').is_file()
     checkers(root)
     # (b) B 型：r2（SQ1-v2 R2 的唯一鍵）→ AQ1-v1 R1；R2 因此改指本 plan outputs 鍵並記 evidence_owned_by
     out = run(MR, root, '--key', 'r2', '--to-plan', 'AQ1-v1', '--to-item', 'R1', '--date', '2026-09-15', '--apply')
@@ -240,7 +240,9 @@ def test_failure_restores(tmp: Path) -> None:
         assert 'BLOCKER dry-run 失敗' in out and '已還原' in out and 'Permission denied' in out, out
         after = tree_hashes(root)
         assert after == before, (args, sorted(set(after.items()) ^ set(before.items())))
-        assert not any((root / c).exists() for c in created) and not list(root.glob('*_backup')) and not list(root.glob('analysis/**/*_backup')), args
+        # 0.24.0：備份改落 backups/，連 backups/ 一起看（否則空斷言）
+        assert not any((root / c).exists() for c in created) and not list(root.glob('*_backup')) and not list(root.glob('analysis/**/*_backup')) \
+            and not list(root.glob('backups/**/*_backup')), args
     # dry-run 後 SSOT 被別的 session 改了 → token 不符
     out = run(MR, root, '--key', 'k2', '--to-plan', 'SQ2-v1', '--dry-run')
     token = re.search(r'^token: (\S+)$', out, re.M).group(1)
@@ -276,17 +278,17 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
     out = run('skills/status/scripts/check_inbox.py', root, '--list')
     assert 'move_result.py' in out and '--key k2 --to-plan SQ2-v1 --inbox IN-002 --dry-run' in out and '--key r2 --to-plan AQ1-v1 --to-item R1 --inbox IN-003 --dry-run' in out, out
     assert 'pending 3' in run('skills/status/scripts/check_inbox.py', root)
-    text_i = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
+    text_i = (root / 'progress/PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     assert '"to_item": "R1"' in text_i and '"to_item": ""' in text_i, text_i
-    (root / 'PROGRESS.inbox.yaml').write_text(text_i.replace('"to_item": "R1"', '"to_item": "R7"'), encoding='utf-8')
+    (root / 'progress/PROGRESS.inbox.yaml').write_text(text_i.replace('"to_item": "R1"', '"to_item": "R7"'), encoding='utf-8')
     out = run('skills/status/scripts/check_inbox.py', root)
     assert 'WARNING IN-003' in out and 'AQ1-v1 沒有 robustness 項目 R7' in out, out
-    (root / 'PROGRESS.inbox.yaml').write_text(text_i, encoding='utf-8')
+    (root / 'progress/PROGRESS.inbox.yaml').write_text(text_i, encoding='utf-8')
     run('skills/status/scripts/render_progress.py', root)
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert [(it['id'], it['kind'], it['payload'], it['target']) for it in ir['inbox']['items']][1:] == [
         ('IN-002', 'move_result', {'key': 'k2', 'to_plan': 'SQ2-v1', 'to_item': ''}, 'r:k2'), ('IN-003', 'move_result', {'key': 'r2', 'to_plan': 'AQ1-v1', 'to_item': 'R1'}, 'r:r2')]
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert '待套用動作 3 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序／搬結果' in html   # 0.16.5 起清單尾端再加「掛到主結果下」
     for iid in ('IN-001', 'IN-002', 'IN-003'):
         assert f'<tr data-act-id="{iid}">' in html, iid
@@ -324,9 +326,9 @@ def test_server_dispatch(tmp: Path) -> None:
         # 鍵已搬走 → 再送同一筆 400（已結案）；新送一筆已含該鍵的 → 400
         assert _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': tokens['IN-002']})[0] == 400
         assert _post(port, '/api/inbox', {'kind': 'move_result', 'payload': {'key': 'k2', 'to_plan': 'SQ2-v2'}})[0] == 400
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-002', 'move_result.py', 'ok', 'D-003'], ['IN-003', 'move_result.py', 'ok', 'D-004']], log
-        inbox = {it['id']: (it['status'], it.get('resolved_by')) for it in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']}
+        inbox = {it['id']: (it['status'], it.get('resolved_by')) for it in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']}
         assert inbox == {'IN-001': ('pending', ''), 'IN-002': ('done', 'D-003'), 'IN-003': ('done', 'D-004')}, inbox
         dtext = daily.read_text(encoding='utf-8')
         assert dtext.count(f'## move_result.py {MR_V}') == 2 and '結果鍵 k2 由 SQ1-v1 搬到 SQ2-v2 的 outputs（D-003）' in dtext, dtext
@@ -342,13 +344,13 @@ def test_server_dispatch(tmp: Path) -> None:
 def test_drag_result_nodes(tmp: Path) -> None:
     root = fixture(tmp, 'drag')
     run('skills/status/scripts/render_progress.py', root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function isDragResult(', 'function resultOwner(', 'id="act-move-result-fields"', 'id="act-mr-key"', 'id="act-mr-to"', 'id="act-mr-item"',
                    "move_result:'搬結果'", '結果可拖到別的方法或敏感性子分析', "'move-result'", "kind==='move_result'", "actKind==='move_result'",
                    '把這個結果拖到別的方法節點上＝成為該 plan 的主要結果'):
         assert anchor in html, anchor
     assert html.count('<g id="drag-preview">') == 1
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert 'drag-preview' not in json.dumps(ir['graph'])
     js = _js_of(html)
     node = shutil.which('node')

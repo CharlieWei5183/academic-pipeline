@@ -242,7 +242,7 @@ def test_apply_promote_and_round_trip(tmp: Path) -> None:
     assert [x['id'] for x in snap['sub_questions']] == ['SQ1', 'SQ2'] and [x['id'] for x in snap['appendix_questions']] == ['AQ1', 'AQ2']
     log = json.loads((root / 'reviews/promote-AQ3-SQ2-2026-09-15.json').read_text(encoding='utf-8'))
     assert log['result'] == 'ok' and [s['step'] for s in log['steps']] == list(range(1, 10)) and log['decision_id'] == 'D-004'
-    assert (root / 'project.yaml.pre_aq3_to_sq2_backup').is_file() and (root / 'decisions.yaml.pre_aq3_to_sq2_backup').is_file()
+    assert (root / 'backups/project.yaml.pre_aq3_to_sq2_backup').is_file() and (root / 'backups/decisions.yaml.pre_aq3_to_sq2_backup').is_file()
     dtext = daily.read_text(encoding='utf-8')
     assert dtext.startswith('# Daily Log 2026-09-15\n\n## 既有段落\n- 不得被覆寫\n') and f'## promote_question.py {V}：AQ3 升回主問題 SQ2（D-004）' in dtext
     checkers(root)
@@ -311,10 +311,10 @@ def test_apply_move_plan(tmp: Path) -> None:
     assert d['reason'].startswith('收件匣 IN-002 原文：「') and '搬方法理由' in d['reason'] and d['links'][:3] == ['AQ2', 'AQ1', 'results.a1']
     snap = json.loads((root / 'evaluations/goals-snapshot.json').read_text(encoding='utf-8'))
     assert [x['id'] for x in snap['appendix_questions']] == ['AQ1', 'AQ2']
-    inbox = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']
+    inbox = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']
     assert inbox[1]['id'] == 'IN-002' and inbox[1]['status'] == 'done' and inbox[1]['payload'] == {'plan': 'AQ1-v1', 'to_question': 'AQ2'}
     assert f'## move_plan.py {V}：AQ1-v1 搬到 AQ2（D-003）' in daily.read_text(encoding='utf-8')
-    assert (root / 'project.yaml.pre_move_aq1_v1_to_aq2_backup').is_file()
+    assert (root / 'backups/project.yaml.pre_move_aq1_v1_to_aq2_backup').is_file()
     checkers(root)
     # AQ2 現在有 active plan → 再搬別的過來要 exit 2
     assert '已有 active plan AQ2-v1' in run('skills/status/scripts/move_plan.py', root, '--plan', 'SQ1-v1', '--to-question', 'AQ2', '--dry-run', expect=2)
@@ -382,15 +382,18 @@ def test_apply_reorder(tmp: Path) -> None:
     # goals 清單順序是 source fingerprint 的一部分：validation 頂層 source 重接（item 不改掛）、waiver 重登；results fingerprint、plan、results、快照都不動
     after = tree_hashes(root)
     changed = {k for k in set(after) | set(before) if after.get(k) != before.get(k)}
-    must = {'project.yaml', 'decisions.yaml', 'analysis/validation.yaml', 'PROGRESS.html', 'PROGRESS.ir.json', 'reviews/reorder-sub_questions-2026-09-15.json',
-            'reviews/rerun-waiver-2026-09-15.json', 'project.yaml.pre_reorder_sub_questions_20260915_backup', 'decisions.yaml.pre_reorder_sub_questions_20260915_backup',
-            'analysis/validation.yaml.pre_reorder_sub_questions_20260915_backup'}
-    allowed = must | {'DECISIONS-TIMELINE.md', 'DECISIONS-TIMELINE.md.pre_reorder_sub_questions_20260915_backup',
-                      'PROGRESS.html.pre_reorder_sub_questions_20260915_backup', 'PROGRESS.ir.json.pre_reorder_sub_questions_20260915_backup'}
+    must = {'project.yaml', 'decisions.yaml', 'analysis/validation.yaml', 'progress/PROGRESS.html', 'progress/PROGRESS.ir.json', 'reviews/reorder-sub_questions-2026-09-15.json',
+            'reviews/rerun-waiver-2026-09-15.json', 'backups/project.yaml.pre_reorder_sub_questions_20260915_backup', 'backups/decisions.yaml.pre_reorder_sub_questions_20260915_backup',
+            'backups/analysis/validation.yaml.pre_reorder_sub_questions_20260915_backup'}
+    # 0.24.0：三個產生物在 progress/ 底下，備份落 backups/progress/<檔名>.pre_<tag>_backup
+    allowed = must | {'progress/DECISIONS-TIMELINE.md',
+                      'backups/progress/DECISIONS-TIMELINE.md.pre_reorder_sub_questions_20260915_backup',
+                      'backups/progress/PROGRESS.html.pre_reorder_sub_questions_20260915_backup',
+                      'backups/progress/PROGRESS.ir.json.pre_reorder_sub_questions_20260915_backup'}
     assert must <= changed <= allowed, sorted(changed ^ allowed)
     assert sha(root / 'evaluations/goals-snapshot.json') == before['evaluations/goals-snapshot.json'] and sha(root / 'analysis/results.json') == before['analysis/results.json']
     val = plan_common.load_yaml(root / 'analysis/validation.yaml')
-    old_val = plan_common.load_yaml(root / 'analysis/validation.yaml.pre_reorder_sub_questions_20260915_backup')
+    old_val = plan_common.load_yaml(root / 'backups/analysis/validation.yaml.pre_reorder_sub_questions_20260915_backup')
     assert val['results_fingerprint'] == old_val['results_fingerprint'] and val['source_fingerprint'] != old_val['source_fingerprint']
     assert [(i['id'], i['sq'], i['plan_id']) for i in val['items']] == [(i['id'], i['sq'], i['plan_id']) for i in old_val['items']] and all('reaffirmed_2026_09_15' in i for i in val['items'])
     rr = proj['state']['analysis']['rerun']
@@ -429,7 +432,9 @@ def test_failure_restores(tmp: Path) -> None:
         assert 'BLOCKER dry-run 失敗' in out and '已還原' in out and 'Permission denied' in out, out
         after = tree_hashes(root)
         assert after == before, (script, sorted(set(after.items()) ^ set(before.items())))
-        assert not (root / created).exists() and not list(root.glob('*_backup')) and not list(root.glob('analysis/plans/*_backup')), script
+        # 0.24.0：備份改落 backups/，所以這裡連 backups/ 一起看——不然這條會變成永遠成立的空斷言
+        assert not (root / created).exists() and not list(root.glob('*_backup')) and not list(root.glob('analysis/plans/*_backup')) \
+            and not list(root.glob('backups/**/*_backup')), script
     # dry-run 後 SSOT 被別的 session 改了 → token 不符
     out = run('skills/status/scripts/move_plan.py', root, '--plan', 'AQ1-v1', '--to-question', 'AQ2', '--dry-run')
     token = re.search(r'^token: (\S+)$', out, re.M).group(1)
@@ -479,19 +484,19 @@ def test_payload_validation_and_check_inbox(tmp: Path) -> None:
         assert cmd in out, (cmd, out)
     assert 'pending 5' in run('skills/status/scripts/check_inbox.py', root)
     # payload 壞掉 → WARNING（不擋）
-    text_i = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
+    text_i = (root / 'progress/PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     assert '"to_plan": "SQ2-v1"' in text_i, text_i
-    (root / 'PROGRESS.inbox.yaml').write_text(text_i.replace('"to_plan": "SQ2-v1"', '"to_plan": "SQ9-v1"'), encoding='utf-8')
+    (root / 'progress/PROGRESS.inbox.yaml').write_text(text_i.replace('"to_plan": "SQ2-v1"', '"to_plan": "SQ9-v1"'), encoding='utf-8')
     out = run('skills/status/scripts/check_inbox.py', root)
     assert 'WARNING IN-004' in out and 'SQ9-v1 不是 active plan' in out, out
-    (root / 'PROGRESS.inbox.yaml').write_text(text_i, encoding='utf-8')
+    (root / 'progress/PROGRESS.inbox.yaml').write_text(text_i, encoding='utf-8')
     # IR 與 HTML：六種 kind 的 pending 項目都進「待套用動作」面板
     run('skills/status/scripts/render_progress.py', root)
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert [(it['id'], it['kind'], it['payload']) for it in ir['inbox']['items']][1:] == [
         ('IN-002', 'promote', {'from': 'AQ1', 'to': ''}), ('IN-003', 'move_plan', {'plan': 'AQ1-v1', 'to_question': 'AQ2'}),
         ('IN-004', 'move_sensitivity', {'plan': 'SQ1-v1', 'item': 'R2', 'to_plan': 'SQ2-v1'}), ('IN-005', 'reorder', {'list': 'appendix_questions', 'order': ['AQ2', 'AQ1']})]
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert '待套用動作 5 筆（降階／升回主問題／圖表 role／搬方法／搬敏感性子分析／調順序' in html   # 0.16.2 起清單尾端再加「／搬結果」
     for iid in ('IN-001', 'IN-002', 'IN-003', 'IN-004', 'IN-005'):
         assert f'<tr data-act-id="{iid}">' in html, iid
@@ -555,10 +560,10 @@ def test_server_dispatch(tmp: Path) -> None:
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-007', 'token': d['token']})
         assert st == 200 and d['ok'] and d['decision'] == 'D-006', d
         assert goals(root) == (['SQ1', 'SQ2', 'SQ3'], ['AQ1']), goals(root)
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-006', 'reorder_questions.py', 'ok', 'D-003'], ['IN-005', 'move_sensitivity.py', 'ok', 'D-004'],
                                         ['IN-004', 'move_plan.py', 'ok', 'D-005'], ['IN-007', 'promote_question.py', 'ok', 'D-006']], log
-        inbox = {it['id']: it['status'] for it in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']}
+        inbox = {it['id']: it['status'] for it in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']}
         assert inbox == {'IN-001': 'pending', 'IN-002': 'pending', 'IN-003': 'pending', 'IN-004': 'done', 'IN-005': 'done', 'IN-006': 'done', 'IN-007': 'done'}, inbox
         dtext = daily.read_text(encoding='utf-8')
         for anchor in (f'## reorder_questions.py {V}', f'## move_plan.py {V}', f'## move_sensitivity.py {V}', f'## promote_question.py {V}'):
@@ -588,7 +593,7 @@ def _js_fn(js: str, name: str) -> str:
 def test_drag_preview_anchors(tmp: Path) -> None:
     root = fixture(tmp, 'drag')
     run('skills/status/scripts/render_progress.py', root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('<g id="drag-preview"></g>', 'function dragCandidate(', 'function drawDragPreview(', 'function clearDragPreview(', 'function openActionForm(',
                    'function hitNode(', 'function activePlanOf(', 'function listOrder(', 'function isActivePlan(', 'function isSensItem(',
                    'id="act-promote-fields"', 'id="act-move-plan-fields"', 'id="act-move-sens-fields"', 'id="act-reorder-fields"', 'id="act-role-fields"', 'id="act-reassign-fields"',
@@ -596,7 +601,7 @@ def test_drag_preview_anchors(tmp: Path) -> None:
         assert anchor in html, anchor
     assert html.count('<g id="drag-preview">') == 1 and html.index('<g id="graph-nodes">') < html.index('<g id="drag-preview">')
     # 骨架是空的：預覽只在拖曳中由 JS 畫，不進 IR
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert 'drag-preview' not in json.dumps(ir['graph']) and 'preview' not in json.dumps(ir['graph']['node_types']) and not any(n['id'].startswith('preview') for n in ir['graph']['nodes'])
     js = _js_of(html)
     node = shutil.which('node')

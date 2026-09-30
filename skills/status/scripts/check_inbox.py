@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""收件匣檢核與結案（status skill 的機械工具；唯一可以改 PROGRESS.inbox.yaml 的 status 的程式）。
+"""收件匣檢核與結案（status skill 的機械工具；唯一可以改 progress/PROGRESS.inbox.yaml 的 status 的程式）。
 
 用法:
   python3 check_inbox.py <project-root>                                  # schema 檢查＋列 pending
@@ -9,7 +9,8 @@
   python3 check_inbox.py <project-root> --dismiss IN-001 [--note ...]              # 標 dismissed
   python3 check_inbox.py <project-root> --set-reason IN-001 --reason ...           # 只改 batch 項目的 payload.reason 與 body 最後一行「理由：…」（0.17.3；status 不動）
 
-收件匣（<root>/PROGRESS.inbox.yaml）由 progress_server.py append，本程式只改指定那一筆的
+收件匣（<root>/progress/PROGRESS.inbox.yaml；0.24.0 起落在 progress/，舊版面的專案第一次跑時自動搬過去）
+由 progress_server.py append，本程式只改指定那一筆的
 status／resolved_by／resolved_at／note 四行（--set-reason 則是 batch 項目的 payload 與 body 兩行）——逐行文字替換，不重新 dump，其餘位元組不動；寫入前後
 以 yaml 解析比對，除該筆外任何差異都算失敗（不落檔、BLOCKER）。鎖檔與伺服器同一套
 （flock 專案根目錄 fd，寫暫存檔再 os.replace）。
@@ -39,6 +40,7 @@ except ImportError:
     sys.exit(2)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from progress_paths import ensure_progress_layout  # noqa: E402  進度頁面檔案的落點（0.24.0）
 from progress_server import (  # noqa: E402  同目錄的收件匣讀寫函式
     ACTION_KINDS, ID_RE, INBOX_NAME, KINDS, STATUSES, RootLock, action_command, inbox_items, ir_node_ids, load_inbox, now_iso,
     validate_payload, write_inbox_text, yaml_scalar,
@@ -240,6 +242,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = root.resolve()
     print(f'=== check_inbox: {root} ===')
+    # 0.24.0：收件匣是入口之一，一進來就把舊版面搬成 progress/ 版面（idempotent；--resolve 等寫入才有意義）
+    for note in ensure_progress_layout(root):
+        print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     if sum(1 for x in (args.resolve, args.dismiss, args.annotate, args.set_reason) if x) > 1:
         print('BLOCKER --resolve／--dismiss／--annotate／--set-reason 不可同時使用')
         return 2

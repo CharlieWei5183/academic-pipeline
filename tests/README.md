@@ -522,3 +522,59 @@ dry-run 工作區裡的「專案根上一層」——`.ssot-workspace-origin` �
 - 規格 4（標記檔不是專案檔）：加不加標記檔，`rerun_all --fingerprint-only` 與 `check_validation` 的 rc 與輸出逐字相同；標記檔不出現在 PROGRESS 頁面，也不成為 `derive()` 的節點；工作區再開工作區時標記指回最原始那個根，且不是符號連結。
 - 規格 5（登記）：CHANGELOG 開頭就是 `## 0.23.1`；`plugin.json` ≥ 0.23.1；三支 submission-prep 腳本的 `VERSION` 為 0.23.1；本檔含 `run_v0231_regressions.py`；相關檔不含 arm 的直譯字（U+81C2）。
 - 規格 6（既有回歸）：`run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d` 完整跑一次。
+
+## run_v0240_regressions.py
+
+進度頁面現用檔搬進 `<root>/progress/`、備份搬進 `<root>/backups/`（0.24.0）。落點集中在
+`skills/status/scripts/progress_paths.py`，舊版面由 `ensure_progress_layout()` 在每個會寫檔的入口自動遷移。
+fixture 沿用 `run_v0161_regressions.fixture`（規格 7 用 `run_v0230_regressions.variant`），另有 `to_legacy()`
+把一個新版面的專案改回 0.23.1 的舊版面。執行：`python3 tests/run_v0240_regressions.py`；
+只跑某幾條：`python3 tests/run_v0240_regressions.py 3 4`（`1s` 是 server 那一條）。
+
+- 規格 1（新專案直接寫新落點）：兩支 renderer 在乾淨的專案上只寫 `progress/PROGRESS.ir.json`、
+  `progress/PROGRESS.html` 與 `progress/DECISIONS-TIMELINE.md`（stdout 印
+  `progress/PROGRESS.ir.json 已寫入`），專案根不留 `PROGRESS.*`／`DECISIONS-TIMELINE.md`；`--dry-run` 前後
+  逐檔的 size 與 mtime_ns 完全相同。HTML 的圖檔 URL 前面多一層 `../`——`FIGBASE` 與 Python 端 `HTML_BASE_UP`
+  同值、`figSrc` 帶上它、`html_url()` 不動 data／http／絕對路徑，且 `<root>/progress/../analysis/figures`
+  resolve 回 `<root>/analysis/figures`。另有 `1s`：舊版面的專案起 `progress_server.py --port 8799`，啟動就把
+  版面遷好，`/api/ping` 回 `ok` 與 pending 數、`GET /` 200 且 HTML 帶 `FIGBASE`。
+- 規格 2（舊版面自動遷移）：六個檔都在專案根的專案（外加一個手動放進 `progress/logs/` 的舊 server log，
+  證明**不以資料夾存在與否判斷**），`ensure_progress_layout()` 一次全搬、逐位元不變、`progress/logs/` 裡的
+  人工檔不被動；收件匣 pending 件數與 `ssot_token()` 都不變；第二次呼叫是 no-op。從入口跑也一樣：
+  `render_progress.py` 與 `check_inbox.py` 各一輪，stdout 有「版面遷移」、舊落點不再存在。
+- 規格 3（兩邊都有檔）：產生物四個（含 hook log）以新的為準、舊的進
+  `backups/<原名>.pre_layout_migration_backup`，同樣情形再發生一次得到 `_2`；使用者資料兩個
+  （`progress/PROGRESS.inbox.yaml` 與 `progress/PROGRESS.actions.log`）**兩份都不動**、沒有備份、
+  hook log 各記一行 `ensure_progress_layout warn`。
+- 規格 4（舊版 hook 事後又寫回根目錄）：遷移後把三個產生物寫回專案根，下一次 `render_progress.py`
+  把它們收進 `backups/`（內容確實是那三個假檔），`progress/` 那份沒被覆蓋。
+- 規格 5（備份落點與還原）：`Backups(tag, root)` 寫到 `backups/<相對路徑>.pre_<tag>_backup`（含
+  `analysis/figures/manifest.json` 這種有子目錄的、與 `progress/PROGRESS.inbox.yaml`），專案根不再出現備份檔；
+  撞名得到 `_2`；`listing()` 回新路徑；`restore()` 把改壞的檔還原、把「原本不存在」的新建檔刪掉；
+  root 之外的檔維持舊行為（備份放原檔旁邊）。
+- 規格 6（dry-run 與工作區不寫原根）：新版面與舊版面的專案各跑一輪 `render_progress --dry-run`、
+  `set_tier --dry-run`、`set_figure_role --dry-run`、`reorder_questions --dry-run`（最後這支走 `C.Chain`，把 `Chain.__init__` 在工作區遷移那一路也釘住），事前 `touch stamp` 後 `find -newer` 為空且逐檔 size／mtime_ns
+  不變；舊版面那一輪另外斷言六個舊落點都還在原地、原根沒有被建出 `progress/`。工作區：`backups/` 既不
+  symlink 也不存在（`Backups` 自己在工作區裡建，寫完原專案的 `backups/` 仍只有原本那一個檔）、`progress/`
+  是實體資料夾；舊版面的專案在工作區裡兩種落點都是實體複本，在工作區遷移後寫收件匣不會穿回原專案。
+- 規格 7（不被當成專案檔）：在 `backups/` 與 `progress/logs/` 塞進看起來像專案檔的東西（`results.json`／
+  `project.yaml` 的備份、server log）之後，`rerun_all --fingerprint-only` 的輸出逐字不變、`derive()` 的節點
+  清單與 `package_files()` 逐列不變、沒有任何節點 id 以這兩個資料夾開頭；就算把 `results.json` 的自由文字
+  直接寫成 `backups/project.yaml.pre_x_backup` 與 `progress/PROGRESS.html` 也不建節點；`check_gate.py` 與
+  `check_validation.py` 的輸出不提這兩個資料夾；`progress_hook.SKIP_DIRS` 含這兩個名字，`backups/project.yaml` 不會被當成專案根。
+- 規格 8（登記）：CHANGELOG 開頭就是 `## 0.24.0`；`plugin.json` ≥ 0.24.0；
+  `progress_paths.VERSION`＝`ssot_actions_common.LAYOUT_VERSION`＝0.24.0；本檔含 `run_v0240_regressions.py`；
+  `hooks/hooks.json` 的描述寫 `progress/logs/hook.log`；`status`／`project-init`／`submission-prep` 三份
+  SKILL.md 都寫新落點；相關檔不含 arm 的直譯字（U+81C2）。
+- 規格 9（既有回歸）：`run_v0231`／`run_v0230`／`run_v0200`／`run_v0190`／`run_v0180`／`run_literature3d`
+  完整跑一次。
+- 0.24.0 的配合改動（只改路徑、不放寬斷言）：22 支 `run_v0*` 的路徑字面加上 `progress/`／`backups/` 前綴；
+  `run_v0110` 的 `HOOK_LOG` 改成 `progress/logs/hook.log`；`run_v0190` 的 `test_patch_equivalence` 改從
+  `old_dir/'PROGRESS.html'` 讀 0.18.2 歷史 renderer 的輸出（並先清掉 copytree 帶過來的新版面那份），
+  `rp.HTML_NAME`／`rp.IR_NAME` 換成 `rp.HTML_REL`／`rp.IR_REL`；`run_v0200` 的
+  `test_missing_file_equals_0190` 在比對前補一份舊落點的收件匣給 0.19.0 的歷史模組；`run_v0230` 的
+  `test_build` 改掃 `backups/` 找備份；`run_v0231` 的 `test_registration` 把 CHANGELOG 的
+  `startswith('## 0.23.1（')` 改成「那一節仍在」，與 `run_v0190`／`run_v0200` 對既往版本的寫法一致；
+  `run_v0110`／`run_v0160`／`run_v0161`／`run_v0163`／`run_v0170`／`run_v0120` 的其餘字面與空斷言逐處列在
+  CHANGELOG 第 9 條。**`run_v0120` 的 `test_embed_figures_flag`（「預設不得內嵌圖檔」）在 0.23.1 上就已經是
+  紅的**（0.23.0 的投稿分頁縮圖以 data URI 內嵌，那條斷言寫在那個功能之前），與 0.24.0 無關、本版不動它。

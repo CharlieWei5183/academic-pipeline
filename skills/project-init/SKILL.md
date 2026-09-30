@@ -29,11 +29,14 @@ metadata:
    <root>/
    ├── project.yaml
    ├── decisions.yaml
-   ├── DECISIONS-TIMELINE.md   # 自動產生（status/scripts/render_decisions_timeline.py），不要手動編輯
-   ├── PROGRESS.ir.json        # 自動產生（status/scripts/render_progress.py 的 IR），不要手動編輯
-   ├── PROGRESS.html           # 自動產生（同上，自含 HTML 里程圖），不要手動編輯
-   ├── PROGRESS.inbox.yaml     # 進度頁面收件匣（status/scripts/progress_server.py append、check_inbox.py 結案），不是事實來源
-   ├── .progress-hook.log      # SessionEnd hook 寫入（status/scripts/progress_hook.py 的執行紀錄），不要手動編輯
+   ├── progress/               # 進度頁面的現用檔（0.24.0 起集中在這裡；落點見 status/scripts/progress_paths.py）
+   │   ├── DECISIONS-TIMELINE.md   # 自動產生（status/scripts/render_decisions_timeline.py），不要手動編輯
+   │   ├── PROGRESS.ir.json        # 自動產生（status/scripts/render_progress.py 的 IR），不要手動編輯
+   │   ├── PROGRESS.html           # 自動產生（同上，自含 HTML 里程圖），不要手動編輯
+   │   ├── PROGRESS.inbox.yaml     # 進度頁面收件匣（status/scripts/progress_server.py append、check_inbox.py 結案），不是事實來源
+   │   ├── PROGRESS.actions.log    # progress_server.py --allow-apply 每次套用追記一行，不要手動編輯
+   │   └── logs/hook.log           # SessionEnd hook 寫入（status/scripts/progress_hook.py 的執行紀錄），不要手動編輯
+   ├── backups/                # 所有腳本的備份（<原檔相對 root 的路徑>.pre_<tag>_backup，撞名加 _2）；手動備份也放這裡
    ├── protocol/
    ├── methodology/
    ├── integrity/

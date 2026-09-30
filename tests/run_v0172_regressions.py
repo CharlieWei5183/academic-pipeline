@@ -65,7 +65,7 @@ def _node_script(js: str, g: dict, body: str) -> str:
 
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'front')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function reorderStaged(', 'function anchorOf(', 'function snapOrder0(', 'function nodeMoved(', 'var stagedLayout=false;',
                    'function dummyActive(i){if(stagedLayout)return false;', 'applyOptimistic(kind,payload);reorderStaged();stageSave();renderStaged();relayout();',
                    "try{applyOptimistic(it.kind,it.payload);}catch(e){}});reorderStaged();}", 'order:n.order,staged:', "p=p||{};\n    if(kind==='package_edit'||kind==='package_build')return marks;", 'snapOrder0();   //'):
