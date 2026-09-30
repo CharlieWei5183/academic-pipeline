@@ -65,11 +65,11 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def graph(root: Path) -> dict:
-    return json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    return json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
 
 
 def ir_of(root: Path) -> dict:
-    return json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    return json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
 
 
 def _js_fn(js: str, name: str) -> str:
@@ -151,7 +151,7 @@ def test_patch_equivalence(tmp: Path) -> bool:
     shutil.copytree(PLUGIN / 'tests/mini-project', mini)
     fx = fixture(tmp, 'equiv')
     for root in (mini, fx):
-        for p in (root / rp.IR_NAME, root / rp.HTML_NAME):
+        for p in (root / rp.IR_REL, root / rp.HTML_REL):
             if p.exists():
                 p.unlink()
         pure = _ir_bytes(old, root)
@@ -175,16 +175,19 @@ def test_patch_equivalence(tmp: Path) -> bool:
     # (c) JS assignLanes 100 組（node）
     node = shutil.which('node')
     if node:
-        html_new = (fx / rp.HTML_NAME).read_text(encoding='utf-8') if (fx / rp.HTML_NAME).exists() else ''
+        html_new = (fx / rp.HTML_REL).read_text(encoding='utf-8') if (fx / rp.HTML_REL).exists() else ''
         if not html_new:
             rerender(fx)
-            html_new = (fx / rp.HTML_NAME).read_text(encoding='utf-8')
+            html_new = (fx / rp.HTML_REL).read_text(encoding='utf-8')
         js_new = _js_of(html_new)
         old_dir = tmp / 'equiv-old'
         shutil.copytree(fx, old_dir)
+        for stale in (old_dir / rp.HTML_REL, old_dir / 'PROGRESS.html'):
+            stale.unlink(missing_ok=True)   # 0.24.0：copytree 會把新版面那份 HTML 一起帶過來，先清掉才不會讀錯
         out = subprocess.run([sys.executable, str(tmp / 'render_progress_0182.py'), str(old_dir)], capture_output=True, text=True)
         assert out.returncode == 0, out.stdout[-800:] + out.stderr[-800:]
-        js_old = _js_of((old_dir / rp.HTML_NAME).read_text(encoding='utf-8'))
+        # 0.18.2 的 renderer 寫的是專案根那份（那時還沒有 progress/），所以這裡讀舊落點
+        js_old = _js_of((old_dir / 'PROGRESS.html').read_text(encoding='utf-8'))
         cases = []
         for _ in range(100):
             keys, trunks = _random_trunks(rng, rng.randint(1, 14), js=True)
@@ -250,7 +253,7 @@ def test_ir_secondary_groups(tmp: Path) -> Path:
     assert st['secondary_result_keys'] == 2 and st['secondary_groups'] == 2 and st['sensitivity_items'] == 4 and st['by_type']['result'] == 6, st
     assert st['crossings'] == 0 and st['edge_node_overlaps'] == 0, st
     # HTML：聚合節點縮排、寬減 24、沒有紅字「未驗證」（徽章代替）、圖例句、面板錨點、nest_result 新提示句
-    html = (root / rp.HTML_NAME).read_text(encoding='utf-8')
+    html = (root / rp.HTML_REL).read_text(encoding='utf-8')
     m = re.search(r'data-node-id="r:SQ1-v1#R2#secondary"[^>]*data-parent="p:SQ1-v1#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html)
     assert m and int(m.group(3)) == rp.NODE_W - 24 and int(m.group(1)) == by['r:k1']['x'] + 24, m
     seg = html[m.start():html.index('</g>', m.start())]
@@ -387,7 +390,7 @@ def _drag_harness(g: dict, js: str, body: str) -> str:
 
 def test_frontend(tmp: Path, multi_root: Path) -> None:
     root = fixture(tmp, 'front')
-    html = (root / rp.HTML_NAME).read_text(encoding='utf-8')
+    html = (root / rp.HTML_REL).read_text(encoding='utf-8')
     js = _js_of(html)
     node = shutil.which('node')
     if not node:
@@ -593,7 +596,7 @@ def test_report_node(tmp: Path) -> None:
     assert rp.validate_ir(ir_of(root2)) == []
     out2 = run(RENDER, root2)
     assert 'report.md 引用 3' in out2 and 'INFO analysis/report.md 有 1 個圖片引用對不到 manifest：figures/missing.png' in out2, out2[-900:]
-    html = (root2 / rp.HTML_NAME).read_text(encoding='utf-8')
+    html = (root2 / rp.HTML_REL).read_text(encoding='utf-8')
     assert re.search(r'class="edge e-embedded_in st-solid off" data-idx="\d+" data-from="f:F_a" data-to="o:report"', html) and 'class="gnode t-report s-done"' in html and '報告未引用' in html
     print('[regression] report.md 節點：無檔 pending（label、位置圖表欄最後一列、孤兒帶、不標圖表、INFO）；有檔 done（檔頭日期、引用比對 file、embedded_in 預設不畫、role=main 未引用徽章「報告未引用」、對不到的引用 INFO、stats）: pass')
 

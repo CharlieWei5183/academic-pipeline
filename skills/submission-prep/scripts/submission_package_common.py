@@ -87,6 +87,8 @@ GROUP_PREFIX = 'runinput:'
 
 # ---------- 路徑抽取 ----------
 
+# 0.24.0：plugin 自己的工作資料夾——備份與進度頁面現用檔，不是投稿要交的專案檔，不進衍生清單
+PLUGIN_WORKDIRS = ('backups', 'progress')
 RESULTS_REL = 'analysis/results.json'
 MANIFEST_REL = 'analysis/figures/manifest.json'
 RUNS_REL = 'analysis/runs'
@@ -443,6 +445,15 @@ def missing_worthy(token: str) -> bool:
     return '/' in token and (bool(EXT_RE.search(token)) or token.endswith('/'))
 
 
+def _is_plugin_workdir(root: Path, path: Path) -> bool:
+    """這條路徑落在 `<root>/backups/` 或 `<root>/progress/`（plugin 自己的工作資料夾）之下。"""
+    try:
+        first = path.relative_to(root).parts[0]
+    except (ValueError, IndexError):
+        return False
+    return first in PLUGIN_WORKDIRS
+
+
 def extract_paths(value: Any, resolver: Resolver, state: dict) -> tuple[list[Path], list[str], list[str]]:
     """一個自由文字欄位 → (存在的路徑, 缺檔的路徑字串, warnings)。
 
@@ -462,6 +473,9 @@ def extract_paths(value: Any, resolver: Resolver, state: dict) -> tuple[list[Pat
                 found.extend(hits)
                 missing.extend(miss)
                 warns.extend(warn)
+    # 0.24.0：`<root>/backups/` 與 `<root>/progress/` 是 plugin 自己的工作資料夾（備份、進度頁面現用檔），
+    # 不是投稿要交的專案檔，一律不建節點。這是跨專案的同一條規則，不設門檻、沒有逐專案設定。
+    found = [q for q in found if not _is_plugin_workdir(resolver.root, q)]
     return found, missing, warns
 
 

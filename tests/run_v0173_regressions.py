@@ -60,11 +60,11 @@ def reason_of(root: Path, did: str) -> str:
 
 
 def inbox_item(root: Path, iid: str) -> dict:
-    return next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == iid)
+    return next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == iid)
 
 
 def n_items(root: Path) -> int:
-    return len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'])
+    return len(plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'])
 
 
 # ---------- 後端：check_inbox --set-reason ----------
@@ -84,7 +84,7 @@ def test_set_reason(tmp: Path) -> None:
         srv.shutdown()
         srv.server_close()
     before = inbox_item(root, 'IN-002')
-    raw_before = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
+    raw_before = (root / 'progress/PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     out = run(CI, root, '--set-reason', 'IN-002', '--reason', '  改成這個  ')
     assert 'IN-002 理由已更新（status 不動）' in out and 'BLOCKER' not in out, out
     it = inbox_item(root, 'IN-002')
@@ -92,7 +92,7 @@ def test_set_reason(tmp: Path) -> None:
     assert it['body'].splitlines() == ['1. 掛到主結果下：k2 → k1', '2. 搬結果：r1 → SQ1-v1', '理由：改成這個'], it['body']
     assert {k: v for k, v in it.items() if k not in ('payload', 'body')} == {k: v for k, v in before.items() if k not in ('payload', 'body')}, it
     # IN-001（fixture 的 reassign）一個位元組都沒動
-    raw_after = (root / 'PROGRESS.inbox.yaml').read_text(encoding='utf-8')
+    raw_after = (root / 'progress/PROGRESS.inbox.yaml').read_text(encoding='utf-8')
     assert raw_after.split('  - id: "IN-002"')[0] == raw_before.split('  - id: "IN-002"')[0]
     # 空理由＝拿掉鍵與那一行
     run(CI, root, '--set-reason', 'IN-002', '--reason', '')
@@ -237,7 +237,7 @@ def test_broken_pipe(tmp: Path) -> None:
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'frontend')
     run('skills/status/scripts/render_progress.py', root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="staged-apply-why"', '<div id="staged-old" hidden></div>', "var STAGE_BATCH_KEY='ap-staged-batch:'+String(ir.project_root||location.pathname)",
                    'function stagedDryRun(', 'function stagedOldBatches(', 'function renderStagedOld(', 'function stagedBatchLoad(', 'function stagedActionsJson(',
                    "extra:function(){return {reason:stagedReason()};}", "keepalive:!!(opts&&opts.keepalive)", "window.__apBatch=function(){",

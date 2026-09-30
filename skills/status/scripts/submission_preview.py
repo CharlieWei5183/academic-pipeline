@@ -501,7 +501,7 @@ ROUTES = ('raster', 'svg', 'pdf', 'office', 'text', 'none')
 
 
 def strip_data_uri(preview) -> dict:
-    """寫進 PROGRESS.ir.json 的版本：留下走了哪條路徑與來源，`data_uri` 清掉。
+    """寫進 progress/PROGRESS.ir.json 的版本：留下走了哪條路徑與來源，`data_uri` 清掉。
 
     data URI 只給 HTML 的 `<img src>` 用；留在磁碟 IR 裡會讓整份 JSON（以及 HTML 內嵌的那份 IR）
     多出一份同樣的 base64。

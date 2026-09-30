@@ -249,7 +249,10 @@ def test_registration(tmp: Path) -> None:
     import package_edit as PE
     import build_submission_package as BP
     changelog = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert changelog.startswith('# CHANGELOG\n\n## 0.23.1（'), changelog[:80]
+    # 0.24.0：CHANGELOG 最上面換成新版了，這裡改成「0.23.1 那一節仍在」——與 v0190／v0200 對既往版本的
+    # 寫法一致（只有當時最新的那一版會用 startswith）。斷言強度不變：那一節必須存在。
+    assert changelog.startswith('# CHANGELOG\n\n## '), changelog[:40]
+    assert '\n## 0.23.1（' in changelog, changelog[:200]
     meta = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))
     assert tuple(int(x) for x in meta['version'].split('.')) >= (0, 23, 1), meta['version']
     assert S.VERSION == PE.VERSION == BP.VERSION == V, (S.VERSION, PE.VERSION, BP.VERSION)

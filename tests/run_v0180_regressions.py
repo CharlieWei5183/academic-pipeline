@@ -58,7 +58,7 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def graph(root: Path) -> dict:
-    return json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    return json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
 
 
 def _js_fn(js: str, name: str) -> str:
@@ -97,7 +97,7 @@ def test_ir_groups(tmp: Path) -> None:
     main_m = [n['id'] for n in sorted((n for n in g['nodes'] if n['band'] == 'main' and n['col'] == 2), key=lambda n: n['order'])]
     assert main_m == ['p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'p:SQ1-v1#R2', 'p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1'], main_m
     # HTML：群縮排一層、子分析縮兩層、plan → 群 L 形線、沒有短垂線、圖例句
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     m = re.search(r'data-node-id="p:SQ1-v1#S"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html)
     assert m and int(m.group(3)) == rp.NODE_W - 24 and int(m.group(1)) == by['p:SQ1-v1']['x'] + 24
     m2 = re.search(r'data-node-id="p:SQ1-v1#R1"[^>]*>\s*<rect class="box" width="(\d+)"', html)
@@ -110,7 +110,7 @@ def test_ir_groups(tmp: Path) -> None:
                   '掛到主結果下／降為敏感性子分析／Extended Data 歸屬／投稿清單／打包投稿檔案／批次'):   # 0.20.0 多 set_tier、0.23.0 多投稿那兩種
         assert token in html, f'HTML 缺 {token}'
     # validate_ir 新規則
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert rp.validate_ir(ir) == []
 
     def mutate(fn):
@@ -225,7 +225,7 @@ def test_demote_apply(tmp: Path) -> Path:
     assert agg['label'] == 'a1' and [k['key'] for k in agg['meta']['keys']] == ['a1'] and agg['state'] == 'done', agg
     assert by['p:SQ1-v2']['badge'] == 'v2（1 舊版）｜敏感性 4' and by['p:SQ1-v2#S']['badge'] == '4 項' and by['p:SQ1-v2#R4']['parent'] == 'p:SQ1-v2#S'
     assert by['p:AQ1-v1']['collapsed'] is True and by['q:AQ1']['state'] == 'blocked' and 'p:AQ1-v1#S' in by and by['p:AQ1-v1#S']['collapsed'] is True
-    assert rp.validate_ir(json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
+    assert rp.validate_ir(json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
     # 再降一次：來源已非 active → exit 2
     assert '不是任何問題的 active plan' in run(DP, root, '--plan', 'AQ1-v1', '--to-plan', 'SQ1-v2', '--dry-run', expect=2)
     return root
@@ -244,7 +244,9 @@ def test_failure_restores(tmp: Path) -> None:
         os.chmod(root / 'decisions.yaml', 0o644)
     assert 'BLOCKER dry-run 失敗' in out and '已還原' in out and 'Permission denied' in out, out
     assert tree_hashes(root) == before
-    assert not (root / 'analysis/plans/SQ1-v2.yaml').exists() and not list(root.glob('*_backup')) and not list(root.glob('analysis/**/*_backup'))
+    # 0.24.0：備份改落 backups/，連 backups/ 一起看（否則空斷言）
+    assert not (root / 'analysis/plans/SQ1-v2.yaml').exists() and not list(root.glob('*_backup')) \
+        and not list(root.glob('analysis/**/*_backup')) and not list(root.glob('backups/**/*_backup'))
     out = run(DP, root, '--plan', 'AQ1-v1', '--to-plan', 'SQ1-v1', '--dry-run')
     token = re.search(r'^token: (\S+)$', out, re.M).group(1)
     p = root / 'decisions.yaml'
@@ -279,7 +281,7 @@ def test_payload_server_batch(tmp: Path) -> None:
         assert st == 201 and d['id'] == 'IN-002', (st, d)
         assert _post(port, '/api/inbox', {'kind': 'demote_plan', 'payload': {'plan': 'SQ1-v1', 'to_plan': 'SQ2-v1'}})[0] == 400
         assert _post(port, '/api/inbox', {'kind': 'demote_plan', 'payload': {'plan': 'AQ1-v1'}})[0] == 400
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['target'] == 'p:AQ1-v1' and it['title'] == '降為敏感性子分析：AQ1-v1 → SQ1-v1' and it['payload'] == {'plan': 'AQ1-v1', 'to_plan': 'SQ1-v1'}, it
         before = tree_hashes(root)
         st, d = _post(port, '/api/actions/dry-run', {'id': 'IN-002'})
@@ -287,7 +289,7 @@ def test_payload_server_batch(tmp: Path) -> None:
         assert tree_hashes(root) == before
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': d['token']})
         assert st == 200 and d['ok'] and d['decision'] == 'D-003' and d['run_log'].startswith('reviews/demote-plan-AQ1-v1-SQ1-v1-'), d
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-002', 'demote_plan.py', 'ok', 'D-003']], log
         assert inbox_status(root)['IN-002'][0] == 'done' and 'D-003' in inbox_status(root)['IN-002'][1]
         d3 = decision(root, 'D-003')
@@ -315,7 +317,7 @@ def test_payload_server_batch(tmp: Path) -> None:
 
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'fe')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     js = _js_of(html)
     for anchor in ("kind:'demote_plan',ok:true", "kind:'demote_plan',ok:false", "else if(kind==='demote_plan')", 'staged_gone', 'function fixBox(', 'function setBadge(',
                    "typeof nestHidden!=='undefined'&&nestHidden[n.parent]", 'sensitivity_group:24,sensitivity:48', "showActGroup('demote-plan')", "if(k==='demote_plan')return '降為敏感性子分析："):
@@ -328,7 +330,7 @@ def test_frontend(tmp: Path) -> None:
     js_path.write_text(js, encoding='utf-8')
     proc = subprocess.run([node, '--check', str(js_path)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     g = ir['graph']
     pos = {n['id']: n for n in g['nodes']}
     parts = '\n'.join(_js_fn(js, n) for n in ('questionKind', 'isActivePlan', 'isSensItem', 'isL', 'resultOwner', 'isDragResult', 'draggable', 'nodeVisible', 'nodeW', 'hitNode',

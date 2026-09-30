@@ -126,7 +126,7 @@ def test_server_batch_reason(tmp: Path) -> None:
         st, d = _post(port, '/api/inbox', {'kind': 'batch', 'payload': {'actions': TWO, 'reason': '整批 server'}})
         assert st == 201 and d['id'] == 'IN-002', (st, d)
         assert _post(port, '/api/inbox', {'kind': 'batch', 'payload': {'actions': TWO, 'reason': ['x']}})[0] == 400
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['payload']['reason'] == '整批 server' and it['body'].splitlines()[-1] == '理由：整批 server' and it['body'].count('理由：') == 1, it
         assert it['payload']['actions'][0] == {'kind': 'nest_result', 'payload': {'key': 'k2', 'under': 'k1'}}
         st, d = _post(port, '/api/actions/dry-run', {'id': 'IN-002'})
@@ -146,7 +146,7 @@ def test_server_batch_reason(tmp: Path) -> None:
 
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'front')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="opt-form-on-drop"', '放開時先開表單</label>', 'id="staged-reason"', '理由（整批，可空）</label>', 'function stageDirect(', 'function defaultPayload(',
                    'function stageEdit(', 'function toastUndo(', 'function stageRemove(', 'class="st-edit"', "textContent='更新暫存'", '（放開即暫存）', '（放開後填理由）',
                    "var FORM_ON_DROP_KEY='ap-form-on-drop'", "var STAGE_REASON_KEY='ap-staged-reason:'+String(ir.project_root||location.pathname)",
@@ -219,7 +219,7 @@ def test_headless_noform(tmp: Path) -> bool:
         T3._open_page(ws, port, form_on_drop=False)
         s0 = state()
         assert s0['opt'] is False and s0['fod'] is False and s0['n'] == '0' and s0['hidden'] is True and s0['ls'] is None and s0['k2']['parent'] == '', s0
-        n_items = len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'])
+        n_items = len(plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'])
         # (1) 放開即暫存：沒有表單、暫存 1 項、toast 含「已暫存」與「復原」
         d = json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))
         assert d['label'].endswith('（放開即暫存）') and d['formHidden'] is True, d
@@ -228,7 +228,7 @@ def test_headless_noform(tmp: Path) -> bool:
         assert s1['k2']['parent'] == 'r:k1' and s1['k2']['subtype'] == 'supporting' and s1['k2']['staged'] is True, s1['k2']
         assert s1['toastHidden'] is False and s1['toast'].startswith('已暫存：掛到主結果下：k2 → k1') and '復原' in s1['toast'] and s1['undo'] is True, s1
         assert s1['staged'] == [{'kind': 'nest_result', 'payload': {'key': 'k2', 'under': 'k1'}, 'reason': ''}], s1['staged']
-        assert len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']) == n_items, '暫存不得呼叫 server'
+        assert len(plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']) == n_items, '暫存不得呼叫 server'
         # (2) 復原：暫存 0、節點回原位
         _reload(ws)
         ws.eval("document.querySelector('#toast a.toast-undo').click();'ok'")
@@ -270,9 +270,9 @@ def test_headless_noform(tmp: Path) -> bool:
         summ = T3._wait(ws, "document.getElementById('staged-summary').textContent", lambda v: v and ('token:' in v or 'BLOCKER' in v or '失敗' in v), timeout=180)
         assert '第 1／2 步（nest_result）：D-003' in summ and '第 2／2 步（move_result）：D-004' in summ and '預定決策 D-003–D-004' in summ, summ
         assert ws.eval("document.getElementById('staged-batch-id').textContent") == '收件匣 IN-002' and ws.eval("document.getElementById('staged-apply').disabled") is False
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['kind'] == 'batch' and it['payload']['reason'] == '整批測試' and it['body'].splitlines() == ['1. 掛到主結果下：k2 → k1', '2. 搬結果：r2 → AQ1-v1', '理由：整批測試'], it
-        assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} <= {'PROGRESS.inbox.yaml', 'PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'}
+        assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} <= {'progress/PROGRESS.inbox.yaml', 'progress/PROGRESS.html', 'progress/PROGRESS.ir.json', 'progress/DECISIONS-TIMELINE.md'}
         _reload(ws)
         ws.eval("document.getElementById('staged-apply').click();'ok'")
         _wait_page(ws, timeout=240)

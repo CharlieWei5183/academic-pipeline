@@ -2,22 +2,23 @@
 """SessionEnd hook: session 結束時自動重算 academic-pipeline 專案的三個進度產物。
 
 用途: 由 plugin 級 `hooks/hooks.json` 在 Claude Code 的 `SessionEnd` 事件觸發，依序執行同目錄的
-`render_progress.py <root>`（寫 `PROGRESS.ir.json`＋`PROGRESS.html`）與
-`render_decisions_timeline.py <root>`（寫 `DECISIONS-TIMELINE.md`）。兩支 renderer 都唯讀 SSOT；
+`render_progress.py <root>`（寫 `progress/PROGRESS.ir.json`＋`progress/PROGRESS.html`）與
+`render_decisions_timeline.py <root>`（寫 `progress/DECISIONS-TIMELINE.md`）。兩支 renderer 都唯讀 SSOT；
 本 hook 自己只多寫一個 log，不碰任何 SSOT，也不改 renderer 的寫入行為。
 
 觸發與輸入: Claude Code 從 stdin 餵一份 JSON（SessionEnd 提供 `cwd`、`session_id`、
 `hook_event_name`、`reason`），本腳本只取 `cwd` 與 `session_id`。stdin 空、不是 JSON 或沒有 `cwd`
 → 改用 `--cwd <path>`（手動測試用），再沒有就 `os.getcwd()`。
 
-找專案根: 候選＝cwd 本身，再加 cwd 下一層非隱藏子目錄（排除 archive、data、node_modules、.git，
-依名稱排序）；第一個含 `project.yaml`、可解析為 dict 且含 `goals` 或 `project` 鍵者即為根。
+找專案根: 候選＝cwd 本身，再加 cwd 下一層非隱藏子目錄，依名稱排序；排除 archive、data、node_modules、
+`.git`，以及 backups、progress（0.24.0；後兩個是本 plugin 自己的工作資料夾，裡面的檔不是專案檔）。
+第一個含 `project.yaml`、可解析為 dict 且含 `goals` 或 `project` 鍵者即為根。
 路徑含 `/archive/` 的一律跳過。找不到 → 靜默 exit 0（不寫 log）。
 
 逃生口: 環境變數 `ACADEMIC_PIPELINE_PROGRESS_HOOK=off` → 靜默 exit 0，什麼都不做。
 （`--find-only` 是唯讀診斷，不受此開關影響。）
 
-log: `<root>/.progress-hook.log`，每支 renderer 追加一行
+log: `<root>/progress/logs/hook.log`（0.24.0；舊落點 `<root>/.progress-hook.log` 第一次跑時自動搬過去），每支 renderer 追加一行
 `<ISO 時間>\\t<session_id 或 ->\\t<script>\\tok|fail rc=<n>|timeout|error\\t<stderr／例外最後 200 字，單行>`；
 檔案超過 200 KB 時先截成最後 100 KB（對齊到換行）再追加。log 本身寫不進去也吞掉。
 
@@ -39,10 +40,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import progress_paths as PL  # noqa: E402  進度頁面檔案的落點（0.24.0）；只用標準庫，不會讓 hook 因缺套件掛掉
+
 ENV_SWITCH = 'ACADEMIC_PIPELINE_PROGRESS_HOOK'
-LOG_NAME = '.progress-hook.log'
 RENDERERS = ('render_progress.py', 'render_decisions_timeline.py')
-SKIP_DIRS = frozenset({'archive', 'data', 'node_modules', '.git'})
+# backups／progress 是本 plugin 自己的工作資料夾，不是專案根候選（0.24.0）
+SKIP_DIRS = frozenset({'archive', 'data', 'node_modules', '.git', PL.BACKUPS_DIR, PL.DIR})
 LOG_MAX_BYTES = 200 * 1024
 LOG_KEEP_BYTES = 100 * 1024
 RENDERER_TIMEOUT_SEC = 15
@@ -146,7 +150,8 @@ def _rotate_if_needed(log: Path) -> None:
 
 def append_log(root: Path, session_id: str, script: str, status: str, detail: str) -> None:
     try:
-        log = root / LOG_NAME
+        log = PL.path(root, 'hook_log')
+        log.parent.mkdir(parents=True, exist_ok=True)
         _rotate_if_needed(log)
         ts = dt.datetime.now().astimezone().isoformat(timespec='seconds')
         line = f'{ts}\t{session_id or "-"}\t{script}\t{status}\t{_one_line(detail)}\n'
@@ -188,7 +193,7 @@ def run_renderer(script: Path, root: Path) -> tuple[str, str]:
 
 def run(argv: list[str] | None) -> None:
     parser = argparse.ArgumentParser(
-        description='academic-pipeline SessionEnd hook：重算 PROGRESS.ir.json／PROGRESS.html／DECISIONS-TIMELINE.md',
+        description='academic-pipeline SessionEnd hook：重算 progress/ 底下的 PROGRESS.ir.json／PROGRESS.html／DECISIONS-TIMELINE.md',
         add_help=True,
     )
     parser.add_argument('--cwd', default=None, help='stdin 沒有 cwd 時改用此路徑（手動測試用）')
@@ -219,6 +224,10 @@ def run(argv: list[str] | None) -> None:
 
     session_id = hook_input.get('session_id')
     session_id = session_id.strip() if isinstance(session_id, str) else ''
+    # 0.24.0：renderer 跑之前先把舊版面搬成 progress/ 版面，遷移本身也記進 log
+    for note in PL.ensure_progress_layout(root):
+        append_log(root, session_id, 'ensure_progress_layout',
+                   'warn' if note.startswith('WARNING') else 'ok', note)
     here = Path(__file__).resolve().parent
     for name in RENDERERS:
         status, detail = run_renderer(here / name, root)

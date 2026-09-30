@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""決策時間軸 renderer（確定性）: 把 decisions.yaml 渲染成專案根目錄的 DECISIONS-TIMELINE.md。
+"""決策時間軸 renderer（確定性）: 把 decisions.yaml 渲染成 <root>/progress/DECISIONS-TIMELINE.md。
 
 用法: python3 render_decisions_timeline.py <project-root> [--dry-run] [--json]
 
 讀取（只讀）: <root>/project.yaml、<root>/decisions.yaml、<root>/analysis/results.json
-寫入: 只寫 <root>/DECISIONS-TIMELINE.md（一張記錄表＋一個 mermaid gantt 里程碑圖＋統計）
+寫入: 只寫 <root>/progress/DECISIONS-TIMELINE.md（一張記錄表＋一個 mermaid gantt 里程碑圖＋統計）
+      （0.24.0 起落在 progress/；舊版面的專案在第一次非 dry-run 的呼叫時自動搬過去，見 progress_paths.py）
 
 旗標:
-- --dry-run  不寫檔；單獨使用時把整份 DECISIONS-TIMELINE.md 印到 stdout
+- --dry-run  不寫檔（也不做版面遷移）；單獨使用時把整份 DECISIONS-TIMELINE.md 印到 stdout
 - --json     stdout 改印機器可讀 JSON（schema_version 1），不印 markdown；
              與 --dry-run 正交（單獨用仍寫檔；兩者同時 = 只印 JSON、不寫）
 
@@ -39,6 +40,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import progress_paths as PL  # noqa: E402  進度頁面檔案的落點（0.24.0）
 
 try:
     import yaml
@@ -381,9 +385,9 @@ def build_json(rows: list[dict], title: str, root: Path, generated_at: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description='把 decisions.yaml 渲染成 <root>/DECISIONS-TIMELINE.md（決策時間軸）')
+        description='把 decisions.yaml 渲染成 <root>/progress/DECISIONS-TIMELINE.md（決策時間軸）')
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
-    parser.add_argument('--dry-run', action='store_true', help='不寫檔；單獨使用時把 DECISIONS-TIMELINE.md 印到 stdout')
+    parser.add_argument('--dry-run', action='store_true', help='不寫檔（也不做版面遷移）；單獨使用時把 DECISIONS-TIMELINE.md 印到 stdout')
     parser.add_argument('--json', action='store_true', help='stdout 改印機器可讀 JSON')
     args = parser.parse_args()
 
@@ -397,6 +401,10 @@ def main() -> int:
     root = root.resolve()
     if not quiet_stdout:
         print(f'=== render_decisions_timeline: {root} ===')
+    # 0.24.0：真的要寫檔時先把舊版面搬成 progress/ 版面；--dry-run 不搬。
+    if not args.dry_run:
+        for note in PL.ensure_progress_layout(root):
+            print(f'INFO 版面遷移 {note}' if not note.startswith('WARNING') else note, file=diag)
 
     decisions, dec_present, dec_error = load_decisions(root)
     if dec_error is not None:
@@ -443,10 +451,11 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    out_path = root / 'DECISIONS-TIMELINE.md'
+    out_path = PL.path(root, 'timeline')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding='utf-8', newline='\n')
     if not args.json:
-        print(f'DECISIONS-TIMELINE.md 已寫入: {out_path}')
+        print(f'{PL.NEW["timeline"]} 已寫入: {out_path}')
         print(_stats_line(rows))
         print('結果: 完成')
     return 0

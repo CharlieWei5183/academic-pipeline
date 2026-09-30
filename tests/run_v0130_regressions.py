@@ -281,7 +281,7 @@ def test_html_subnodes() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         for token in ('data-node-id="p:SQ1-v2#R1"', 'data-parent="p:SQ1-v2"', 'class="gnode t-method s-done sub"', 'class="gnode t-method s-pending sub"',
                       'class="gnode t-method s-expired sub gone"', 'class="edge e-sensitivity st-solid" data-idx=', 'class="edge e-produces st-dashed" data-idx=',
                       "敏感性子分析", "未宣告", '<text class="st unval"', "未驗證", "縮排子節點＝敏感性子分析", "虛線＝未宣告", "父分析",
@@ -331,7 +331,7 @@ def test_main_question_own_column() -> None:
             assert ("q:main", q["id"], "decomposes") in edges and edges[("q:main", q["id"], "decomposes")]["default_visible"] is True
         rc, out, err = run(root)
         assert rc == 0, out + err
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         m = re.search(r'data-from="q:main" data-to="q:SQ1" data-type="decomposes"[^>]*? d="([^"]*)"', html_text)
         assert m and m.group(1).startswith(f"M{main['x'] + 260},"), m.group(1) if m else None
         assert "欄序：主問題 → 問題（SQ／AQ）" in html_text
@@ -437,7 +437,7 @@ def test_route_no_overlap_in_fixture_and_html() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        ir = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         g = ir["graph"]
         by_id = {n["id"]: n for n in g["nodes"]}
         shown = {n["id"] for n in g["nodes"] if not n["collapsed"] and n["type"] != "decision"}
@@ -456,7 +456,7 @@ def test_route_no_overlap_in_fixture_and_html() -> None:
         assert r["overflow"] == [] and all(v <= rp.TRUNK_MAX_LANES - 1 for v in r["lane_max"].values())
         # 每條可見邊都有 path；同幹線的分支共用幹線 x（v0.15.0：supplements 對照短垂線也不進 route_edges）
         assert set(r["paths"]) == {i for i, e in drawn if e["type"] not in ("sensitivity", "supplements")}
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         assert '<g id="graph-trunks">' in html_text and 'class="trunk e-plans st-solid" data-trunk="q:main|1|decomposes|solid|fwd"' not in html_text
         assert 'class="trunk e-decomposes st-solid" data-trunk="q:main|1|decomposes|solid|fwd" data-gap="0" data-lane="0"' in html_text
         # v0.15.0：p → r 跳欄邊拆成 p → dummy（走道 2）與 dummy → r（走道 3）兩段，邊的 data-trunk 列兩段的幹線 key
@@ -471,7 +471,7 @@ def test_route_no_overlap_in_fixture_and_html() -> None:
             print("  （無 headless Chrome，略過 Python／JS 路徑比對）")
             return
         proc = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000", "--dump-dom",
-                               f"file://{root / 'PROGRESS.html'}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
+                               f"file://{root / 'progress/PROGRESS.html'}#relations"], capture_output=True, text=True, encoding="utf-8", timeout=90)
         dom = proc.stdout
         if "<svg" not in dom:
             print("  （headless Chrome 未回 DOM，略過 Python／JS 路徑比對）")
@@ -493,7 +493,7 @@ def test_secondary_results_are_children() -> None:
         write_fixture(root)
         rc, out, err = run(root)
         assert rc == 0, out + err
-        g = json.loads((root / "PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
+        g = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))["graph"]
         nodes = {n["id"]: n for n in g["nodes"]}
         A22, A23 = "r:SQ1-v2#R2#secondary", "r:SQ1-v2#R3#secondary"   # 0.19.0：次要結果＝每個子分析一個聚合節點（k4 → R2；k6／k7 → R3）
         k1, k2, k4, k5, k6 = (nodes[k] for k in ("r:k1", "r:k2", A22, "r:k5", A23))
@@ -512,7 +512,7 @@ def test_secondary_results_are_children() -> None:
         # 產出邊仍由子分析連到次要結果（聚合節點）；結果欄沒有 L 形線（sensitivity 邊只在方法欄）
         edges = {(e["from"], e["to"], e["type"]) for e in g["edges"]}
         assert ("p:SQ1-v2#R2", A22, "produces") in edges and not any(t == "sensitivity" and to.startswith("r:") for _, to, t in edges)
-        html_text = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         mk4 = re.search(r'data-node-id="r:SQ1-v2#R2#secondary"[^>]*data-parent="p:SQ1-v2#R2"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         mk1 = re.search(r'data-node-id="r:k1"[^>]*transform="translate\((\d+),(\d+)\)"[^>]*>\s*<rect class="box" width="(\d+)"', html_text)
         assert mk4 and mk1 and int(mk4.group(1)) == int(mk1.group(1)) + 24 and int(mk4.group(3)) == int(mk1.group(3)) - 24, (mk4, mk1)
@@ -533,9 +533,9 @@ def test_secondary_results_are_children() -> None:
         assert n2["r:k1"]["collapsed"] is False and n2["r:k1"]["subtype"] == "primary"
         rc, out, err = run(root)
         assert rc == 0, out + err
-        assert 'class="gnode t-result s-done sub gone"' in (root / "PROGRESS.html").read_text(encoding="utf-8") or \
-            re.search(r'data-node-id="r:SQ1-v2#R2#secondary"[^>]*class=', (root / "PROGRESS.html").read_text(encoding="utf-8")) is None
-        html2 = (root / "PROGRESS.html").read_text(encoding="utf-8")
+        assert 'class="gnode t-result s-done sub gone"' in (root / "progress/PROGRESS.html").read_text(encoding="utf-8") or \
+            re.search(r'data-node-id="r:SQ1-v2#R2#secondary"[^>]*class=', (root / "progress/PROGRESS.html").read_text(encoding="utf-8")) is None
+        html2 = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
         assert re.search(r'<g class="gnode t-result s-\w+ sub gone" data-node-id="r:SQ1-v2#R2#secondary"', html2), "收合的次要結果（聚合節點）帶 gone"
 
 
