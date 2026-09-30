@@ -7,19 +7,20 @@
 analysis/results.json、analysis/validation.yaml、analysis/claims.yaml、analysis/claim-audit.yaml、
 methodology/route.yaml、integrity/register.yaml、analysis/data-audit.yaml、literature/*、
 analysis/figures/manifest.json、manuscript/{zh,en}/v*.md、reviews/issue-ledger.yaml、evaluations/*.md
-寫入: 只寫 <root>/PROGRESS.ir.json（IR）與 <root>/PROGRESS.html（自含 HTML）
+寫入: 只寫 <root>/progress/PROGRESS.ir.json（IR）與 <root>/progress/PROGRESS.html（自含 HTML）
+      （0.24.0 起落在 progress/；舊版面的專案在第一次非 dry-run 的呼叫時由 progress_paths.ensure_progress_layout() 自動搬過去）
 
 旗標:
 - --dry-run  不寫檔（連投稿分頁的縮圖快取也不寫）；單獨使用時把整份 HTML 印到 stdout
 - --json     stdout 改印 IR（ensure_ascii=False, indent=2）；與 --dry-run 正交
              （單獨用仍寫檔；兩者同時 = 只印 IR、不寫）
-- --ir-only  只寫 PROGRESS.ir.json、不寫 PROGRESS.html
+- --ir-only  只寫 progress/PROGRESS.ir.json、不寫 progress/PROGRESS.html
 - --embed-figures  圖表節點 meta.data_uri 內嵌圖檔（svg／png、單檔 ≤ 5 MB，超過跳過並 WARNING）；預設不內嵌，
-             HTML 以相對路徑 meta.file 顯示（HTML 在專案根，相對路徑直接可用）
+             HTML 以 meta.file 前面加一層 `../` 顯示（HTML 在 <root>/progress/，見 HTML_BASE_UP）
 - --no-previews  不產生投稿分頁「圖／表」欄的縮圖預覽（預設會產生）。預覽只進 HTML 的 <img src>，
-             不進 PROGRESS.ir.json、也絕不影響打包；快取見 submission_preview.py
+             不進 progress/PROGRESS.ir.json、也絕不影響打包；快取見 submission_preview.py
 
-收件匣（唯讀）: 讀 <root>/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
+收件匣（唯讀）: 讀 <root>/progress/PROGRESS.inbox.yaml（progress_server.py 寫、check_inbox.py 結案）→ IR 頂層 inbox
 {present, pending, items}（0.16.0 起 item 另帶 payload 物件：reassign {from, to, primary_model}／set_role {figures}／promote {from, to}／
 move_plan {plan, to_question}／move_sensitivity {plan, item, to_plan}／reorder {list, order}／move_result {key, to_plan, to_item, new_item?}／
 nest_result {key, under}，其他 kind 為 {}）、
@@ -138,9 +139,17 @@ except ImportError:
     print('需要 PyYAML: pip install pyyaml --break-system-packages')
     sys.exit(2)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import progress_paths as PL  # noqa: E402  進度頁面檔案的落點（0.24.0 起集中在 <root>/progress/）
+
 SCRIPT_REL = 'skills/status/scripts/render_progress.py'
-IR_NAME = 'PROGRESS.ir.json'
-HTML_NAME = 'PROGRESS.html'
+IR_REL = PL.NEW['ir']            # progress/PROGRESS.ir.json（0.24.0；0.23.1 以前是專案根的 PROGRESS.ir.json）
+HTML_REL = PL.NEW['html']        # progress/PROGRESS.html
+# PROGRESS.html 從 0.24.0 起放在 <root>/progress/，IR 裡的 meta.file 仍是相對 root 的路徑，
+# 顯示圖檔時要往上一層。`file://` 開頁面時 `../analysis/figures/x.svg` 就是 <root>/analysis/figures/x.svg；
+# 用 progress_server 開時頁面在 `/`，瀏覽器把多餘的 `../` 夾在原點，解出 `/analysis/figures/x.svg`，
+# 正好是 server 的靜態檔路徑。同一份 HTML 兩種開法都對，server 的路由不必改。
+HTML_BASE_UP = '../'
 SCHEMA_VERSION = 1
 STATES = ('done', 'expired', 'blocked', 'pending', 'unknown')
 STATE_ZH = {'done': '完成', 'expired': '過期', 'blocked': '受阻', 'pending': '未到', 'unknown': '不明'}
@@ -223,7 +232,7 @@ REL = {
     'manifest': 'analysis/figures/manifest.json',
     'extended_data': 'analysis/extended-data.yaml',   # 0.20.0：哪些方法／結果／驗證放 Extended Data 區帶（opt-in；不在 fingerprint 雜湊範圍）
     'ledger': 'reviews/issue-ledger.yaml',
-    'inbox': 'PROGRESS.inbox.yaml',
+    'inbox': PL.NEW['inbox'],   # 0.24.0：progress/PROGRESS.inbox.yaml；舊版面的專案由 PL.locate() 回退到根目錄那份
 }
 
 # 文獻引用 3D 圖（0.21.0）：固定路徑，可用 --literature-graph 改指別的檔案（測試與預覽用）
@@ -238,6 +247,13 @@ LIT_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
 # ---------- 讀檔（唯讀） ----------
+
+def html_url(rel_path: str) -> str:
+    """相對 root 的路徑 → 從 PROGRESS.html（在 <root>/progress/）看得到的 URL。見 HTML_BASE_UP。"""
+    if not rel_path or rel_path.startswith(('data:', 'http://', 'https://', '/')):
+        return rel_path
+    return HTML_BASE_UP + rel_path
+
 
 def _one_line(exc: BaseException) -> str:
     return ' '.join(str(exc).split()) or type(exc).__name__
@@ -257,7 +273,9 @@ class Sources:
         if key in self._cache:
             return self._cache[key]
         rel = REL[key]
-        path = self.root / rel
+        # 0.24.0：收件匣的落點搬進 progress/，舊版面的專案在遷移前還在根目錄；讀一律用 locate() 回退，
+        # 這樣 --dry-run（不遷移）也讀得到，而且讀取本身不會改動任何檔。
+        path = PL.locate(self.root, 'inbox') if key == 'inbox' else self.root / rel
         if not path.is_file():
             out = ('missing', None, '')
         else:
@@ -3028,7 +3046,7 @@ def validate_graph(graph) -> list[str]:
 # ---------- 收件匣（唯讀） ----------
 
 def build_inbox(src: Sources, graph: dict) -> dict:
-    """讀 PROGRESS.inbox.yaml（唯讀）：回傳 IR 的 inbox 區塊，並把 pending 項掛到圖節點 meta.inbox／badge。"""
+    """讀 progress/PROGRESS.inbox.yaml（唯讀）：回傳 IR 的 inbox 區塊，並把 pending 項掛到圖節點 meta.inbox／badge。"""
     st = src.status('inbox')
     if st == 'missing':
         return {'present': False, 'pending': 0, 'items': []}
@@ -4181,6 +4199,7 @@ GRAPH_JS = """
 (function(){
   var raw=document.getElementById('progress-ir');if(!raw)return;
   var ir=JSON.parse(raw.textContent);var G=ir.graph;if(!G)return;
+  var FIGBASE='../';  // 與 Python 端 HTML_BASE_UP 同值：HTML 在 <root>/progress/，meta.file 相對 root
   var NODE_W=260,NODE_H=36,COL_PITCH=380,ROW_GAP=48,GRAPH_PAD=20;  // 與 Python 端同名常數同值（測試比對）
   var BAND_TITLE_H=28,BAND_GAP=40,BAND_TITLE_DY=18;  // 區帶標題列高、區帶間距、標題基線偏移；與 Python 端同名常數同值
   var BANDS=['main','ext','supp'];  // 區帶由上而下；與 Python 端 BANDS 同序
@@ -4608,7 +4627,7 @@ GRAPH_JS = """
     syncTrunks();body.innerHTML=h;panel.hidden=false;
   }
   function plainCaption(c){return String(c||'').replace(/\*{1,2}/g,'');}
-  function figSrc(f){return f.meta.data_uri||f.meta.file||'';}
+  function figSrc(f){return f.meta.data_uri||(f.meta.file?FIGBASE+f.meta.file:'');}
   function figBlock(f){
     var src=figSrc(f);var h='<div class="fig" data-fig="'+esc(f.id)+'">';
     if(src)h+='<img loading="lazy" alt="'+esc(f.id)+'" data-src="'+esc(src)+'" data-cap="'+esc(plainCaption(f.meta.caption))+'">';
@@ -4786,7 +4805,7 @@ GRAPH_JS = """
   function toastUndo(msg,fn){var t=document.getElementById('toast');t.textContent=msg+' ';var a=document.createElement('a');a.href='#';a.className='toast-undo';a.textContent='復原';
     a.addEventListener('click',function(e){e.preventDefault();t.hidden=true;fn();});t.appendChild(a);t.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true;},6000);}
   var actionsOk=false,actionsWhy='server 未開 --allow-apply',nextAq='',nextSq='';   // actionsWhy：「全部套用」停用時顯示在鈕旁的原因（0.17.3）
-  function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});
+  function enableInbox(){serverOk=true;newBtn.disabled=false;newBtn.title='';hintEl.textContent='已連上 progress_server.py，送出會寫入 progress/PROGRESS.inbox.yaml（不直接改 SSOT）';Array.prototype.forEach.call(document.querySelectorAll('.inbox-comment,.act-reassign,.act-promote,.act-setrole'),function(b){b.disabled=false;b.title='';});
     Array.prototype.forEach.call(document.querySelectorAll('.act-dismiss-row'),function(b){b.disabled=false;b.title='標 dismissed（代跑 check_inbox.py --dismiss），不改 SSOT';});}   // 0.18.2 面板每列的撤回鈕只要連上 server（不需 --allow-apply）
   function enableActions(){actionsOk=true;actionsWhy='';var sp=document.getElementById('staged-preview');if(sp){sp.disabled=false;sp.title='';}var hint=document.getElementById('actions-hint');if(hint)hint.textContent='已連上 progress_server.py --allow-apply：「預覽變更」跑腳本 --dry-run（不寫檔），「套用」才跑 --apply（腳本自己備份、失敗還原）。';
     Array.prototype.forEach.call(document.querySelectorAll('.act-preview'),function(b){b.disabled=false;b.title='';});}
@@ -6751,7 +6770,7 @@ def _sub_thumb(fig: dict) -> str:
     if 'preview' not in fig:
         return ''                       # 整批關掉（--no-previews）：連位置都不留
     pv = fig.get('preview') or {}
-    src = pv.get('data_uri') or pv.get('src') or ''
+    src = pv.get('data_uri') or html_url(pv.get('src') or '')
     if not src:
         return '<div class="sub-thumb is-none" aria-hidden="true">無預覽</div>'
     cap = (fig['figure_number'] + ' ｜ ' if fig['figure_number'] else '') + fig['label']
@@ -7714,7 +7733,7 @@ def _inbox_block(ir: dict) -> list[str]:
     labels = {n['id']: n['label'] for n in ir['graph']['nodes']}
     lines = []
     if inbox['present']:
-        lines.append(f'<details id="inbox-banner"><summary>收件匣待處理 {inbox["pending"]} 筆（PROGRESS.inbox.yaml，共 {len(inbox["items"])} 筆）</summary>')
+        lines.append(f'<details id="inbox-banner"><summary>收件匣待處理 {inbox["pending"]} 筆（progress/PROGRESS.inbox.yaml，共 {len(inbox["items"])} 筆）</summary>')
         pend = [it for it in inbox['items'] if it['status'] == 'pending']
         if pend:
             lines.append('<table><thead><tr><th>id</th><th>kind</th><th>target</th><th>title</th><th>at</th></tr></thead><tbody>')
@@ -7813,7 +7832,7 @@ def _actions_panel(ir: dict, labels: dict) -> list[str]:
         '<div id="act-role-fields" hidden><label for="act-fig">figure</label><input id="act-fig" readonly>',
         '<label for="act-role">role</label><select id="act-role"><option value="main">main（Main 主圖）</option><option value="extended">extended（Extended Data）</option><option value="supplementary">supplementary（Supplementary）</option></select></div>',
         '<label for="act-reason">理由（選填，寫進收件匣與決策 reason）</label><textarea id="act-reason" maxlength="2000"></textarea>',
-        '<p class="src">按「送出並預覽」先在 PROGRESS.inbox.yaml 加一筆，接著立刻代跑腳本 --dry-run（不寫檔）把變更摘要顯示在這裡；看過摘要再決定套用、先留在收件匣或撤回。</p>',
+        '<p class="src">按「送出並預覽」先在 progress/PROGRESS.inbox.yaml 加一筆，接著立刻代跑腳本 --dry-run（不寫檔）把變更摘要顯示在這裡；看過摘要再決定套用、先留在收件匣或撤回。</p>',
         '<div class="err" id="act-err"></div>',
         '<div class="row" id="act-submit-row"><button type="button" id="act-cancel">取消</button>'
         '<button type="button" id="act-stage" title="不呼叫 server：推進本頁的暫存清單、圖立刻重排；之後在頁首「暫存動作」面板一次預覽、一次套用">加入暫存</button>'
@@ -7839,7 +7858,7 @@ def _current_label(stage_id: str, stage_label: dict) -> str:
 def ir_for_json(ir: dict) -> dict:
     """序列化用的 IR：把圖表縮圖的 `data_uri` 清掉，只留走了哪條路徑與來源。
 
-    縮圖的 base64 只給 HTML 的 `<img src>` 用。留在 IR 裡會讓 PROGRESS.ir.json 與 HTML 內嵌的那份
+    縮圖的 base64 只給 HTML 的 `<img src>` 用。留在 IR 裡會讓 progress/PROGRESS.ir.json 與 HTML 內嵌的那份
     `progress-ir` 各多背一份同樣的位元組（同一張圖在頁面上出現三次）。淺層複製到圖表項為止，不動原 IR。
     """
     sub = ir.get('submission')
@@ -7966,11 +7985,11 @@ def _lit_stats_line(lit: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='研究問題里程圖：唯讀 SSOT → PROGRESS.ir.json → PROGRESS.html')
+        description='研究問題里程圖：唯讀 SSOT → progress/PROGRESS.ir.json → progress/PROGRESS.html')
     parser.add_argument('root', help='academic-pipeline 專案根目錄')
     parser.add_argument('--dry-run', action='store_true', help='不寫檔；單獨使用時把 HTML 印到 stdout')
     parser.add_argument('--json', action='store_true', help='stdout 改印 IR JSON')
-    parser.add_argument('--ir-only', action='store_true', help='只寫 PROGRESS.ir.json、不寫 PROGRESS.html')
+    parser.add_argument('--ir-only', action='store_true', help='只寫 progress/PROGRESS.ir.json、不寫 progress/PROGRESS.html')
     parser.add_argument('--embed-figures', action='store_true',
                         help='把圖檔（svg／png，單檔 ≤ 5 MB）以 data URI 內嵌進圖表節點 meta.data_uri；預設不內嵌')
     parser.add_argument('--no-previews', action='store_true',
@@ -7989,6 +8008,11 @@ def main(argv: list[str] | None = None) -> int:
     root = root.resolve()
     if not quiet_stdout:
         print(f'=== render_progress: {root} ===')
+
+    # 0.24.0：真的要寫檔時先把舊版面搬成 progress/ 版面；--dry-run 不搬（讀取靠 PL.locate() 回退）。
+    if not args.dry_run:
+        for note in PL.ensure_progress_layout(root):
+            print(f'INFO 版面遷移 {note}' if not note.startswith('WARNING') else note, file=diag)
 
     src = Sources(root)
     generated_at = dt.datetime.now().astimezone().isoformat(timespec='seconds')
@@ -8021,15 +8045,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    ir_path = root / IR_NAME
+    ir_path = PL.path(root, 'ir')
+    ir_path.parent.mkdir(parents=True, exist_ok=True)
     ir_path.write_text(ir_text, encoding='utf-8', newline='\n')
     if not args.json:
-        print(f'{IR_NAME} 已寫入: {ir_path}')
+        print(f'{IR_REL} 已寫入: {ir_path}')
     if not args.ir_only:
-        html_path = root / HTML_NAME
+        html_path = PL.path(root, 'html')
+        html_path.parent.mkdir(parents=True, exist_ok=True)
         html_path.write_text(html_text, encoding='utf-8', newline='\n')
         if not args.json:
-            print(f'{HTML_NAME} 已寫入: {html_path}')
+            print(f'{HTML_REL} 已寫入: {html_path}')
     if not args.json:
         print(stats_line(ir))
         print('結果: 完成')

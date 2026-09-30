@@ -296,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER 專案根目錄不存在: {args.root}')
         return 2
     root = root.resolve()
+    # 0.24.0：apply 才真的動檔案，所以只在這裡把舊版面（檔案堆在專案根）搬成 progress/ 版面；
+    # --dry-run 不動原根，遷移改在暫存工作區裡發生（見 make_workspace 與 progress_paths.py）。
+    if not args.dry_run:
+        for note in C.PL.ensure_progress_layout(root):
+            print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
         ctx = check_preconditions(root, args)
     except ChainError as exc:

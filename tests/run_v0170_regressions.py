@@ -70,7 +70,7 @@ def results_plans(root: Path) -> dict[str, str]:
 
 
 def ir_graph(root: Path) -> tuple[dict, dict]:
-    g = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    g = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
     return g, {n['id']: n for n in g['nodes']}
 
 
@@ -119,7 +119,7 @@ def test_batch_apply(tmp: Path) -> None:
     root = fixture(tmp, 'apply')
     daily = tmp / 'daily_170.md'
     daily.write_text('# Daily Log 2026-09-16\n\n## 既有段落\n- 不得被覆寫\n', encoding='utf-8')
-    html0 = (root / 'PROGRESS.html').read_bytes()
+    html0 = (root / 'progress/PROGRESS.html').read_bytes()
     out = run(RB, root, '--batch', json.dumps(BATCH3), '--reason', '一次整理三件事', '--daily-log', daily, '--date', '2026-09-16', '--apply')
     assert '結果: 完成；決策 D-003–D-005；run log reviews/batch-2026-09-16.json' in out, out[-1500:]
     assert '第 2／3 步（move_result）：D-004（接力：to_plan: SQ1-v1 → SQ1-v2）' in out
@@ -146,8 +146,8 @@ def test_batch_apply(tmp: Path) -> None:
         last = sub['steps'][-1]
         assert any('批次模式' in n and '不重畫' in n for n in last['notes']), (s['run_log'], last['notes'])
         assert not any(n.startswith('render_progress.py') for n in last['notes'])
-        assert not [f for f in last['files'] if f.endswith('PROGRESS.html')], last['files']
-    html1 = (root / 'PROGRESS.html').read_bytes()
+        assert not [f for f in last['files'] if f.endswith('progress/PROGRESS.html')], last['files']
+    html1 = (root / 'progress/PROGRESS.html').read_bytes()
     assert html1 != html0 and b'r:r2' in html1
     _g, by = ir_graph(root)
     assert by['r:k2']['parent'] == 'r:k1' and by['r:k2']['subtype'] == 'supporting' and by['r:r1']['subtype'] == 'primary' and by['r:r2']['meta']['plan_id'] == 'AQ1-v2'
@@ -165,7 +165,10 @@ def test_batch_apply(tmp: Path) -> None:
     assert sum(1 for n in log['finish'] if n.startswith('render_progress.py: rc=0')) == 1 and log['plan_map'] == {'SQ1-v4': 'SQ1-v5'}
     sub = run_log(root, log['steps'][0]['run_log'])
     assert sub['steps'][-1]['name'] == '重畫與 daily log' and sub['steps'][-1]['notes'] == [C.BATCH_NO_RENDER_NOTE] and not sub['steps'][-1]['files'], sub['steps'][-1]
-    assert not list(root.glob('PROGRESS.html.pre_set_figure_role*')) and daily.read_text(encoding='utf-8').count('\n## ') == 3
+    # 0.24.0：HTML 在 progress/、備份在 backups/progress/，兩處都要空（批次中間不重畫、也就不備份產生物）
+    assert not list(root.glob('PROGRESS.html.pre_set_figure_role*')) \
+        and not list(root.glob('backups/progress/PROGRESS.html.pre_set_figure_role*')) \
+        and daily.read_text(encoding='utf-8').count('\n## ') == 3
     _g, by = ir_graph(root)
     assert by['f:F_b']['band'] == 'supp' and by['r:k2']['parent'] == '' and by['r:k2']['subtype'] == 'primary'
     checkers(root)
@@ -209,7 +212,9 @@ def test_batch_failures(tmp: Path) -> None:
     assert log['result'] == 'failed' and log['failed_at'] == 2 and log['applied'] == ['D-003'] and log['steps'][1]['status'] == 'failed'
     st, note = inbox_status(root)['IN-002']
     assert st == 'pending' and '第 2／2 步（set_role）在 root 失敗、該步已還原' in note and '第 1..1 步已套用（D-003）' in note, (st, note)
-    assert not list(root.glob('analysis/figures/*_backup')), list(root.glob('analysis/figures/*_backup'))
+    # 0.24.0：備份改落 backups/，連 backups/ 一起看（否則空斷言）
+    leftover = list(root.glob('analysis/figures/*_backup')) + list(root.glob('backups/analysis/figures/*_backup'))
+    assert not leftover, leftover
     checkers(root)
 
 
@@ -256,7 +261,7 @@ def test_payload_check_inbox_server(tmp: Path) -> None:
     before = tree_hashes(root)
     out = run('skills/status/scripts/check_inbox.py', root, '--annotate', 'IN-002', '--note', '停在第 2 步')
     assert 'IN-002 note 已更新（status 不動）' in out and inbox_status(root)['IN-002'] == ('pending', '停在第 2 步')
-    assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} == {'PROGRESS.inbox.yaml'}
+    assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} == {'progress/PROGRESS.inbox.yaml'}
     assert '--annotate 須配 --note' in run('skills/status/scripts/check_inbox.py', root, '--annotate', 'IN-002', expect=2)
     assert '不可同時使用' in run('skills/status/scripts/check_inbox.py', root, '--annotate', 'IN-002', '--dismiss', 'IN-002', '--note', 'x', expect=2)
     # server：建 batch → dry-run → apply
@@ -269,7 +274,7 @@ def test_payload_check_inbox_server(tmp: Path) -> None:
         assert st == 201 and d['id'] == 'IN-002', (st, d)
         assert _post(port, '/api/inbox', {'kind': 'batch', 'payload': {'actions': []}})[0] == 400
         assert _post(port, '/api/inbox', {'kind': 'batch', 'payload': {'actions': [{'kind': 'nest_result', 'payload': {'key': 'k2', 'under': 'm1'}}]}})[0] == 400
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['target'] == '' and it['title'] == '批次 2 項' and it['body'].startswith('1. 掛到主結果下：k2 → k1\n2. 搬結果：r1 → SQ1-v1') and '1. 支撐' in it['body'], it
         assert it['payload'] == {'actions': [{'kind': 'nest_result', 'payload': {'key': 'k2', 'under': 'k1'}}, {'kind': 'move_result', 'payload': {'key': 'r1', 'to_plan': 'SQ1-v1', 'to_item': ''}}]}, it['payload']
         before = tree_hashes(root)
@@ -284,11 +289,11 @@ def test_payload_check_inbox_server(tmp: Path) -> None:
         assert st == 200 and d['ok'] and d['token'] != token
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': d['token']})
         assert st == 200 and d['ok'] and d['decision'] == 'D-003–D-004' and d['run_log'].startswith('reviews/batch-'), d
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-002', 'run_batch.py', 'ok', 'D-003–D-004']], log
         st2, note = inbox_status(root)['IN-002']
         assert st2 == 'done' and 'D-003–D-004' in note
-        assert it['id'] == 'IN-002' and next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')['resolved_by'] == 'D-003–D-004'
+        assert it['id'] == 'IN-002' and next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')['resolved_by'] == 'D-003–D-004'
         assert decision(root, 'D-003')['reason'].count('批次（收件匣 IN-002）第 1／2 步') == 1 and '收件匣 IN-002' in decision(root, 'D-004')['reason']
         assert f'## run_batch.py {V}' in daily.read_text(encoding='utf-8') and daily.read_text(encoding='utf-8').count('\n## ') == 1
         assert active(root) == {'SQ1': 'SQ1-v3', 'SQ2': 'SQ2-v1', 'AQ1': 'AQ1-v1'}
@@ -315,7 +320,7 @@ var document={createElementNS:function(){var el={attrs:{}};el.setAttribute=funct
 
 def test_frontend(tmp: Path) -> None:
     root = fixture(tmp, 'front')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('id="staged-panel"', 'id="staged-count"', 'id="staged-body"', 'id="staged-preview"', 'id="staged-apply"', 'id="staged-clear"', 'id="staged-summary"',
                    'id="act-stage"', '加入暫存</button>', 'id="act-submit"', '單獨送出並預覽</button>', 'function applyOptimistic(', 'function stageAdd(', 'function stagedPreview(',
                    'function actFormPayload(', "var STAGE_KEY='ap-staged:'+String(ir.project_root||location.pathname)", "batch:'批次'", '.gnode.staged .box{', 'path.edge.staged{',
@@ -406,13 +411,13 @@ def test_headless_batch(tmp: Path) -> bool:
         # 第一次拖放：r:k2 → r:k1，加入暫存（不呼叫 server）
         d = json.loads(ws.eval(T3._drop_js('r:k2', 'r:k1')))
         assert d['formHidden'] is False and d['title'] == '掛到主結果下：k2 → k1', d
-        n_items = len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'])
+        n_items = len(plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'])
         ws.eval("document.getElementById('act-reason').value='暫存一';document.getElementById('act-stage').click();'ok'")
         s1 = json.loads(ws.eval(node_js))
         assert s1['n'] == '1' and s1['hidden'] is False and s1['form'] is True and s1['rows'] == 1, s1
         assert s1['k2'] == {**s1['k2'], 'parent': 'r:k1', 'band': 'main', 'subtype': 'supporting', 'staged': True, 'supports': 'k1'} and s1['k2']['x'] == 20 + 4 * 380 + 24, s1['k2']
         assert 'staged' in s1['cls'].split() and s1['sup'] == 1 and json.loads(s1['ls'])[0]['kind'] == 'nest_result', s1
-        assert len(plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']) == n_items, '加入暫存不得呼叫 server'
+        assert len(plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']) == n_items, '加入暫存不得呼叫 server'
         # 第二次拖放：r:r2 → p:AQ1-v1
         d2 = json.loads(ws.eval(T3._drop_js('r:SQ1-v1#R2#secondary', 'p:AQ1-v1')))   # 0.19.0：r2 在 SQ1-v1#R2 的聚合節點裡（1 鍵，走單筆流程）
         assert d2['formHidden'] is False and d2['title'] == '搬結果：r2 → AQ1-v1', d2
@@ -433,17 +438,17 @@ def test_headless_batch(tmp: Path) -> bool:
         assert '第 1／2 步（nest_result）：D-003' in summ and '第 2／2 步（move_result）：D-004' in summ and '預定決策 D-003–D-004' in summ, summ
         assert re.search(r'^token: [0-9a-f]{24}$', summ, re.M) and ws.eval("document.getElementById('staged-batch-id').textContent") == '收件匣 IN-002'
         assert ws.eval("document.getElementById('staged-apply').disabled") is False
-        items = plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items']
+        items = plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items']
         it = next(x for x in items if x['id'] == 'IN-002')
         assert it['kind'] == 'batch' and it['title'] == '批次 2 項' and it['target'] == '' and it['payload']['actions'][1]['payload']['to_plan'] == 'AQ1-v1' and '暫存二' in it['body'], it
-        assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} <= {'PROGRESS.inbox.yaml', 'PROGRESS.html', 'PROGRESS.ir.json', 'DECISIONS-TIMELINE.md'}
+        assert {k for k, v in tree_hashes(root).items() if before.get(k) != v} <= {'progress/PROGRESS.inbox.yaml', 'progress/PROGRESS.html', 'progress/PROGRESS.ir.json', 'progress/DECISIONS-TIMELINE.md'}
         # 全部套用：D-003–D-004、localStorage 清空、重新載入後面板隱藏
         ws.eval("window.__oldPage=1;document.getElementById('staged-apply').click();'ok'")
         T3._wait(ws, "!window.__oldPage && document.readyState==='complete' && !document.getElementById('inbox-new').disabled", bool, timeout=240)
         s4 = json.loads(ws.eval(node_js))
         assert s4['n'] == '0' and s4['hidden'] is True and s4['ls'] is None and s4['k2']['parent'] == 'r:k1' and s4['k2']['staged'] is False and s4['r2']['band'] == 'supp', s4
         assert inbox_status(root)['IN-002'][0] == 'done' and decision(root, 'D-004')['method'].startswith('move_result.py') and '暫存二；批次（收件匣 IN-002）第 2／2 步' in decision(root, 'D-004')['reason']
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-002', 'run_batch.py', 'ok', 'D-003–D-004']], log
         assert active(root) == {'SQ1': 'SQ1-v3', 'SQ2': 'SQ2-v1', 'AQ1': 'AQ1-v2'}
         # 待套用面板對 batch 項目也有預覽鈕

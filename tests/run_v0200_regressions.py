@@ -73,7 +73,7 @@ def fixture(tmp: Path, name: str) -> Path:
 
 
 def graph(root: Path) -> dict:
-    return json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    return json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
 
 
 def nodes_of(root: Path) -> dict[str, dict]:
@@ -141,9 +141,9 @@ def test_ir_plan_in_ed(tmp: Path) -> Path:
     by = {(e['from'], e['to'], e['type']): e for e in g['edges']}
     assert by[('q:SQ1', PLAN_ED, 'plans')]['default_visible'] is False and by[('r:k1', 'f:F_a', 'depicts')]['default_visible'] is True
     assert by[(PLAN_ED, 'v:V1', 'validated_by')]['default_visible'] is True   # 同在 ext
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert rp.validate_ir(ir) == [], rp.validate_ir(ir)[:5]
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert 'Extended Data ｜ 延伸資料</text>' in html and '延伸資料圖表' not in html and '只放圖表' not in html, 'HTML 區帶標題與措辭'
     assert 'analysis/extended-data.yaml' in html and 'Extended Data 歸屬' in html
     print('[regression] IR：plans: [SQ1-v1] → plan explicit，群／子分析／聚合／k1＋支撐 k2／V1 inherited:p:SQ1-v1，缺 role 的 F_d 跟去 ext，其餘 derived；問題／圖表無 band_source；stats 加總、跨帶邊不畫、validate_ir 空、crossings 0、HTML 標題: pass')
@@ -162,7 +162,7 @@ def test_ir_single_nodes(tmp: Path) -> dict[str, Path]:
     for nid in ('p:SQ1-v1', 'p:SQ1-v1#S', 'p:SQ1-v1#R1', 'r:SQ1-v1#R1#secondary', 'r:k1', 'r:k2', 'v:V1'):
         assert ns[nid]['band'] == 'main' and bs(ns[nid]) == 'derived', (nid, ns[nid]['band'])
     assert ns['f:F_d']['band'] == 'main'
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert rp.validate_ir(ir) == [], rp.validate_ir(ir)[:5]   # explicit 子分析可獨自在 ext（群留 main）
     assert graph(root)['stats']['crossings'] == 0 and graph(root)['stats']['edge_node_overlaps'] == 0
     roots['sub'] = root
@@ -175,7 +175,7 @@ def test_ir_single_nodes(tmp: Path) -> dict[str, Path]:
     for nid in ('p:SQ2-v1', 'p:SQ2-v1#S', 'p:SQ2-v1#R1', 'v:V2', 'q:SQ2'):
         assert ns[nid]['band'] == 'main', nid
     assert ns['f:F_b']['band'] == 'ext' and graph(root)['stats']['band_ext_nodes'] == 2
-    assert rp.validate_ir(json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
+    assert rp.validate_ir(json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
     roots['res'] = root
     # 單一驗證
     root = variant(tmp, 'ir_val')
@@ -183,7 +183,7 @@ def test_ir_single_nodes(tmp: Path) -> dict[str, Path]:
     rerender(root)
     ns = nodes_of(root)
     assert ns['v:V3']['band'] == 'ext' and bs(ns['v:V3']) == 'explicit' and ns['p:AQ1-v1']['band'] == 'supp' and ns['r:a1']['band'] == 'supp' and ns['q:AQ1']['band'] == 'supp'
-    assert rp.validate_ir(json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
+    assert rp.validate_ir(json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))) == []
     # 支撐結果與 plan 都列：k2 是支撐 → 略過（WARNING）；plan 的跟隨不受影響
     roots['val'] = root
     # 未宣告結果可列：results.json 加一個沒宣告的鍵 u1（掛 SQ2-v1）
@@ -266,6 +266,11 @@ def test_missing_file_equals_0190(tmp: Path) -> bool:
         root = mk().resolve()
         assert not (root / ED).exists()
         gen = '2026-09-17T00:00:00+08:00'
+        # 0.24.0：收件匣落點改到 progress/，0.19.0 的歷史模組只認根目錄那一份。比對前補一份同內容的舊落點，
+        # 兩邊才讀到同一份收件匣；斷言強度不變——兩邊的 IR 仍要逐字相同。
+        _inbox = root / 'progress/PROGRESS.inbox.yaml'
+        if _inbox.is_file():
+            (root / 'PROGRESS.inbox.yaml').write_bytes(_inbox.read_bytes())
         a = old.build_ir(root, old.Sources(root), gen)
         b = rp.build_ir(root, rp.Sources(root), gen)
         assert all('band_source' in n['meta'] for n in b['graph']['nodes'] if n['type'] not in ('question', 'figure'))
@@ -288,7 +293,7 @@ def test_validate_rules(tmp: Path) -> None:
     root = variant(tmp, 'val_rules')
     write_ed(root, 'plans: [SQ1-v1#R2]\nresults: [m1]\n')
     rerender(root)
-    ir0 = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir0 = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert rp.validate_ir(ir0) == []
 
     def errs(mut) -> list[str]:
@@ -360,7 +365,7 @@ def test_frontend(tmp: Path) -> None:
     root = variant(tmp, 'front')
     write_ed(root, 'plans: [SQ1-v1#R2]\nresults: [m1]\nvalidation: [V3]\n')
     rerender(root)
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ('function tierCand(', 'function derivedBandOf(', 'function edFollowers(', 'function edSetExplicit(', 'function edClear(', 'function edRederiveFigures(',
                    "kind:'set_tier'", '問題（SQ／AQ）不能放 Extended Data', '次要結果跟子分析走，請拖子分析節點', '支撐結果跟主結果走，請拖主結果', '這個節點的 ED 歸屬來自 ',
                    'id="act-set-tier-fields"', "set_tier:'Extended Data 歸屬'", '放入 Extended Data：', '移出 Extended Data：', "n.type==='validation'"):
@@ -404,7 +409,7 @@ def test_frontend(tmp: Path) -> None:
     root2 = variant(tmp, 'front2')
     write_ed(root2, 'plans: [SQ1-v1]\n')
     rerender(root2)
-    got2 = _node_run(_drag_harness(graph(root2), _js_of((root2 / 'PROGRESS.html').read_text(encoding='utf-8')),
+    got2 = _node_run(_drag_harness(graph(root2), _js_of((root2 / 'progress/PROGRESS.html').read_text(encoding='utf-8')),
                                    'console.log(JSON.stringify([dragCandidate("p:SQ1-v1#R1",10,10),dragCandidate("p:SQ1-v1",10,10),dragCandidate("v:V1",10,357),dragCandidate("r:k1",10,357),dragCandidate("r:k2",10,10)]));'),
                      tmp, 'drag200b.js')
     assert got2[0] == {'kind': ST, 'ok': False, 'band': 'main', 'reason': '這個節點的 ED 歸屬來自 p:SQ1-v1，請拖那個節點'}, got2[0]
@@ -567,7 +572,7 @@ def test_server_and_batch(tmp: Path) -> None:
         assert nodes_of(root)['p:SQ1-v1#R2']['band'] == 'ext' and (root / ED).is_file()
         inbox = {it['id']: it['status'] for it in C.inbox_items(root)}
         assert inbox['IN-002'] == 'done'
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert log[-1][1:] == ['IN-002', 'set_tier.py', 'ok', 'D-003'], log
         assert f'## set_tier.py {V}' in daily.read_text(encoding='utf-8')
         # 已列 → 再送同一筆 400

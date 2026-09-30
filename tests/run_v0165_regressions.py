@@ -61,7 +61,7 @@ def results_plans(root: Path) -> dict[str, str]:
 
 
 def ir_graph(root: Path) -> tuple[dict, dict]:
-    g = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
+    g = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))['graph']
     return g, {n['id']: n for n in g['nodes']}
 
 
@@ -199,7 +199,9 @@ def test_failure_restores(tmp: Path) -> None:
     assert 'BLOCKER dry-run 失敗' in out and '已還原' in out and 'Permission denied' in out, out
     after = tree_hashes(root)
     assert after == before, sorted(set(after.items()) ^ set(before.items()))
-    assert not (root / 'analysis/plans/SQ1-v2.yaml').exists() and not list(root.glob('*_backup')) and not list(root.glob('analysis/**/*_backup'))
+    # 0.24.0：備份改落 backups/，連 backups/ 一起看（否則空斷言）
+    assert not (root / 'analysis/plans/SQ1-v2.yaml').exists() and not list(root.glob('*_backup')) \
+        and not list(root.glob('analysis/**/*_backup')) and not list(root.glob('backups/**/*_backup'))
     out = run(NR, root, '--key', 'k2', '--under', 'k1', '--dry-run')
     token = re.search(r'^token: (\S+)$', out, re.M).group(1)
     p = root / 'decisions.yaml'
@@ -235,7 +237,7 @@ def test_payload_and_server(tmp: Path) -> None:
         assert st == 201 and d['id'] == 'IN-002', (st, d)
         assert _post(port, '/api/inbox', {'kind': 'nest_result', 'payload': {'key': 'k2', 'under': 'm1'}})[0] == 400
         assert _post(port, '/api/inbox', {'kind': 'nest_result', 'payload': {'key': 'k2'}})[0] == 400
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['target'] == 'r:k2' and it['title'] == '掛到主結果下：k2 → k1' and it['payload'] == {'key': 'k2', 'under': 'k1'}, it
         before = tree_hashes(root)
         st, d = _post(port, '/api/actions/dry-run', {'id': 'IN-002'})
@@ -243,7 +245,7 @@ def test_payload_and_server(tmp: Path) -> None:
         assert tree_hashes(root) == before
         st, d = _post(port, '/api/actions/apply', {'id': 'IN-002', 'token': d['token']})
         assert st == 200 and d['ok'] and d['decision'] == 'D-003' and d['run_log'].startswith('reviews/nest-result-k2-'), d
-        log = [ln.split('\t') for ln in (root / 'PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
+        log = [ln.split('\t') for ln in (root / 'progress/PROGRESS.actions.log').read_text(encoding='utf-8').strip().splitlines()]
         assert [x[1:] for x in log] == [['IN-002', 'nest_result.py', 'ok', 'D-003']], log
         assert inbox_status(root)['IN-002'][0] == 'done' and 'D-003' in inbox_status(root)['IN-002'][1]
         d3 = decision(root, 'D-003')
@@ -286,10 +288,10 @@ def test_ir_nesting(tmp: Path) -> None:
     assert g['stats']['band_main_nodes'] + g['stats']['band_ext_nodes'] + g['stats']['band_supp_nodes'] == g['stats']['nodes']
     # 支撐結果緊接主結果之後（同 (band, col) 的 order 連號）
     assert k2['order'] == k1['order'] + 1, (k1['order'], k2['order'])
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     assert 'path.edge.e-supports{stroke:var(--t-result)' in html and '支撐結果 1 鍵' in html and 'class="edge e-supports' in html
     # validate_ir：壞 parent／跨帶／supports 邊兩端
-    ir = json.loads((root / 'PROGRESS.ir.json').read_text(encoding='utf-8'))
+    ir = json.loads((root / 'progress/PROGRESS.ir.json').read_text(encoding='utf-8'))
     assert R.validate_ir(ir) == []
     bad = json.loads(json.dumps(ir))
     n2 = next(n for n in bad['graph']['nodes'] if n['id'] == 'r:k2')
@@ -320,7 +322,7 @@ def test_ir_nesting(tmp: Path) -> None:
 def test_drag_candidates(tmp: Path) -> None:
     root = fixture(tmp, 'drag')
     run(NR, root, '--key', 'k2', '--under', 'k1', '--date', '2026-09-15', '--apply')
-    html = (root / 'PROGRESS.html').read_text(encoding='utf-8')
+    html = (root / 'progress/PROGRESS.html').read_text(encoding='utf-8')
     for anchor in ("nest_result:'掛到主結果下'", 'id="act-nest-result-fields"', 'id="act-nr-key"', 'id="act-nr-under"', 'var nestHidden={}', 'function isL(e)',
                    '結果主從（outputs 的 supports）：支撐結果縮排在主結果之下、同一區帶', '頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果）',
                    'supports（主結果）', "data-nest=", '搬結果／掛到主結果下', 'e-supports'):   # 0.17.0 起面板標題尾端多「／批次」
@@ -409,7 +411,7 @@ def test_headless_nest_drop(tmp: Path) -> bool:
         st = json.loads(T3._wait(ws, T3._STATE_JS, lambda s: json.loads(s)['sum'] and not json.loads(s)['sum'].startswith('預覽中')))
         assert st['id'] == 'IN-002' and st['err'] == '' and st['apply'] is False, st
         assert 'k2（SQ1-v1 的主要結果） → k1 的支撐結果；新增 supports' in st['sum'] and re.search(r'^token: [0-9a-f]{24}$', st['sum'], re.M), st['sum']
-        it = next(x for x in plan_common.load_yaml(root / 'PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
+        it = next(x for x in plan_common.load_yaml(root / 'progress/PROGRESS.inbox.yaml')['items'] if x['id'] == 'IN-002')
         assert it['payload'] == {'key': 'k2', 'under': 'k1'} and 'headless 主從' in it['body'] and it['kind'] == 'nest_result', it
         ws.eval("window.__oldPage=1;document.getElementById('act-dismiss').click();'ok'")
         T3._wait(ws, "!window.__oldPage && document.readyState==='complete' && !document.getElementById('inbox-new').disabled && document.getElementById('act-form').hidden", bool, timeout=60)
