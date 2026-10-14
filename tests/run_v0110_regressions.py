@@ -1823,7 +1823,8 @@ def test_hook_docs_registered() -> None:
     old_tokens = (".progress-hook.log",) + tokens[1:]
     readme = text("README.md")
     need("README.md", *tokens)
-    block = readme[readme.index("## 主要事實與治理 artifacts"):readme.index("## 相容性與升級")]
+    start = readme.index("## 主要事實與治理 artifacts")
+    block = readme[start:readme.index("\n## ", start + 1)]
     assert HOOK_LOG in block, "README artifacts block 缺 progress/logs/hook.log"
     assert "自動重算" in readme and "逃生口" in readme
     body = text("skills/project-init/SKILL.md")

@@ -66,9 +66,7 @@ lit-review 負責搜尋、精讀與建立引用白名單；本 skill 將其提�
 
 interpreter 的 lit_anchors 優先取 evidence synthesis 內已審查研究；claim-critic 必須讀 conflicting evidence 與 certainty。文獻只與主題相關但不支持該句，不得列作 supports。
 
-## 回溯相容
-
-舊專案缺 evidence artifacts 時只提示；v0.7 寫作與 claim-audit 前必須完成或由 adapter 明確標 not-applicable（本版所有內建 adapter 均要求至少 focused synthesis）。
+寫作與 claim-audit 前必須完成或由 adapter 明確標 not-applicable（本版所有內建 adapter 均要求至少 focused synthesis）。
 
 ## 收尾
 

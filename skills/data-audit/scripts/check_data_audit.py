@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate analysis/data-audit.yaml against the current data profile.
 
-Usage: python3 check_data_audit.py <project-root> [--strict]
+Usage: python3 check_data_audit.py <project-root>
 """
 from __future__ import annotations
 
@@ -22,12 +22,6 @@ except ImportError:
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def strict_project(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    m = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(m and (int(m.group(1)), int(m.group(2))) >= (0, 7))
 
 
 def norm(value: Any) -> str:
@@ -64,20 +58,16 @@ def adapter_required_checks(root: Path, project: dict[str, Any]) -> tuple[set[st
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or strict_project(project)
     profile_path = root / "analysis" / "data-profile.json"
     audit_path = root / "analysis" / "data-audit.yaml"
 
     if not audit_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {audit_path}——v0.7 正式分析前須完成 data-audit")
-            return 1
-        print(f"INFO 舊專案無 {audit_path}——略過，可補跑 data-audit")
+        print(f"BLOCKER 缺 {audit_path}——正式分析前須完成 data-audit")
+        return 1
         return 0
 
     blockers: list[str] = []

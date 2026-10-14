@@ -81,9 +81,9 @@ def test_static_contracts() -> None:
         assert "state.review.scores" in text, f"score state contract missing from {rel}"
 
 
-def make_legacy_project(root: Path, last_consistency: dict[str, Any], version: str | None = None) -> Path:
+def make_unversioned_project(root: Path, last_consistency: dict[str, Any], version: str | None = None) -> Path:
     project: dict[str, Any] = {
-        "project": {"title_zh": "legacy gate regression"},
+        "project": {"title_zh": "gate regression"},
         "state": {"last_consistency": last_consistency},
     }
     if version is not None:
@@ -95,12 +95,13 @@ def make_legacy_project(root: Path, last_consistency: dict[str, Any], version: s
     return manuscript
 
 
-def test_legacy_gate() -> None:
-    with tempfile.TemporaryDirectory(prefix="v071-legacy-gate-") as tmp:
+def test_gate_has_no_legacy_mode() -> None:
+    """0.25.0 移除 0.7 前相容層：不看 pipeline.version，一律走完整 fingerprint gate。"""
+    with tempfile.TemporaryDirectory(prefix="v071-gate-") as tmp:
         base = Path(tmp)
 
         populated = base / "populated"
-        manuscript = make_legacy_project(populated, {"version": "v1", "result": "pass"})
+        manuscript = make_unversioned_project(populated, {"version": "v1", "result": "pass"})
         output = run(
             "skills/check-consistency/scripts/check_gate.py",
             populated,
@@ -108,38 +109,25 @@ def test_legacy_gate() -> None:
             manuscript,
             "--require-language",
             "zh",
-        )
-        assert "legacy compatibility" in output
-        assert "通過（相容模式）" in output
-        assert "gate fingerprint 空" not in output
-        assert "last_consistency.report 為空" not in output
-
-        strict = run(
-            "skills/check-consistency/scripts/check_gate.py",
-            populated,
-            "--manuscript",
-            manuscript,
-            "--require-language",
-            "zh",
-            "--strict",
             expect=1,
         )
-        assert "gate fingerprint" in strict
-        assert "last_consistency.report 為空" in strict
+        assert "相容模式" not in output and "legacy" not in output
+        assert "完整一致性檢核已過期" in output
+        assert "last_consistency.report 為空" in output
 
         empty = base / "empty"
-        empty_manuscript = make_legacy_project(empty, {})
+        empty_manuscript = make_unversioned_project(empty, {})
         output = run(
             "skills/check-consistency/scripts/check_gate.py",
             empty,
             "--manuscript",
             empty_manuscript,
+            expect=1,
         )
-        assert "無有效 last_consistency" in output
-        assert "相容模式" in output
+        assert "state.last_consistency 為空" in output
 
         failed = base / "failed"
-        failed_manuscript = make_legacy_project(failed, {"version": "v1", "result": "fail"})
+        failed_manuscript = make_unversioned_project(failed, {"version": "v1", "result": "fail"})
         output = run(
             "skills/check-consistency/scripts/check_gate.py",
             failed,
@@ -149,18 +137,28 @@ def test_legacy_gate() -> None:
         )
         assert "不是 pass" in output
 
-        upgraded = base / "upgraded"
-        upgraded_manuscript = make_legacy_project(
-            upgraded, {"version": "v1", "result": "pass"}, version="0.7.1"
+        versioned = base / "versioned"
+        versioned_manuscript = make_unversioned_project(
+            versioned, {"version": "v1", "result": "pass"}, version="0.7.1"
         )
         output = run(
             "skills/check-consistency/scripts/check_gate.py",
-            upgraded,
+            versioned,
             "--manuscript",
-            upgraded_manuscript,
+            versioned_manuscript,
             expect=1,
         )
         assert "完整一致性檢核已過期" in output
+
+        output = run(
+            "skills/check-consistency/scripts/check_gate.py",
+            versioned,
+            "--manuscript",
+            versioned_manuscript,
+            "--strict",
+            expect=2,
+        )
+        assert "--strict" in output
 
 
 def decision_text(
@@ -300,8 +298,8 @@ def test_review_score_writer_and_valve() -> None:
 def main() -> int:
     test_static_contracts()
     print("[regression] static cross-file contracts: pass")
-    test_legacy_gate()
-    print("[regression] legacy gate compatibility: pass")
+    test_gate_has_no_legacy_mode()
+    print("[regression] check_gate has no legacy compatibility mode: pass")
     test_review_score_writer_and_valve()
     print("[regression] review score writer + marginal valve: pass")
     print("PASS v0.7.1 regressions")

@@ -5,8 +5,7 @@ Usage:
   python3 check_claims.py <claims.yaml> <project.yaml> <results.json> [references.bib]
       [--manuscript <md>] [--exploration <yaml>] [--validation <yaml>]
 
-Legacy projects retain the v0.6 checks. For pipeline.version >= 0.7, every claim based on
-results must link to a current pass/qualified validation item; qualified validation requires
+Every claim based on results must link to a current pass/qualified validation item; qualified validation requires
 an explicit claim boundary. Adapter-neutral evidence can use artifact:<relative-path>#<id>.
 """
 from __future__ import annotations
@@ -33,12 +32,6 @@ STRENGTHS = {
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
 def result_key_ok(key: str, results: dict[str, Any]) -> bool:
@@ -122,7 +115,6 @@ def main() -> int:
     root = project_path.parent
     claims_doc = load_yaml(claims_path)
     project = load_yaml(project_path)
-    strict = is_v07(project)
 
     results: dict[str, Any] = {}
     if args.results.is_file():
@@ -133,9 +125,7 @@ def main() -> int:
         except Exception as exc:
             print(f"BLOCKER results.json 無法解析: {exc}")
             return 1
-    elif strict:
-        # Adapter-neutral projects may have no results.json; claims must then use artifact:/cite: evidence.
-        results = {}
+    # 沒有 results.json 時（adapter-neutral 專案），claims 必須改用 artifact:／cite: evidence。
 
     keys = bib_keys(args.bib.resolve() if args.bib else None)
     validation_path = args.validation
@@ -262,45 +252,44 @@ def main() -> int:
             if not anchors and claims_doc.get("confirmed", False):
                 warnings.append(f"{cid}: confirmed 主張無文獻錨——確認是無可比文獻而非搜尋不足")
 
-        if strict:
-            boundary = str(claim.get("boundary") or "").strip()
-            if not boundary:
-                blockers.append(f"{cid}: v0.7 claim 缺 boundary")
-            if "counterevidence" not in claim or not isinstance(claim.get("counterevidence"), list):
-                blockers.append(f"{cid}: v0.7 claim 的 counterevidence 必須是 list（可為空）")
-            links = claim.get("validation") or []
-            if not isinstance(links, list):
-                blockers.append(f"{cid}: validation 必須是 list")
-                links = []
-            if result_evidence and not links:
-                blockers.append(f"{cid}: results 型 evidence 未連 validation V#")
-            covered_results: set[str] = set()
-            qualified = False
-            for link in links:
-                link = str(link)
-                if re.fullmatch(r"V\d+", link):
-                    item = validations.get(link)
-                    if item is None:
-                        blockers.append(f"{cid}: validation id 不存在: {link}")
-                        continue
-                    if item.get("status") not in {"pass", "qualified"}:
-                        blockers.append(f"{cid}: validation {link} 未通過")
-                    if str(item.get("sq") or "") != sq:
-                        blockers.append(f"{cid}: validation {link} 屬 {item.get('sq')}，非 {sq}")
-                    covered_results.update(validation_result_keys(item))
-                    qualified = qualified or item.get("status") == "qualified"
-                elif link.startswith("artifact:"):
-                    ok, message = check_artifact_reference(root, link)
-                    if not ok:
-                        blockers.append(f"{cid}: validation reference 無效, {message}")
-                else:
-                    blockers.append(f"{cid}: validation 項須為 V# 或 artifact:path#id（現值 {link}）")
-            for key in result_evidence:
-                base = key.split(".")[0]
-                if validations and not any(key == x or base == x.split(".")[0] for x in covered_results):
-                    blockers.append(f"{cid}: results:{key} 未被所列 validation item 覆蓋")
-            if qualified and not boundary:
-                blockers.append(f"{cid}: 使用 qualified validation 但 boundary 為空")
+        boundary = str(claim.get("boundary") or "").strip()
+        if not boundary:
+            blockers.append(f"{cid}: claim 缺 boundary")
+        if "counterevidence" not in claim or not isinstance(claim.get("counterevidence"), list):
+            blockers.append(f"{cid}: claim 的 counterevidence 必須是 list（可為空）")
+        links = claim.get("validation") or []
+        if not isinstance(links, list):
+            blockers.append(f"{cid}: validation 必須是 list")
+            links = []
+        if result_evidence and not links:
+            blockers.append(f"{cid}: results 型 evidence 未連 validation V#")
+        covered_results: set[str] = set()
+        qualified = False
+        for link in links:
+            link = str(link)
+            if re.fullmatch(r"V\d+", link):
+                item = validations.get(link)
+                if item is None:
+                    blockers.append(f"{cid}: validation id 不存在: {link}")
+                    continue
+                if item.get("status") not in {"pass", "qualified"}:
+                    blockers.append(f"{cid}: validation {link} 未通過")
+                if str(item.get("sq") or "") != sq:
+                    blockers.append(f"{cid}: validation {link} 屬 {item.get('sq')}，非 {sq}")
+                covered_results.update(validation_result_keys(item))
+                qualified = qualified or item.get("status") == "qualified"
+            elif link.startswith("artifact:"):
+                ok, message = check_artifact_reference(root, link)
+                if not ok:
+                    blockers.append(f"{cid}: validation reference 無效, {message}")
+            else:
+                blockers.append(f"{cid}: validation 項須為 V# 或 artifact:path#id（現值 {link}）")
+        for key in result_evidence:
+            base = key.split(".")[0]
+            if validations and not any(key == x or base == x.split(".")[0] for x in covered_results):
+                blockers.append(f"{cid}: results:{key} 未被所列 validation item 覆蓋")
+        if qualified and not boundary:
+            blockers.append(f"{cid}: 使用 qualified validation 但 boundary 為空")
 
     if args.manuscript:
         path = args.manuscript if args.manuscript.is_absolute() else (Path.cwd() / args.manuscript)
@@ -339,11 +328,11 @@ def main() -> int:
         print("INFO 舊 claims.yaml 無 origin 欄——探索性連結檢查略過（可補跑 interpret-results）")
     if not has_anchor_field and claims:
         print("INFO claims.yaml 無 lit_anchors 欄——文獻錨點檢查略過（可補跑 interpret-results）")
-    if strict and not validations and any(
+    if not validations and any(
         isinstance(c, dict) and any(str(e).startswith("results:") for e in (c.get("evidence") or []))
         for c in claims
     ):
-        blockers.append("v0.7 results 型 claims 缺可讀的 analysis/validation.yaml")
+        blockers.append("results 型 claims 缺可讀的 analysis/validation.yaml")
     for message in blockers:
         print(f"BLOCKER {message}")
     for message in warnings:

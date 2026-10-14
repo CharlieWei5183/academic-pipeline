@@ -27,10 +27,8 @@ metadata:
      --manuscript <稿件.md> --require-language <zh|en>
    ```
 
-   - `pipeline.version >= 0.7` 時自動使用 full fingerprint strict gate。
-   - 舊專案相容模式只依 v0.6 的 `last_consistency.result/version` 判斷，不得因缺 `gate_fingerprint` 或 `report` 阻擋。
-   - 明確加 `--strict` 才對舊專案強制 v0.7 欄位。
-3. v0.7 專案另確認：claims confirmed、claim-audit pass，route 要求的 validation/evidence/data-audit 均通過且未過期。
+   - 一律是完整 fingerprint gate：`last_consistency` 的 `result`、`version`、`gate_fingerprint` 與 `report` 缺一即阻擋。
+3. 另確認：claims confirmed、claim-audit pass，route 要求的 validation/evidence/data-audit 均通過且未過期。
 4. 讀取 `review.strictness`、`review.emphasis`、`review.max_rounds`（預設 3）與 `review.panel`。
 5. issue-ledger schema 通過；authorial 池有 open must-fix 時，提示先處理或記錄帶病送審。
 6. 決定輪次 N：完整 panel 輪為 `state.review.round + 1`；建立 `reviews/roundN/`。minor re-check 不增加輪次。

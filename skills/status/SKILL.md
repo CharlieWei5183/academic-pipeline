@@ -3,7 +3,7 @@ name: status
 description: >
   This skill should be used when the user asks 「論文寫到哪了」、「進度如何」、「現在到哪個階段」、
   「接下來要做什麼」、「幫我從數據一路做到投稿」、"status"、"what's next"，or wants an
-  overview, migration audit, or routing across academic-pipeline stages.
+  overview or routing across academic-pipeline stages.
 metadata:
   version: "0.7.1"
 ---
@@ -170,17 +170,6 @@ route adapter 可把定量 analyze-data 換成質性 audit trail、proof audit�
 - submission 修改稿件使 fingerprint 改變 → 新版本＋check-consistency(en)；
 - presubmission integrity 未過 → integrity-check；
 - prep 與最終 gate 通過 → typeset。
-
-## 回溯相容
-
-未有 `pipeline.version` 或版本低於 0.7 的專案先只讀盤點，不自動升版。`check_gate.py` 的預設相容模式按 v0.6 契約處理：
-
-- 完全沒有 `last_consistency`：INFO，不因新 checker 阻擋；
-- 已有 `{result, version}`：只驗這兩個舊欄位；
-- 不要求 v0.7 才新增的 `gate_fingerprint`、`report`、`language` 或 `en_final.confirmed_at`；
-- 只有明確 `--strict` 或 `pipeline.version >= 0.7` 才啟用完整 gate。
-
-遷移時先備份，再補 route、protocol/plans、audits、validation、evidence、claim-audit 與 consistency fingerprint；升版後不得再以舊專案跳過硬關卡。
 
 ## review scores 與保險閥
 
