@@ -585,11 +585,22 @@ python3 tests/run_literature3d_regressions.py
 
 ## 出處與致謝
 
-本 plugin 絕大多數 skills、agents、確定性腳本與 pipeline 設計為作者（Charlie）自行開發。三處明確參考了外部 plugin／skill，範圍如下、其餘均為自行開發：
+skills、agents、確定性腳本與 pipeline 設計絕大多數由作者（Charlie）自行開發。只有下面三個 skill 參考了外部來源：
 
-- **`debug-pipeline`**（v0.9.0）：診斷程序主體（四階段診斷流程、多元件邊界取證、三振後質疑架構）改寫自 `superpowers` v6.1.1（MIT，Jesse Vincent／obra）的 `systematic-debugging`；本 skill 的撰寫規範（frontmatter／description 紀律、trigger-eval 測試法）參考其 `writing-skills`、規格化過程（先判斷該不該拆、先推薦再列選項、分節逐段確認）參考其 `brainstorming`。fingerprint 分層定位、manifest 樣本流向守恆、`analysis/validation/` 隔離、「不得縮小稽核範圍換轉綠」、治理接 `decisions.yaml` D#／`study-design` amendment、複用 `reviewer-methods` 與流程線外定位為本 plugin 專屬新增。
-- **`academic-english-editing`**（v0.8.0）：Layer 1／2／3／5、核心原則與流程源自 user skill `academic-humanizer` v0.3.3（MIT）；掛點合約與「不含 Layer 4」為本 plugin 專屬新增。
-- **`chinese-academic-editing`**（v0.10.0）：層級骨架（Layer 1／2／3／5）、核心原則與流程對稱自本 plugin 的 `academic-english-editing`（其源頭為 `academic-humanizer` v0.3.3，MIT），中文語境的 pattern、例句與規則為重新撰寫；中文 AI tell 清單與台灣書面語正規化部分參考作者自有的 user skill `chinese-deai-editing`。掛點合約與 Layer 4（結果與討論的陳述規格）為本 plugin 專屬新增。
+**`debug-pipeline`** ← `superpowers` v6.1.1（MIT，Jesse Vincent／obra）
+
+- 沿用：`systematic-debugging` 的診斷程序（四階段診斷、多元件邊界取證、三振後質疑架構）；撰寫規範（frontmatter／description 紀律、trigger-eval 測試法）參考 `writing-skills`，規格化過程（先判斷該不該拆、先推薦再列選項、分節逐段確認）參考 `brainstorming`。
+- 本 plugin 新增：fingerprint 分層定位、manifest 樣本流向守恆、`analysis/validation/` 隔離、「不得縮小稽核範圍換轉綠」、治理接 `decisions.yaml` D#／`study-design` amendment、複用 `reviewer-methods`、定位在流程線外。
+
+**`academic-english-editing`** ← user skill `academic-humanizer` v0.3.3（MIT）
+
+- 沿用：Layer 1／2／3／5、核心原則與流程。
+- 本 plugin 新增：掛點合約；刻意不含 Layer 4。
+
+**`chinese-academic-editing`** ← 本 plugin 的 `academic-english-editing`（源頭為 `academic-humanizer` v0.3.3，MIT），以及作者自有的 user skill `chinese-deai-editing`
+
+- 沿用：層級骨架（Layer 1／2／3／5）、核心原則與流程；中文 AI tell 清單與台灣書面語正規化參考 `chinese-deai-editing`。
+- 本 plugin 新增：中文語境的 pattern、例句與規則全部重寫；掛點合約；Layer 4（結果與討論的陳述規格）。
 
 ## 版本歷程
 
