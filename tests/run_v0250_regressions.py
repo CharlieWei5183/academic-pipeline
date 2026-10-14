@@ -112,7 +112,9 @@ def test_no_legacy_traces() -> None:
         for token in ("舊專案相容模式", "`--strict`", "pipeline.version >= 0.7", "pipeline.version < 0.7", "## 回溯相容"):
             assert token not in body, (skill.parent.name, token)
     cl = (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert cl.lstrip().startswith(f"# CHANGELOG\n\n## {V}"), cl[:80]
+    # 0.25.1：CHANGELOG 最上面換成新版了，這裡改成「0.25.0 那一節仍在」——與 v0231／v0240 對既往版本的寫法一致。
+    assert cl.startswith("# CHANGELOG\n\n## "), cl[:40]
+    assert f"\n## {V}（" in cl, cl[:200]
     ver = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     assert tuple(int(x) for x in ver.split(".")) >= (0, 25, 0), ver
     assert "run_v0250_regressions.py" in (PLUGIN / "tests/README.md").read_text(encoding="utf-8")

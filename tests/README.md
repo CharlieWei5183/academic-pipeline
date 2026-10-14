@@ -597,7 +597,7 @@ python3 tests/run_v0250_regressions.py
 - 規格 3：`check_ledger.py` 在 editor-decision 已存在、`state.review.scores` 無該輪時 BLOCKER，不再有「舊專案相容提示」。
 - 規格 4：`skills/` 底下沒有 `is_v07`／`pipeline_v07`／`strict_project`／`args.strict`／
   `check_legacy_consistency_state`；`MIGRATION-v0.7.md` 不存在；README 沒有「相容性與升級」；SKILL.md 不含
-  相容模式字樣；CHANGELOG 開頭是 `## 0.25.0`、`plugin.json` ≥ 0.25.0、本檔與 README 都登記本測試。
-- 同版修回 `run_v0120_regressions.py`：`test_embed_figures_flag`、`test_html_panels_and_self_contained` 比對前切掉投稿檔案
+  相容模式字樣；CHANGELOG 有 `## 0.25.0` 一節、`plugin.json` ≥ 0.25.0、本檔與 README 都登記本測試。
+- 0.25.1 修回 `run_v0120_regressions.py`：`test_embed_figures_flag`、`test_html_panels_and_self_contained` 比對前切掉投稿檔案
   分頁（縮圖內嵌是 0.23.0 起的設計）；`test_inbox_docs_registered` 改斷言 `progress/` 與 `PROGRESS.inbox.yaml` 都在
   project-init 的資料夾樹裡。只改測試。
