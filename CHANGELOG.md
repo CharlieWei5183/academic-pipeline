@@ -29,6 +29,11 @@
    `run_v0110_regressions.py` 的 README artifacts 區塊改以下一個 `## ` 標題為界；`run_v0240_regressions.py` 的
    CHANGELOG 斷言改成「0.24.0 那一節仍在」；新增 `tests/run_v0250_regressions.py`（4 項）；`tests/README.md`
    更新 mini-project 的 check_claims 黃金答案（17 blockers：原本埋的 4 條錯誤＋每條主張 3 條欄位契約＋1 條專案層）。
+8. **`run_v0120_regressions.py` 修回綠燈**：三條斷言寫在後來的功能之前，一直是紅的（第一條失敗時 `main()` 就停了，
+   後兩條被蓋住）。`test_embed_figures_flag` 與 `test_html_panels_and_self_contained` 比對前先切掉投稿檔案分頁——
+   那裡的縮圖以 data URI 靜態內嵌是 0.23.0 起的設計（由 `run_v0230` 守），`--embed-figures` 只管關聯圖的圖表節點；
+   `test_inbox_docs_registered` 改為「`progress/` 與 `PROGRESS.inbox.yaml` 都在資料夾樹裡」，與 0.24.0 起樹的縮排
+   寫法、`run_v0110` 對 `hook.log` 的斷言一致。只改測試，程式行為不變。
 
 ## 0.24.0（2026-09-30）
 
