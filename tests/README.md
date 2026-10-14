@@ -601,3 +601,17 @@ python3 tests/run_v0250_regressions.py
 - 0.25.1 修回 `run_v0120_regressions.py`：`test_embed_figures_flag`、`test_html_panels_and_self_contained` 比對前切掉投稿檔案
   分頁（縮圖內嵌是 0.23.0 起的設計）；`test_inbox_docs_registered` 改斷言 `progress/` 與 `PROGRESS.inbox.yaml` 都在
   project-init 的資料夾樹裡。只改測試。
+
+## run_v0252_regressions.py
+
+0.25.2 的兩個 bug 修正：
+
+```bash
+python3 tests/run_v0252_regressions.py
+```
+
+- 規格 1：`progress_server.py` 的 `/api/actions/apply` 回 400（缺 token）與 409（token 過期）時，回應在放掉 action lock
+  之後才送出。以 spy 包住 handler 的 `_json`，逐次記錄送出當下鎖是否仍被持有，必須全為 False；另連跑五輪
+  「409 → 立刻 dry-run」都必須 200。
+- 規格 2：repo 內每支 .py 以「SyntaxWarning 即錯誤」重新編譯一次（`render_progress.py` 內嵌 JS 的 `\d` 已改成 `\\d`）。
+- 規格 3：CHANGELOG 開頭是 `## 0.25.2`、`plugin.json` ≥ 0.25.2、本檔與 README 都登記本測試。

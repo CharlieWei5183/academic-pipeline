@@ -617,33 +617,37 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
             mode = 'dry-run' if path.endswith('/dry-run') else 'apply'
             if not action_lock.acquire(blocking=False):
                 return self._json(409, {'ok': False, 'error': '另一個動作正在執行，請稍後'})
+            # 回應一律在 finally 放鎖之後才送：瀏覽器收到 409 會立刻重跑預覽，若在持鎖時就回應，
+            # 那個預覽可能撞上還沒放掉的鎖、誤得「另一個動作正在執行」（0.25.2）。
+            early = None
             try:
                 if mode == 'apply':
                     token = payload.get('token')
                     if not isinstance(token, str) or not token:
-                        return self._json(400, {'ok': False, 'error': '套用前須先預覽（缺 token）'})
-                    if token != action_token(root, item):
-                        return self._json(409, {'ok': False, 'error': 'SSOT 狀態已改變（期間有別的 session 動過檔案），請重跑預覽'})
-                    # 0.17.3：batch 項目的 reason 由套用時帶來（進度頁面「理由（整批，可空）」現值）蓋過建項目時的 payload 頂層 reason；
-                    # 單筆項目忽略。token extra 只看 actions，換理由不必重新預覽。
-                    run_item, reason_sync = item, None
-                    if str(item.get('kind') or '') == 'batch' and isinstance(payload.get('reason'), str):
-                        reason = payload['reason'].strip()[:2000]
-                        run_item = batch_item_with_reason(item, reason)
-                        if run_item['payload'].get('reason', '') != (item.get('payload') or {}).get('reason', ''):
-                            reason_sync = reason
-                    result = run_action(root, run_item, 'apply', daily_log, token)
-                    append_actions_log(root, payload['id'], result.get('script', '?'), 'ok' if result['ok'] else f'failed(rc={result["rc"]})',
-                                       result.get('decision', ''))
-                    if result['ok'] and reason_sync is not None:
-                        sync = run_set_reason(root, payload['id'], reason_sync)
-                        if sync['ok']:
-                            result['reason_synced'] = reason_sync
-                        else:
-                            result['summary'] += f'\nWARNING 收件匣 {payload["id"]} 的理由未同步（check_inbox.py --set-reason rc={sync["rc"]}）：{sync["summary"][-300:]}'
-                            print(f'{now_iso()} check_inbox.py --set-reason {payload["id"]} rc={sync["rc"]}: {sync["summary"][-300:]}', file=sys.stderr)
-                    if result['ok']:
-                        rerender(root, 'apply 之後')
+                        early = (400, {'ok': False, 'error': '套用前須先預覽（缺 token）'})
+                    elif token != action_token(root, item):
+                        early = (409, {'ok': False, 'error': 'SSOT 狀態已改變（期間有別的 session 動過檔案），請重跑預覽'})
+                    else:
+                        # 0.17.3：batch 項目的 reason 由套用時帶來（進度頁面「理由（整批，可空）」現值）蓋過建項目時的 payload 頂層 reason；
+                        # 單筆項目忽略。token extra 只看 actions，換理由不必重新預覽。
+                        run_item, reason_sync = item, None
+                        if str(item.get('kind') or '') == 'batch' and isinstance(payload.get('reason'), str):
+                            reason = payload['reason'].strip()[:2000]
+                            run_item = batch_item_with_reason(item, reason)
+                            if run_item['payload'].get('reason', '') != (item.get('payload') or {}).get('reason', ''):
+                                reason_sync = reason
+                        result = run_action(root, run_item, 'apply', daily_log, token)
+                        append_actions_log(root, payload['id'], result.get('script', '?'), 'ok' if result['ok'] else f'failed(rc={result["rc"]})',
+                                           result.get('decision', ''))
+                        if result['ok'] and reason_sync is not None:
+                            sync = run_set_reason(root, payload['id'], reason_sync)
+                            if sync['ok']:
+                                result['reason_synced'] = reason_sync
+                            else:
+                                result['summary'] += f'\nWARNING 收件匣 {payload["id"]} 的理由未同步（check_inbox.py --set-reason rc={sync["rc"]}）：{sync["summary"][-300:]}'
+                                print(f'{now_iso()} check_inbox.py --set-reason {payload["id"]} rc={sync["rc"]}: {sync["summary"][-300:]}', file=sys.stderr)
+                        if result['ok']:
+                            rerender(root, 'apply 之後')
                 else:
                     result = run_action(root, item, 'dry-run')
                     if result['ok'] and not result.get('token'):
@@ -651,6 +655,8 @@ def make_handler(root: Path, allow_apply: bool = False, daily_log: str = ''):
                         result['summary'] += '\n（腳本沒有印出 token）'
             finally:
                 action_lock.release()
+            if early is not None:
+                return self._json(*early)
             if not result['ok']:
                 result['error'] = f'{result.get("script", "腳本")} 未完成（rc={result["rc"]}）'
             self._json(200, {'ok': result['ok'], 'mode': mode, **{k: v for k, v in result.items() if k != 'ok'}})

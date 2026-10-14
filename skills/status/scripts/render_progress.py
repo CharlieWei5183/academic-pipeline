@@ -4220,10 +4220,10 @@ GRAPH_JS = """
   // ---- 結構化動作（0.16.0）：Main 帶的 SQ 節點與圖表節點；拖放與面板按鈕都只送收件匣，不直接改 SSOT ----
   var ROLE_OPTS=[['main','main（Main 主圖）'],['extended','extended（Extended Data）'],['supplementary','supplementary（Supplementary）']];
   var BAND_ROLE={main:'main',ext:'extended',supp:'supplementary'};
-  function isMainSQ(id){var n=nodes[id];return !!(n&&n.type==='question'&&n.band==='main'&&/^q:SQ\d+$/.test(id));}
-  function questionKind(id){return /^q:SQ\d+$/.test(id)?'SQ':(/^q:AQ\d+$/.test(id)?'AQ':'');}
+  function isMainSQ(id){var n=nodes[id];return !!(n&&n.type==='question'&&n.band==='main'&&/^q:SQ\\d+$/.test(id));}
+  function questionKind(id){return /^q:SQ\\d+$/.test(id)?'SQ':(/^q:AQ\\d+$/.test(id)?'AQ':'');}
   function isActivePlan(id){var n=nodes[id];return !!(n&&n.type==='method'&&!n.parent&&!n.collapsed&&/^p:[^#]+$/.test(id));}
-  function isSensItem(id){var n=nodes[id];return !!(n&&n.type==='method'&&n.subtype==='sensitivity'&&!n.collapsed&&/^p:[^#]+#R\d+$/.test(id));}
+  function isSensItem(id){var n=nodes[id];return !!(n&&n.type==='method'&&n.subtype==='sensitivity'&&!n.collapsed&&/^p:[^#]+#R\\d+$/.test(id));}
   function isL(e){return e.type==='sensitivity'||e.type==='supports';}   // 父 → 子的 L 形線（與 Python L_EDGE_TYPES 同義）
   // ---- 0.20.0 Extended Data 歸屬（analysis/extended-data.yaml；使用者 2026-09-17 裁定：方法／結果／驗證也能放 ED，只有 SQ／AQ 不行）----
   // meta.band_source：explicit＝自己列在檔裡、inherited:<來源 id>＝跟 plan／跟父進 ED（來源是那個 explicit 節點）、derived＝原規則；圖表沿用 role_source
@@ -4496,7 +4496,7 @@ GRAPH_JS = """
       if(n.band==='main'&&band==='supp')return {kind:'reassign',ok:true,band:band,payload:{from:id.slice(2)}};
       if(n.band==='supp'&&band==='main')return {kind:'promote',ok:true,band:band,payload:{from:id.slice(2)}};
       return {kind:n.band==='main'?'reassign':'promote',ok:false,band:band,reason:'主問題只能降到 Supplementary 帶、附錄問題只能升到 Main 帶'};}
-    if(isSensItem(id)){var m=/^p:(.+)#(R\d+)$/.exec(id);
+    if(isSensItem(id)){var m=/^p:(.+)#(R\\d+)$/.exec(id);
       var p=hitNode(gx,gy,function(k,x){return isActivePlan(k)&&k!=='p:'+m[1];});
       if(!p){var tcs=TC(id,bandAtY(gy));return tcs===undefined?null:tcs;}   // 0.20.0：拖到 Extended Data 帶＝單獨放入 ED；從 ED 拖回推導區帶＝移出
       return {kind:'move_sensitivity',ok:true,target:p,payload:{plan:m[1],item:m[2],to_plan:p.slice(2)}};}
@@ -4505,14 +4505,14 @@ GRAPH_JS = """
       var tp=hitNode(gx,gy,function(k,x){return x.type==='method'&&!x.parent&&k!==id&&/^p:[^#]+$/.test(k);});
       if(tp){var tsq=String(nodes[tp].meta.sq||'');
         if(nodes[tp].collapsed)return {kind:'demote_plan',ok:false,target:tp,reason:nodes[tp].label+' 不是 active plan（舊版），敏感性子分析只能併入現行版'};
-        if(!/^AQ\d+$/.test(sq))return {kind:'demote_plan',ok:false,target:tp,reason:'主問題 '+sq+' 的 active plan 不能降為敏感性子分析（主問題缺 active plan 是 check_plan BLOCKER），請先把 '+sq+' 降為附錄問題'};
+        if(!/^AQ\\d+$/.test(sq))return {kind:'demote_plan',ok:false,target:tp,reason:'主問題 '+sq+' 的 active plan 不能降為敏感性子分析（主問題缺 active plan 是 check_plan BLOCKER），請先把 '+sq+' 降為附錄問題'};
         if(tsq===sq)return {kind:'demote_plan',ok:false,target:tp,reason:nodes[tp].label+' 與來源同屬 '+sq+'：同一問題的兩份 plan 不能互降，那是版本取代'};
         return {kind:'demote_plan',ok:true,target:tp,label:'降為 '+nodes[tp].label+' 的敏感性子分析',payload:{plan:id.slice(2),to_plan:tp.slice(2)}};}
       var q2=hitNode(gx,gy,function(k,x){return x.type==='question'&&questionKind(k)&&k!=='q:'+sq;});
       if(!q2){var tcp=TC(id,bandAtY(gy));return tcp===undefined?null:tcp;}   // 0.20.0：plan 放入／移出 Extended Data（群、子分析、結果、驗證跟著走）
       var ap=activePlanOf(q2);
       if(ap)return {kind:'move_plan',ok:false,target:q2,reason:nodes[q2].label+' 已有 active plan '+nodes[ap].label+'：那是合併兩份分析計畫，不是搬移，須另行設計'};
-      if(!/^AQ\d+$/.test(sq))return {kind:'move_plan',ok:false,target:q2,reason:'主問題 '+sq+' 的 active plan 不能搬走（主問題缺 active plan 是 check_plan BLOCKER），請先降階'};
+      if(!/^AQ\\d+$/.test(sq))return {kind:'move_plan',ok:false,target:q2,reason:'主問題 '+sq+' 的 active plan 不能搬走（主問題缺 active plan 是 check_plan BLOCKER），請先降階'};
       return {kind:'move_plan',ok:true,target:q2,payload:{plan:id.slice(2),to_question:q2.slice(2)}};}
     if(n.type==='figure'){var b=bandAtY(gy);if(b===n.band)return null;return {kind:'set_role',ok:true,band:b,payload:{figure:id.slice(2),role:BAND_ROLE[b]||''}};}
     if(n.type==='validation'){var bv=bandAtY(gy);if(bv===n.band)return null;var tcv=TC(id,bv);return tcv===undefined?null:tcv;}   // 0.20.0：驗證只有 ED 歸屬這一種拖法
@@ -4525,12 +4525,12 @@ GRAPH_JS = """
       var tA=hitNode(gx,gy,function(k,x){return isSensItem(k)||isActivePlan(k);});
       if(!tA){var bA=bandAtY(gy);if(bA==='ext'&&n.band!=='ext')return {kind:'set_tier',ok:false,band:bA,reason:'次要結果跟子分析走，請拖子分析節點'};   // 0.20.0
         if(n.band==='ext'&&bA!=='ext'&&EI(id))return {kind:'set_tier',ok:false,band:bA,reason:'這個節點的 ED 歸屬來自 '+EI(id)+'，請拖那個節點'};
-        if(bA==='main'){var oq=String((nodes['p:'+ownerA]||{meta:{}}).meta.sq||'');if(!/^SQ\d+$/.test(oq))return {kind:'move_result',ok:false,band:bA,reason:'所屬 plan '+ownerA+'（'+oq+'）不在 Main 帶：要升為主問題的主要結果請拖到目標方法節點上'};
+        if(bA==='main'){var oq=String((nodes['p:'+ownerA]||{meta:{}}).meta.sq||'');if(!/^SQ\\d+$/.test(oq))return {kind:'move_result',ok:false,band:bA,reason:'所屬 plan '+ownerA+'（'+oq+'）不在 Main 帶：要升為主問題的主要結果請拖到目標方法節點上'};
           if(!nA)return {kind:'move_result',ok:false,band:bA,reason:n.label+'：這個子分析沒有自有的次要鍵可搬'};
           return {kind:'move_result',ok:true,band:bA,label:'放到 Main 帶、'+nA+' 鍵升回本 plan '+ownerA+' 的 outputs',payload:{key:keysA[0],to_plan:ownerA,to_item:''},items:mk(ownerA,'')};}
         return null;}   // Supplementary 帶：次要結果本來就在子分析之下，無事可做
       if(!nA)return {kind:'move_result',ok:false,target:tA,reason:n.label+'：這個子分析沒有自有的次要鍵可搬'};
-      if(isSensItem(tA)){var mA=/^p:(.+)#(R\d+)$/.exec(tA);if(tA===n.parent)return null;
+      if(isSensItem(tA)){var mA=/^p:(.+)#(R\\d+)$/.exec(tA);if(tA===n.parent)return null;
         return {kind:'move_result',ok:true,target:tA,label:nA+' 鍵成為 '+mA[1]+' '+mA[2]+' 的次要結果',payload:{key:keysA[0],to_plan:mA[1],to_item:mA[2]},items:mk(mA[1],mA[2])};}
       return {kind:'move_result',ok:true,target:tA,label:nA+' 鍵成為 '+tA.slice(2)+' 的主要結果'+(tA==='p:'+ownerA?'（升回本 plan outputs）':''),payload:{key:keysA[0],to_plan:tA.slice(2),to_item:''},items:mk(tA.slice(2),'')};}
     if(n.type==='result'&&isDragResult(id)){var key=id.slice(2),owner=resultOwner(id),decl=(n.meta.declared_by||[]),rk=String(n.meta.result_kind||'');
@@ -4557,21 +4557,21 @@ GRAPH_JS = """
       if(!t){// 0.16.4 區帶落點（節點落點優先）：主要結果 Main → Supplementary、次要（或附錄問題的主要）結果 Supplementary → Main；放開後表單以下拉選確切落點
         var b2=bandAtY(gy);var tcr=TC(id,b2);if(tcr!==undefined)return tcr;   // 0.20.0：進 ED／出 ED；其餘（拖到既非 ext 也非推導區帶的帶）走原本規則，n.band 以推導區帶代入
         var nb=(n.band==='ext')?DB(id):n.band;
-        var ownerSq=String((nodes['p:'+owner]||{meta:{}}).meta.sq||''),ownerMain=/^SQ\d+$/.test(ownerSq);
+        var ownerSq=String((nodes['p:'+owner]||{meta:{}}).meta.sq||''),ownerMain=/^SQ\\d+$/.test(ownerSq);
         function planOpts(pred,tag){var o=[];G.nodes.forEach(function(x){if(!isActivePlan(x.id)||decl.indexOf(x.id)>=0||!pred(String((x.meta||{}).sq||''),x.id))return;o.push({label:x.id.slice(2)+' 的 outputs'+(tag||''),payload:{key:key,to_plan:x.id.slice(2),to_item:''}});});return o;}
         if(rk==='primary'&&nb==='main'&&b2==='supp'){var opts=[{label:'新增一個敏感性子分析（補充結果）',payload:{key:key,to_plan:owner,new_item:'補充結果：'+key+' 由主要結果降為次要結果'}}];  // 預設描述與 ssot_actions_common.NEW_ITEM_DEFAULT 同一句
-          G.nodes.filter(function(x){return isSensItem(x.id)&&x.id.indexOf('p:'+owner+'#')===0&&decl.indexOf(x.id)<0;}).sort(function(a,b){return (+/#R(\d+)$/.exec(a.id)[1])-(+/#R(\d+)$/.exec(b.id)[1]);})
+          G.nodes.filter(function(x){return isSensItem(x.id)&&x.id.indexOf('p:'+owner+'#')===0&&decl.indexOf(x.id)<0;}).sort(function(a,b){return (+/#R(\\d+)$/.exec(a.id)[1])-(+/#R(\\d+)$/.exec(b.id)[1]);})
             .forEach(function(x){var rid=x.id.split('#')[1];opts.push({label:rid+'：'+String((x.meta||{}).change||'').slice(0,40),payload:{key:key,to_plan:owner,to_item:rid}});});
-          opts=opts.concat(planOpts(function(sq){return /^AQ\d+$/.test(sq);}));
+          opts=opts.concat(planOpts(function(sq){return /^AQ\\d+$/.test(sq);}));
           return {kind:'move_result',ok:true,band:b2,label:'放到 Supplementary 帶、降為次要結果（放開後選落點）',payload:opts[0].payload,options:opts};}
         if(rk==='primary'&&nb==='supp'&&b2==='supp')return {kind:'move_result',ok:false,band:b2,reason:key+' 已在 Supplementary（附錄問題 '+ownerSq+' 的主要結果）'};
         if((rk==='secondary'||(rk==='primary'&&nb==='supp'))&&b2==='main'){var opts2=[];
           if(ownerMain&&rk==='secondary'&&decl.indexOf('p:'+owner)<0)opts2.push({label:'升回本 plan 的 outputs（'+owner+'）',payload:{key:key,to_plan:owner,to_item:''}});
-          opts2=opts2.concat(planOpts(function(sq,pid){return /^SQ\d+$/.test(sq)&&pid!=='p:'+owner;}));
+          opts2=opts2.concat(planOpts(function(sq,pid){return /^SQ\\d+$/.test(sq)&&pid!=='p:'+owner;}));
           if(!opts2.length)return {kind:'move_result',ok:false,band:b2,reason:'沒有主問題的 active plan 可以收 '+key+'（Main 帶沒有可放的 outputs）'};
           return {kind:'move_result',ok:true,band:b2,label:'放到 Main 帶、升為主要結果（放開後選落點）',payload:opts2[0].payload,options:opts2};}
         return null;}
-      if(isSensItem(t)){var mm=/^p:(.+)#(R\d+)$/.exec(t);
+      if(isSensItem(t)){var mm=/^p:(.+)#(R\\d+)$/.exec(t);
         if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 expected_keys 已含 '+key};
         return {kind:'move_result',ok:true,target:t,label:'成為 '+mm[1]+' '+mm[2]+' 的次要結果',payload:{key:key,to_plan:mm[1],to_item:mm[2]}};}
       if(decl.indexOf(t)>=0)return {kind:'move_result',ok:false,target:t,reason:nodes[t].label+' 的 outputs 已含 '+key+(t==='p:'+owner?'，無事可做':'')};
@@ -4626,7 +4626,7 @@ GRAPH_JS = """
       h+='</ol>';}
     syncTrunks();body.innerHTML=h;panel.hidden=false;
   }
-  function plainCaption(c){return String(c||'').replace(/\*{1,2}/g,'');}
+  function plainCaption(c){return String(c||'').replace(/\\*{1,2}/g,'');}
   function figSrc(f){return f.meta.data_uri||(f.meta.file?FIGBASE+f.meta.file:'');}
   function figBlock(f){
     var src=figSrc(f);var h='<div class="fig" data-fig="'+esc(f.id)+'">';
@@ -4820,7 +4820,7 @@ GRAPH_JS = """
   function $v(id,val){document.getElementById(id).value=val;}
   function planLabel(pid){var n=nodes['p:'+pid];return n?n.label:pid;}
   function qLabel(q){var n=nodes['q:'+q];return n?(n.label+(n.title?'：'+n.title.slice(0,40):'')):q;}
-  function nextAqFromIr(){var n=0;G.nodes.forEach(function(x){var m=/^q:AQ(\d+)$/.exec(x.id);if(m)n=Math.max(n,+m[1]);});(G.question_aliases?Object.keys(G.question_aliases):[]).forEach(function(k){var m=/^AQ(\d+)$/.exec(k);if(m)n=Math.max(n,+m[1]);});return 'AQ'+(n+1);}
+  function nextAqFromIr(){var n=0;G.nodes.forEach(function(x){var m=/^q:AQ(\\d+)$/.exec(x.id);if(m)n=Math.max(n,+m[1]);});(G.question_aliases?Object.keys(G.question_aliases):[]).forEach(function(k){var m=/^AQ(\\d+)$/.exec(k);if(m)n=Math.max(n,+m[1]);});return 'AQ'+(n+1);}
   function planModelsFor(sq){var out=[];G.nodes.forEach(function(x){if(x.type==='method'&&!x.parent&&!x.collapsed&&x.meta&&x.meta.sq===sq){var pm=String(x.meta.primary_model||'').split('：')[0].trim();if(pm)out.push(pm);(x.meta.models||[]).forEach(function(m){if(out.indexOf(m)<0)out.push(m);});}});return out;}
   function openReassignForm(sq){if(!serverOk)return;actKind='reassign';actStage('form');actErr.textContent='';document.getElementById('act-form-title').textContent='降為附錄問題（'+sq+'）';
     showActGroup('reassign');
@@ -4835,7 +4835,7 @@ GRAPH_JS = """
     showActGroup('promote');$v('act-p-from',aq);$v('act-p-to','');document.getElementById('act-p-to').placeholder='留空＝回原號（若空著）或 '+(nextSq||'下一個 SQ 號');
     $v('act-reason','');actForm.hidden=false;document.getElementById('act-p-to').focus();}
   // 拖放後開表單：父節點欄位已帶入、唯讀可見；使用者只填理由（reassign／promote 另可改 to，reassign 另可選 primary_model）
-  function nextRid(pid){var n=0;G.nodes.forEach(function(x){var m=/^p:([^#]+)#R(\d+)$/.exec(x.id);if(m&&m[1]===pid&&!x.collapsed)n=Math.max(n,+m[2]);});return 'R'+(n+1);}
+  function nextRid(pid){var n=0;G.nodes.forEach(function(x){var m=/^p:([^#]+)#R(\\d+)$/.exec(x.id);if(m&&m[1]===pid&&!x.collapsed)n=Math.max(n,+m[2]);});return 'R'+(n+1);}
   function mrFill(payload){var rn=nodes['r:'+payload.key]||{label:payload.key,meta:{}};var own=String((rn.meta||{}).plan_id||'');
     document.getElementById('act-form-title').textContent='搬結果：'+payload.key+' → '+payload.to_plan+(payload.to_item?' '+payload.to_item:(payload.new_item?' 新增子分析':''));
     $v('act-mr-key',rn.label+(own?'（現屬 '+own+'，'+({primary:'主要',secondary:'次要',undeclared:'未宣告'}[rn.meta.result_kind]||'')+'結果）':''));$v('act-mr-to',planLabel(payload.to_plan));
@@ -4873,9 +4873,9 @@ GRAPH_JS = """
   document.getElementById('act-cancel').addEventListener('click',closeActForm);
   // 表單 → {kind, payload, reason}（單獨送出與加入暫存共用；錯誤寫進 act-err 並回 null）
   function actFormPayload(){actErr.textContent='';var reason=document.getElementById('act-reason').value.trim();
-    if(actKind==='reassign'){var to=document.getElementById('act-to').value.trim();if(to&&!/^AQ\d+$/.test(to)){actErr.textContent='to 須為 AQ<數字> 或留空';return null;}
+    if(actKind==='reassign'){var to=document.getElementById('act-to').value.trim();if(to&&!/^AQ\\d+$/.test(to)){actErr.textContent='to 須為 AQ<數字> 或留空';return null;}
       return {kind:'reassign',payload:{from:document.getElementById('act-from').value,to:to,primary_model:document.getElementById('act-pm').value},reason:reason};}
-    if(actKind==='promote'){var pto=document.getElementById('act-p-to').value.trim();if(pto&&!/^SQ\d+$/.test(pto)){actErr.textContent='to 須為 SQ<數字> 或留空';return null;}
+    if(actKind==='promote'){var pto=document.getElementById('act-p-to').value.trim();if(pto&&!/^SQ\\d+$/.test(pto)){actErr.textContent='to 須為 SQ<數字> 或留空';return null;}
       return {kind:'promote',payload:{from:document.getElementById('act-p-from').value,to:pto},reason:reason};}
     if(actKind==='set_role'){var fig=document.getElementById('act-fig').value,role=document.getElementById('act-role').value;var cur=String((nodes['f:'+fig]||{meta:{}}).meta.role||'').toLowerCase();if(role===cur){actErr.textContent='role 已是 '+role+'，沒有要改的東西';return null;}
       return {kind:'set_role',payload:{figure:fig,role:role},reason:reason};}
