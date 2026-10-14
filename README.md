@@ -15,6 +15,7 @@
 <a href="#元件"><img alt="agents 18" src="https://img.shields.io/badge/agents-18-8250DF?style=flat-square"></a>
 <a href="#人工確認關卡"><img alt="人工確認關卡 11" src="https://img.shields.io/badge/%E4%BA%BA%E5%B7%A5%E7%A2%BA%E8%AA%8D%E9%97%9C%E5%8D%A1-11-E16F24?style=flat-square"></a>
 <a href="#關於本專案"><img alt="方法 adapter 7" src="https://img.shields.io/badge/%E6%96%B9%E6%B3%95_adapter-7-1A7F72?style=flat-square"></a>
+<a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-2DA44E?style=flat-square"></a>
 <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="輸出 繁體中文" src="https://img.shields.io/badge/%E8%BC%B8%E5%87%BA-%E7%B9%81%E9%AB%94%E4%B8%AD%E6%96%87-555555?style=flat-square">
 </p>
@@ -54,7 +55,8 @@
 10. [收件匣與本機伺服器](#收件匣與本機伺服器)
 11. [測試](#測試)
 12. [出處與致謝](#出處與致謝)
-13. [版本歷程](#版本歷程)
+13. [授權](#授權)
+14. [版本歷程](#版本歷程)
 
 </details>
 
@@ -604,6 +606,10 @@ skills、agents、確定性腳本與 pipeline 設計絕大多數由作者（Char
 
 - 沿用：層級骨架（Layer 1／2／3／5）、核心原則與流程；中文 AI tell 清單與台灣書面語正規化參考 `chinese-deai-editing`。
 - 本 plugin 新增：中文語境的 pattern、例句與規則全部重寫；掛點合約；Layer 4（結果與討論的陳述規格）。
+
+## 授權
+
+本 repo 以 [MIT](LICENSE) 授權釋出。衍生自上游專案的部分，另依各自的 MIT 授權保留原作者聲明，見 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ## 版本歷程
 
