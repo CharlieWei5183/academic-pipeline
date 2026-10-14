@@ -2,7 +2,7 @@
 """Validate analysis/validation.yaml against current results, active plans, and artifacts.
 
 Usage:
-  python3 check_validation.py <project-root> [--sq SQ1|AQ1] [--strict]
+  python3 check_validation.py <project-root> [--sq SQ1|AQ1]
   python3 check_validation.py <project-root> --fingerprint-only
   python3 check_validation.py <project-root> --source-fingerprint-only
 
@@ -40,12 +40,6 @@ RESULT_BASED_ADAPTERS = {
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
 def norm(value: Any) -> str:
@@ -146,7 +140,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--sq")
-    parser.add_argument("--strict", action="store_true")
     parser.add_argument("--fingerprint-only", action="store_true")
     parser.add_argument("--source-fingerprint-only", action="store_true")
     args = parser.parse_args()
@@ -154,7 +147,6 @@ def main() -> int:
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     results_path = root / "analysis" / "results.json"
     if not results_path.is_file():
         print(f"INFO {results_path} 不存在——尚無 results-based 結果可驗證")
@@ -185,17 +177,14 @@ def main() -> int:
 
     validation_path = root / "analysis" / "validation.yaml"
     if not validation_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {validation_path}——結果判讀前須完成 validate-results")
-            return 1
-        print(f"INFO 舊專案無 {validation_path}——略過，可補跑 validate-results")
-        return 0
+        print(f"BLOCKER 缺 {validation_path}——結果判讀前須完成 validate-results")
+        return 1
 
     blockers: list[str] = list(source_blockers)
     warnings: list[str] = []
     doc = load_yaml(validation_path)
     recorded_source = str(doc.get("source_fingerprint") or "")
-    if strict and not recorded_source:
+    if not recorded_source:
         blockers.append("validation.source_fingerprint 為空")
     elif recorded_source and recorded_source != source_fingerprint:
         blockers.append(
@@ -229,8 +218,7 @@ def main() -> int:
                 goals[str(item["id"])] = item
                 goal_kind[str(item["id"])] = kind
     active, plans, plan_blockers = active_plan_docs(root)
-    if strict:
-        blockers.extend(plan_blockers)
+    blockers.extend(plan_blockers)
 
     items = doc.get("items") or []
     if not isinstance(items, list):
@@ -258,7 +246,7 @@ def main() -> int:
         by_sq.setdefault(sq, []).append(item)
 
         plan_id = str(item.get("plan_id") or "")
-        if strict and not plan_id:
+        if not plan_id:
             blockers.append(f"{validation_id}: plan_id 為空")
         if active.get(sq) and plan_id != active[sq]:
             blockers.append(f"{validation_id}: plan_id {plan_id} 不是 {sq} active plan {active[sq]}")
@@ -367,9 +355,9 @@ def main() -> int:
             assessed.add("independent_implementation")
         if independent_result == "fail":
             blockers.append(f"{validation_id}: independent recalculation fail")
-        if strict and independent_result == "not-applicable":
+        if independent_result == "not-applicable":
             blockers.append(
-                f"{validation_id}: v0.7 承重結果不得將 independent recalculation 標 not-applicable；"
+                f"{validation_id}: 承重結果不得將 independent recalculation 標 not-applicable；"
                 "無法執行時應正式 waived 並連 D#"
             )
         if independent_result == "waived":

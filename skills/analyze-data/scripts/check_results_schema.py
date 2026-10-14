@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Validate the v0.7 results.json contract and links to sealed plans/data fingerprint.
 
-Usage: python3 check_results_schema.py <project-root> [--strict]
-Legacy projects without pipeline.version >= 0.7 receive warnings rather than new-schema blockers.
+Usage: python3 check_results_schema.py <project-root>
 """
 from __future__ import annotations
 
@@ -23,12 +22,6 @@ except ImportError:
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    m = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(m and (int(m.group(1)), int(m.group(2))) >= (0, 7))
 
 
 def numeric_or_none(value: Any) -> bool:
@@ -52,12 +45,10 @@ def plan_owns_keys(entry: dict[str, Any], plan_id: str, active_ids: set[str]) ->
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     results_path = root / "analysis" / "results.json"
     if not results_path.is_file():
         print(f"INFO {results_path} 不存在——尚無結果")
@@ -117,7 +108,7 @@ def main() -> int:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", str(key)):
             warnings.append(f"{key}: 建議使用語意化 ASCII key，避免下游工具相容性問題")
         if not isinstance(obj, dict):
-            (blockers if strict else warnings).append(f"{key}: legacy scalar；v0.7 必須是 object")
+            blockers.append(f"{key}: 值必須是 object（不接受純量）")
             continue
         for field in ("script", "description"):
             if not str(obj.get(field) or "").strip():
@@ -125,16 +116,16 @@ def main() -> int:
         pid = str(obj.get("plan_id") or "")
         model_id = str(obj.get("model_id") or "")
         result_data_fp = str(obj.get("data_fingerprint") or "")
-        if strict and not pid:
+        if not pid:
             blockers.append(f"{key}: 缺 plan_id")
         elif pid:
             if pid not in plan_docs:
                 blockers.append(f"{key}: plan_id 不存在於 index: {pid}")
             elif active_ids and pid not in active_ids:
                 blockers.append(f"{key}: plan_id {pid} 非 active plan；舊結果不得冒充目前計畫")
-        if strict and not model_id:
+        if not model_id:
             blockers.append(f"{key}: 缺 model_id")
-        if strict and not result_data_fp:
+        if not result_data_fp:
             blockers.append(f"{key}: 缺 data_fingerprint")
         elif result_data_fp and data_fp and result_data_fp != data_fp:
             blockers.append(f"{key}: data_fingerprint {result_data_fp} 與目前 profile {data_fp} 不一致")
@@ -144,7 +135,7 @@ def main() -> int:
                 warnings.append(f"{key}: data_fingerprint=not-applicable，請確認 adapter 合理")
 
         contract = output_contract.get(str(key))
-        if strict and not contract:
+        if not contract:
             blockers.append(f"{key}: 未在 sealed active plan 預宣告")
         elif contract and pid and contract.get("plan_id") != pid:
             blockers.append(f"{key}: plan_id 應為 {contract.get('plan_id')}，現為 {pid}")

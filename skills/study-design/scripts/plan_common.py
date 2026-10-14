@@ -52,12 +52,6 @@ def content_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()[:20]
 
 
-def pipeline_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
-
-
 # goals 的兩個清單：主問題（SQ#）與附錄問題（AQ#，v0.7.3 起）。機械關卡（plan／results／
 # validation／claims）對兩者一視同仁，所以 goal_map 預設兩者都收；只有「主問題清單本身」
 # 的消費者（init_protocol 寫 protocol.sub_questions）才關掉 include_appendix。

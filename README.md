@@ -52,10 +52,9 @@
 8. [審稿分數與潤稿掛點](#審稿分數與潤稿掛點)
 9. [主要事實與治理 artifacts](#主要事實與治理-artifacts)
 10. [收件匣與本機伺服器](#收件匣與本機伺服器)
-11. [相容性與升級](#相容性與升級)
-12. [測試](#測試)
-13. [出處與致謝](#出處與致謝)
-14. [版本歷程](#版本歷程)
+11. [測試](#測試)
+12. [出處與致謝](#出處與致謝)
+13. [版本歷程](#版本歷程)
 
 </details>
 
@@ -468,10 +467,6 @@ plugin 根的 `hooks/hooks.json` 註冊一個 `SessionEnd` hook（`python3 "${CL
 
 <p align="right"><a href="#readme-top">回到頂端 ↑</a></p>
 
-## 相容性與升級
-
-沒有 `pipeline.version >= 0.7` 的舊專案，新增 checker 以相容模式運作：`check_gate.py` 對完全沒有 last_consistency 的專案只輸出 INFO，對已跑過 v0.6 consistency 的專案只驗既有 `result` 與 `version`。只有 `--strict` 或升版到 0.7.x 後才啟用完整 fingerprint gate。升級請先備份，再依 [`MIGRATION-v0.7.md`](MIGRATION-v0.7.md) 補 route、integrity、protocol/plans、audit、validation、evidence 與 claim-audit。
-
 ## 測試
 
 ```bash
@@ -521,6 +516,7 @@ python3 tests/run_v0200_regressions.py
 python3 tests/run_v0230_regressions.py
 python3 tests/run_v0231_regressions.py
 python3 tests/run_v0240_regressions.py
+python3 tests/run_v0250_regressions.py
 python3 tests/run_literature3d_regressions.py
 ```
 

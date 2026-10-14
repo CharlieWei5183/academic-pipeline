@@ -68,9 +68,6 @@ def main():
     scores = review_state.get('scores') or []
     max_rounds = ((proj.get('review') or {}).get('max_rounds')) or 3
     cur_round = int(round_arg) if round_arg else int(review_state.get('round') or 0)
-    raw_version = str((proj.get('pipeline') or {}).get('version') or '')
-    version_match = re.match(r'^(\d+)\.(\d+)', raw_version)
-    is_v07 = bool(version_match and (int(version_match.group(1)), int(version_match.group(2))) >= (0, 7))
 
     blockers, warnings, notes = [], [], []
     seen_ids = set()
@@ -212,10 +209,7 @@ def main():
     if cur_round > 0 and os.path.exists(decision_path) and cur_round not in score_rounds:
         message = (f'round {cur_round} 已有 editor-decision.md，但 state.review.scores 無該輪——'
                    '先執行 record_review_score.py，否則邊際遞減保險閥無資料')
-        if is_v07:
-            blockers.append(message)
-        else:
-            warnings.append('舊專案相容提示：' + message)
+        blockers.append(message)
 
     print(f'=== check_ledger: {ledger_path} ===')
     print(f'review 池 {len(review_pool)} 條 | must-fix open {len(r_open)} '

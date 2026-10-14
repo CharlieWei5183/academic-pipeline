@@ -445,7 +445,9 @@ def test_not_a_project_file(tmp: Path) -> None:
 
 def test_registration(tmp: Path) -> None:
     changelog = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert changelog.startswith(f'# CHANGELOG\n\n## {V}（'), changelog[:80]
+    # 0.25.0：CHANGELOG 最上面換成新版了，這裡改成「0.24.0 那一節仍在」——與 v0231 對既往版本的寫法一致。
+    assert changelog.startswith('# CHANGELOG\n\n## '), changelog[:40]
+    assert f'\n## {V}（' in changelog, changelog[:200]
     meta = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))
     assert tuple(int(x) for x in meta['version'].split('.')) >= (0, 24, 0), meta['version']
     assert PL.VERSION == C.LAYOUT_VERSION == V, (PL.VERSION, C.LAYOUT_VERSION)

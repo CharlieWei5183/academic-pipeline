@@ -2,7 +2,7 @@
 """Validate the independent claim audit against current claims and their upstream evidence.
 
 Usage:
-  python3 check_claim_audit.py <project-root> [--fingerprint-only] [--strict]
+  python3 check_claim_audit.py <project-root> [--fingerprint-only]
   python3 check_claim_audit.py <project-root> --source-fingerprint-only
 
 `claims_fingerprint` intentionally excludes the confirmation flag, so setting confirmed=true after
@@ -58,12 +58,6 @@ def claims_payload(data: dict[str, Any]) -> dict[str, Any]:
 
 def claims_fingerprint(data: dict[str, Any]) -> str:
     return short_hash(claims_payload(data))
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
 def add_file_record(
@@ -196,13 +190,11 @@ def main() -> int:
     parser.add_argument("root", type=Path)
     parser.add_argument("--fingerprint-only", action="store_true")
     parser.add_argument("--source-fingerprint-only", action="store_true")
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     claims_path = root / "analysis" / "claims.yaml"
     if not claims_path.is_file():
         print(f"INFO {claims_path} 不存在——尚無主張可稽核")
@@ -226,11 +218,8 @@ def main() -> int:
 
     audit_path = root / "analysis" / "claim-audit.yaml"
     if not audit_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {audit_path}——claims 人工確認前須完成 claim-audit")
-            return 1
-        print(f"INFO 舊專案無 {audit_path}——略過，可補跑 claim-audit")
-        return 0
+        print(f"BLOCKER 缺 {audit_path}——claims 人工確認前須完成 claim-audit")
+        return 1
 
     blockers: list[str] = list(source_blockers)
     warnings: list[str] = []
@@ -240,7 +229,7 @@ def main() -> int:
             f"claim-audit 已過期：記錄 claims fingerprint {audit.get('claims_fingerprint') or '空'}，目前 {fingerprint}"
         )
     recorded_source = str(audit.get("source_fingerprint") or "")
-    if strict and not recorded_source:
+    if not recorded_source:
         blockers.append("claim-audit.source_fingerprint 為空")
     elif recorded_source and recorded_source != source_fingerprint:
         blockers.append(

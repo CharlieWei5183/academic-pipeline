@@ -2,7 +2,7 @@
 """Validate non-tabular methodology adapter validation artifacts.
 
 Usage:
-  python3 check_adapter_validation.py <project-root> [--strict]
+  python3 check_adapter_validation.py <project-root>
   python3 check_adapter_validation.py <project-root> --fingerprint-only [--source path ...]
 
 Routes:
@@ -41,12 +41,6 @@ ROUTE_FILES = {
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
 def norm(value: str) -> str:
@@ -93,7 +87,6 @@ def fingerprint(records: list[dict[str, Any]]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--strict", action="store_true")
     parser.add_argument("--fingerprint-only", action="store_true")
     parser.add_argument("--source", action="append", default=[])
     args = parser.parse_args()
@@ -101,7 +94,6 @@ def main() -> int:
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     primary = str((project.get("methodology") or {}).get("primary") or "")
     if primary not in ROUTE_FILES:
         print(f"INFO adapter {primary or '未設定'} 使用 results-based check_validation 或無本檢核需求")
@@ -123,11 +115,8 @@ def main() -> int:
         return 1 if source_blockers else 0
 
     if not artifact_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {ROUTE_FILES[primary]}——adapter validation 尚未完成")
-            return 1
-        print(f"INFO 舊專案缺 {ROUTE_FILES[primary]}——略過，可補跑 validate-results")
-        return 0
+        print(f"BLOCKER 缺 {ROUTE_FILES[primary]}——adapter validation 尚未完成")
+        return 1
 
     blockers = list(source_blockers)
     warnings: list[str] = []

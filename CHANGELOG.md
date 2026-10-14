@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 0.25.0（2026-10-14）
+
+移除 0.7 前專案的相容層。`pipeline.version` 不再決定哪些硬關卡生效：所有 checker 一律以完整契約檢查，缺 artifact
+就是 BLOCKER，不再對未標版本或版本低於 0.7 的專案降級成 INFO／WARNING。0.7.x 以後建立的專案行為不變——它們本來就
+走完整契約；仍停在 0.7 前格式的專案，跑任何 checker 都會被擋，須照現行契約補齊 artifacts。
+
+1. **checker 拿掉版本分支與 `--strict`**：`check_route`、`check_plan`、`check_data_audit`、`check_results_schema`、
+   `check_validation`、`check_adapter_validation`、`check_evidence`、`check_claims`、`check_claim_audit`、
+   `check_integrity`、`check_gate` 刪除 `is_v07()`／`pipeline_v07()`／`strict_project()` 與 `--strict` 旗標（再傳會由
+   argparse 報錯，rc 2）。原本只在「非 strict」時放行的分支全部改為 BLOCKER：缺 route／protocol／plans index／
+   data-audit／validation／adapter validation artifact／evidence synthesis／claim-audit／integrity register；results
+   鍵為純量，或缺 `plan_id`／`model_id`／`data_fingerprint`／預宣告；claims 缺 `boundary`、`counterevidence` 或
+   validation 連結。訊息拿掉「v0.7」「舊專案」字樣。
+2. **`check_gate.py` 刪除相容模式**（`check_legacy_consistency_state`）：只有 `{result, version}` 的 v0.6 式
+   `last_consistency` 不再通過；`last_consistency` 為空直接 BLOCKER。
+3. **`check_ledger.py`**：editor-decision 已在、`state.review.scores` 卻沒有該輪時，不分版本都是 BLOCKER（原本 0.7 前
+   專案只給「舊專案相容提示」WARNING）。
+4. **`check_plan.py --require-confirmed`**：confirmed 與 content_hash 現在一律檢查；旗標保留給既有呼叫端
+   （`ssot_actions_common.py`、三份 SKILL 與測試），不影響結果。
+5. **文件**：刪除 `MIGRATION-v0.7.md`；README 刪「相容性與升級」節；`check-consistency`／`status`／`study-design`／
+   `data-audit`／`evidence-synthesis` 五份 SKILL 的「回溯相容」「舊專案相容模式」段刪除，`peer-review` 改寫為一律
+   完整 gate，`project-init` 刪遷移說明，`status` 的 description 拿掉 migration audit；`project-template.yaml` 的
+   `pipeline.version` 註解改為只記錄契約版本。
+6. **不在本版範圍**：0.24.0 的進度頁面版面遷移（`ensure_progress_layout()`）、`appendix_questions` 缺省視同 `[]`、
+   帳本不存在時的 INFO 等，都不是以 `pipeline.version` 判斷的相容層，維持原狀。本檔以前各版的歷史條目照舊保留。
+7. **測試**：`run_v071_regressions.py` 的 legacy gate 測試改驗「沒有相容模式」（含 `--strict` 被拒）；
+   `run_v0110_regressions.py` 的 README artifacts 區塊改以下一個 `## ` 標題為界；`run_v0240_regressions.py` 的
+   CHANGELOG 斷言改成「0.24.0 那一節仍在」；新增 `tests/run_v0250_regressions.py`（4 項）；`tests/README.md`
+   更新 mini-project 的 check_claims 黃金答案（17 blockers：原本埋的 4 條錯誤＋每條主張 3 條欄位契約＋1 條專案層）。
+
 ## 0.24.0（2026-09-30）
 
 把進度頁面的現用檔搬進 `<root>/progress/`、把所有備份搬進 `<root>/backups/`。專案根本來會被 plugin 的工作檔

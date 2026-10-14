@@ -3,8 +3,7 @@
 # 專案內所有路徑引用一律相對於專案根目錄。
 
 pipeline:
-  version: "0.7.3"        # 管線契約版本；決定哪些硬關卡生效（舊專案不自動升版，
-                          # 遷移請先備份，由 status 盤點缺失 artifacts 後再改此欄）
+  version: "0.7.3"        # 管線契約版本（project-init 寫入）
 
 project:
   title_zh: ""            # 暫定題目（中文）

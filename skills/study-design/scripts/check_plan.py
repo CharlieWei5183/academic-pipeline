@@ -29,7 +29,6 @@ from plan_common import (
     goal_map,
     load_index,
     load_yaml,
-    pipeline_v07,
     plan_path,
     validate_plan_shape,
 )
@@ -39,42 +38,36 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--sq")
-    parser.add_argument("--require-confirmed", action="store_true")
+    parser.add_argument("--require-confirmed", action="store_true",
+                        help="一律檢查 confirmed 與 content_hash；旗標保留給既有呼叫端")
     parser.add_argument("--results", type=Path)
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or pipeline_v07(project)
     blockers: list[str] = []
     warnings: list[str] = []
 
     protocol_path = root / "protocol" / "study-protocol.yaml"
     if not protocol_path.is_file():
-        (blockers if strict else warnings).append("缺 protocol/study-protocol.yaml")
+        blockers.append("缺 protocol/study-protocol.yaml")
     else:
         protocol = load_yaml(protocol_path)
         for key in ("protocol_id", "research_question", "design", "population_or_material"):
             if not str(protocol.get(key) or "").strip():
                 blockers.append(f"protocol.{key} 為空")
-        if args.require_confirmed or strict:
-            if protocol.get("status") != "confirmed":
-                blockers.append("study protocol 尚未 confirmed")
-            digest = str(protocol.get("content_hash") or "")
-            if not digest:
-                blockers.append("study protocol 缺 content_hash")
-            elif digest != content_hash(protocol):
-                blockers.append("study protocol content_hash 不符——確認後疑似被原地修改")
+        if protocol.get("status") != "confirmed":
+            blockers.append("study protocol 尚未 confirmed")
+        digest = str(protocol.get("content_hash") or "")
+        if not digest:
+            blockers.append("study protocol 缺 content_hash")
+        elif digest != content_hash(protocol):
+            blockers.append("study protocol content_hash 不符——確認後疑似被原地修改")
 
     index_path = root / "analysis" / "plans" / "index.yaml"
     if not index_path.is_file():
-        if strict:
-            blockers.append("缺 analysis/plans/index.yaml")
-        else:
-            print("INFO 舊專案無 versioned analysis plans——略過，可補跑 study-design")
-            return 0
+        blockers.append("缺 analysis/plans/index.yaml")
     index = load_index(root)
     active = index.get("active") or {}
     entries = [x for x in (index.get("plans") or []) if isinstance(x, dict)]
@@ -123,16 +116,15 @@ def main() -> int:
             blockers.append(f"{pid}: sq={plan.get('sq')} 與 index {sqid} 不一致")
         if str(plan.get("plan_id")) != str(pid):
             blockers.append(f"{pid}: plan_id 與 index 不一致")
-        if args.require_confirmed or strict:
-            if plan.get("status") != "confirmed":
-                blockers.append(f"{pid}: 尚未 confirmed")
-            digest = str(plan.get("content_hash") or "")
-            if not digest:
-                blockers.append(f"{pid}: 缺 content_hash")
-            elif digest != content_hash(plan):
-                blockers.append(f"{pid}: content_hash 不符——不得原地修改 confirmed plan")
-            if entry and entry.get("content_hash") != digest:
-                blockers.append(f"{pid}: index content_hash 與 plan 不一致")
+        if plan.get("status") != "confirmed":
+            blockers.append(f"{pid}: 尚未 confirmed")
+        digest = str(plan.get("content_hash") or "")
+        if not digest:
+            blockers.append(f"{pid}: 缺 content_hash")
+        elif digest != content_hash(plan):
+            blockers.append(f"{pid}: content_hash 不符——不得原地修改 confirmed plan")
+        if entry and entry.get("content_hash") != digest:
+            blockers.append(f"{pid}: index content_hash 與 plan 不一致")
         if plan.get("origin") and plan.get("origin") != goals.get(sqid, {}).get("origin", ""):
             warnings.append(f"{pid}: origin 與 goals 不一致")
 
@@ -157,15 +149,15 @@ def main() -> int:
                             declared[str(key)] = pid
             for key, obj in results.items():
                 if not isinstance(obj, dict):
-                    warnings.append(f"{key}: legacy scalar，無 plan_id")
+                    warnings.append(f"{key}: 值不是 object，無 plan_id（格式由 check_results_schema 把關）")
                     continue
                 pid = str(obj.get("plan_id") or "")
-                if strict and not pid:
+                if not pid:
                     blockers.append(f"{key}: 缺 plan_id")
                 elif pid and pid not in loaded_plans:
                     blockers.append(f"{key}: plan_id {pid} 不是目前載入的 active plan")
                 if key not in declared:
-                    (blockers if strict else warnings).append(f"{key}: 未在 active plan outputs/robustness 預宣告")
+                    blockers.append(f"{key}: 未在 active plan outputs/robustness 預宣告")
                 elif pid and declared[key] != pid:
                     blockers.append(f"{key}: 應屬 {declared[key]}，results 卻標 {pid}")
 

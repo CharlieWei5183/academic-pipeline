@@ -3,7 +3,7 @@
 
 Usage:
   python3 check_gate.py <project-root> --manuscript manuscript/en/v1.md [--si path ...]
-      [--require-language zh|en] [--fingerprint-only] [--strict]
+      [--require-language zh|en] [--fingerprint-only]
 
 The fingerprint excludes mutable workflow state but covers the manuscript/SI and all
 material upstream sources: raw data, analysis scripts/environment locks, results,
@@ -62,12 +62,6 @@ def load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    match = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(match and (int(match.group(1)), int(match.group(2))) >= (0, 7))
 
 
 def sha256_file(path: Path) -> str:
@@ -329,59 +323,6 @@ def components(root: Path, manuscript: Path, si_paths: list[Path], project: dict
     return [records[key] for key in sorted(records)]
 
 
-
-def check_legacy_consistency_state(
-    root: Path, manuscript: Path, version: str, language: str, project: dict[str, Any]
-) -> int:
-    """Validate only the v0.6 consistency contract.
-
-    Legacy projects did not have gate_fingerprint, report, language, or en_final.confirmed_at.
-    Their populated state is therefore checked only against the fields that existed: result and
-    manuscript version. A completely absent legacy state remains informational, matching the
-    compatibility promise for newly introduced checkers.
-    """
-    state = (project.get("state") or {}).get("last_consistency") or {}
-    has_legacy_state = isinstance(state, dict) and any(
-        str(state.get(key) or "").strip() for key in ("result", "version")
-    )
-    print(f"=== check_gate (legacy compatibility): {version} ===")
-    print(
-        "INFO 舊專案相容模式：只檢查 v0.6 的 result/version；"
-        "不要求 gate_fingerprint、report、language 或 en_final.confirmed_at"
-    )
-    if not has_legacy_state:
-        print("INFO 舊專案無有效 last_consistency——新 checker 不阻擋；送審前仍建議補跑一致性檢核")
-        print("結果: 通過（相容模式）")
-        return 0
-
-    blockers: list[str] = []
-    result = str(state.get("result") or "").strip()
-    if result != "pass":
-        blockers.append(f"last_consistency.result={result or '空'}，不是 pass")
-
-    recorded_version = str(state.get("version") or "").strip()
-    accepted_versions = {
-        version,
-        manuscript.stem,
-        display_path(root, manuscript),
-        f"manuscript/{version}.md",
-    }
-    if recorded_version not in accepted_versions:
-        blockers.append(
-            f"檢核版本 {recorded_version or '空'}，目前稿件 {version} "
-            f"（舊格式亦接受 {manuscript.stem}）"
-        )
-
-    recorded_language = str(state.get("language") or "").strip()
-    if recorded_language and recorded_language != language:
-        blockers.append(f"檢核語言 {recorded_language}，目前 {language}")
-
-    for message in blockers:
-        print(f"BLOCKER {message}")
-    print(f"--- {len(blockers)} blocker(s); legacy fields only ---")
-    print("結果: " + ("未通過" if blockers else "通過（相容模式）"))
-    return 1 if blockers else 0
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -389,13 +330,11 @@ def main() -> int:
     parser.add_argument("--si", action="append", default=[], type=Path)
     parser.add_argument("--require-language", choices=["zh", "en"])
     parser.add_argument("--fingerprint-only", action="store_true")
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
 
     manuscript = args.manuscript if args.manuscript.is_absolute() else root / args.manuscript
     si_paths = [path if path.is_absolute() else root / path for path in args.si]
@@ -422,12 +361,6 @@ def main() -> int:
     if args.require_language and language != args.require_language:
         print(f"BLOCKER 稿件語言路徑為 {language or 'unknown'}，要求 {args.require_language}")
         return 1
-
-    # Compatibility must branch on project version, not on whether a legacy state happens
-    # to be populated. Otherwise a v0.6 project that *did* run consistency is punished for
-    # lacking fields that did not exist, while an empty legacy project is allowed through.
-    if not strict:
-        return check_legacy_consistency_state(root, manuscript, version, language, project)
 
     state = (project.get("state") or {}).get("last_consistency") or {}
     has_gate_state = isinstance(state, dict) and any(
