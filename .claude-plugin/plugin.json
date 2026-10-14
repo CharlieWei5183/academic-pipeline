@@ -5,6 +5,8 @@
   "author": {
     "name": "Charlie"
   },
+  "repository": "https://github.com/CharlieWei5183/academic-pipeline",
+  "license": "MIT",
   "keywords": [
     "academic-writing",
     "research-workflow",
