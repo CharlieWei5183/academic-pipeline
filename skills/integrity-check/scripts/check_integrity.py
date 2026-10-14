@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Validate integrity/register.yaml for the pre-study or pre-submission gate.
 
-Usage: python3 check_integrity.py <project-root> --stage prestudy|presubmission [--strict]
+Usage: python3 check_integrity.py <project-root> --stage prestudy|presubmission
 """
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,12 +20,6 @@ except ImportError:
 def load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
-
-
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    m = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(m and (int(m.group(1)), int(m.group(2))) >= (0, 7))
 
 
 REQUIRED = {
@@ -79,19 +72,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--stage", choices=["prestudy", "presubmission"], required=True)
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
-    project_path = root / "project.yaml"
-    project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     register_path = root / "integrity" / "register.yaml"
     if not register_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {register_path}——須完成 integrity-check ({args.stage})")
-            return 1
-        print(f"INFO 舊專案無 {register_path}——略過，可補跑 integrity-check")
-        return 0
+        print(f"BLOCKER 缺 {register_path}——須完成 integrity-check ({args.stage})")
+        return 1
 
     blockers: list[str] = []
     warnings: list[str] = []

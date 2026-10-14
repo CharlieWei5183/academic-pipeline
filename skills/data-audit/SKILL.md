@@ -46,9 +46,7 @@ metadata:
 - systematic review：重複報告、重疊 cohort、擷取一致性與 outcome 定義。
 - simulation：參數來源、邊界條件、benchmark 與 code version。
 
-## 回溯相容
-
-舊專案無 pipeline.version 0.7 時，check_data_audit 只提示；新專案 blocker 未清不得進正式分析。
+blocker 未清不得進正式分析；缺 `analysis/data-audit.yaml` 時 `check_data_audit.py` 直接 BLOCKER。
 
 ## 收尾
 

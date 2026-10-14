@@ -2,7 +2,7 @@
 """Validate reproducible evidence-synthesis artifacts and bibliography links.
 
 Usage:
-  python3 check_evidence.py <project-root> [--strict]
+  python3 check_evidence.py <project-root>
   python3 check_evidence.py <project-root> --protocol-fingerprint-only
   python3 check_evidence.py <project-root> --source-fingerprint-only [--source path ...]
 """
@@ -133,24 +133,14 @@ def bib_keys(path: Path) -> set[str]:
     return set(re.findall(r"@\w+\s*\{\s*([^,\s]+)", text))
 
 
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    m = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(m and (int(m.group(1)), int(m.group(2))) >= (0, 7))
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--strict", action="store_true")
     parser.add_argument("--protocol-fingerprint-only", action="store_true")
     parser.add_argument("--source-fingerprint-only", action="store_true")
     parser.add_argument("--source", action="append", default=[], help="額外來源檔或目錄（可重複）")
     args = parser.parse_args()
     root = args.root.resolve()
-    project_path = root / "project.yaml"
-    project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     protocol_path = root / "literature" / "evidence-protocol.yaml"
     synthesis_path = root / "literature" / "evidence-synthesis.yaml"
 
@@ -173,11 +163,8 @@ def main() -> int:
         return 0
 
     if not synthesis_path.is_file():
-        if strict:
-            print(f"BLOCKER 缺 {synthesis_path}——v0.7 判讀／寫作前須完成 evidence-synthesis")
-            return 1
-        print(f"INFO 舊專案無 {synthesis_path}——略過，可補跑 evidence-synthesis")
-        return 0
+        print(f"BLOCKER 缺 {synthesis_path}——判讀／寫作前須完成 evidence-synthesis")
+        return 1
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -214,8 +201,7 @@ def main() -> int:
     doc = load_yaml(synthesis_path)
     declared_sources = doc.get("source_artifacts")
     if declared_sources is None:
-        if strict:
-            blockers.append("synthesis.source_artifacts 缺欄（可為空 list，但須明示）")
+        blockers.append("synthesis.source_artifacts 缺欄（可為空 list，但須明示）")
         declared_sources = []
     elif not isinstance(declared_sources, list):
         blockers.append("synthesis.source_artifacts 必須是 list")
@@ -224,7 +210,7 @@ def main() -> int:
     blockers.extend(source_blockers)
     source_fp = records_fingerprint(source_records)
     recorded_source_fp = str(doc.get("source_fingerprint") or "")
-    if strict and not recorded_source_fp:
+    if not recorded_source_fp:
         blockers.append("synthesis.source_fingerprint 為空")
     elif recorded_source_fp and recorded_source_fp != source_fp:
         blockers.append(

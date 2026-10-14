@@ -50,14 +50,16 @@ python3 ../../skills/revise/scripts/diff_versions.py manuscript/zh/v1.md manuscr
 - 不得誤報：SQ1（addressed、三條 links 皆有效）
 - 加 `--sq SQ1` 時（輕量模式）：0 blocker，exit 0
 
-**check_claims**（exit 1，4 blockers）：
+**check_claims**（exit 1，17 blockers）：
 
-- BLOCKER：`C2: evidence 無效, results.json 無鍵 "effect_size"`
-- BLOCKER：`C3: sq 無效, goals 無 "SQ9"`
-- BLOCKER：`C3: strength 無效 "proven"`
-- BLOCKER：`C4: causal 級 basis 為空`
+- 刻意埋的 4 條錯誤：
+  - BLOCKER：`C2: evidence 無效, results.json 無鍵 "effect_size"`
+  - BLOCKER：`C3: sq 無效, goals 無 "SQ9"`
+  - BLOCKER：`C3: strength 無效 "proven"`
+  - BLOCKER：`C4: causal 級 basis 為空`
+- 欄位契約（0.25.0 起不分專案版本一律檢查；mini-project 的 claims 沒有這三個欄位）：C1–C4 各 3 條——`claim 缺 boundary`、`claim 的 counterevidence 必須是 list（可為空）`、`results 型 evidence 未連 validation V#`；另加 1 條專案層 `results 型 claims 缺可讀的 analysis/validation.yaml`
 - WARNING：`confirmed: false`（主張尚未經使用者確認）
-- 不得誤報：C1（sq、strength、三條 evidence 皆有效）
+- 不得誤報：C1 的 sq、strength、三條 evidence 皆有效——C1 只能出現上面 3 條欄位契約 blocker
 - 加 `--manuscript manuscript/zh/v1.md` 時：blocker 數不變，另出現 4 條「主張未見於稿件」warning（稿件無 claims 標註）
 
 **diff_versions**（自我比對煙霧測試，exit 0）：
@@ -118,7 +120,7 @@ python3 tests/run_v071_regressions.py
 
 必須驗證：
 
-- v0.6 已有 `{last_consistency: {result: pass, version: vN}}` 時，`check_gate.py` 相容模式通過，不要求 `gate_fingerprint`／`report`；明確 `--strict` 或 0.7.x 專案仍阻擋缺欄。
+- `check_gate.py` 沒有相容模式（0.25.0 起）：未標 `pipeline.version` 的專案即使已有 `{result: pass, version: vN}`，缺 `gate_fingerprint`／`report` 照樣阻擋；`last_consistency` 為空直接 BLOCKER。
 - editor 四段分數帶、新穎性／定位敘事子問題及 `REVIEW_SCORE` block 均存在。
 - 每個完整 panel 輪可由 `record_review_score.py` 寫入且依 round 去重；兩輪改善不足時 `check_ledger.py` 確實輸出邊際遞減保險閥。
 - README、status、peer-review、revise 都保留中文潤稿掛點（0.10.0 起為內建 `chinese-academic-editing`；skill 名的當期契約由 run_v0100 pin）。
@@ -578,3 +580,21 @@ fixture 沿用 `run_v0161_regressions.fixture`（規格 7 用 `run_v0230_regress
   `run_v0110`／`run_v0160`／`run_v0161`／`run_v0163`／`run_v0170`／`run_v0120` 的其餘字面與空斷言逐處列在
   CHANGELOG 第 9 條。**`run_v0120` 的 `test_embed_figures_flag`（「預設不得內嵌圖檔」）在 0.23.1 上就已經是
   紅的**（0.23.0 的投稿分頁縮圖以 data URI 內嵌，那條斷言寫在那個功能之前），與 0.24.0 無關、本版不動它。
+
+## run_v0250_regressions.py
+
+0.25.0 移除 0.7 前專案的相容層：
+
+```bash
+python3 tests/run_v0250_regressions.py
+```
+
+- 規格 1：沒有 `pipeline` 區塊的專案，`check_route`／`check_plan`／`check_data_audit`／`check_integrity`／
+  `check_evidence`／`check_adapter_validation`／`check_results_schema`／`check_validation`／`check_claim_audit`
+  缺 artifact 時一律 rc 1、印 BLOCKER，輸出不含「舊專案」「相容」；`check_claims` 對缺 `boundary`／
+  `counterevidence`／validation 連結的主張逐條 BLOCKER。
+- 規格 2：上述九支與 `check_gate.py` 傳 `--strict` 都由 argparse 拒絕（rc 2）。
+- 規格 3：`check_ledger.py` 在 editor-decision 已存在、`state.review.scores` 無該輪時 BLOCKER，不再有「舊專案相容提示」。
+- 規格 4：`skills/` 底下沒有 `is_v07`／`pipeline_v07`／`strict_project`／`args.strict`／
+  `check_legacy_consistency_state`；`MIGRATION-v0.7.md` 不存在；README 沒有「相容性與升級」；SKILL.md 不含
+  相容模式字樣；CHANGELOG 開頭是 `## 0.25.0`、`plugin.json` ≥ 0.25.0、本檔與 README 都登記本測試。

@@ -95,15 +95,6 @@ state:
 
 報告存 `reviews/consistency-<lang>-<version>.md`。未通過寫 fail 並修正後全量重跑；不得只重跑先前失敗的單項後沿用舊 semantic audit。
 
-## 舊專案相容模式
-
-`check_gate.py` 的相容分支以 `pipeline.version` 判定，**不能以 last_consistency 是否為空判定**：
-
-- `pipeline.version < 0.7` 且未加 `--strict`：只檢查 v0.6 已存在的 `result` 與 `version`；不要求 `gate_fingerprint`、`report`、`language` 或 `en_final.confirmed_at`。
-- 舊專案完全沒有有效 `last_consistency`：輸出 INFO 並 exit 0，符合「新增 checker 不因缺新 artifact 阻擋」的相容承諾。
-- 舊專案已有 `{result: pass, version: vN}`：應以 legacy contract 通過，不能因缺 v0.7 欄位失敗。
-- `pipeline.version >= 0.7` 或明確加 `--strict`：完整 fingerprint gate 生效。
-
 ## 收尾
 
 申報：「本階段更新：state.last_consistency → <lang/version, pass, fingerprint>；下一站：peer-review／submission-prep」。

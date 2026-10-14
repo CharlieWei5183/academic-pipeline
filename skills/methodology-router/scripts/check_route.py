@@ -2,14 +2,13 @@
 """Validate methodology/route.yaml against the adapters shipped with the plugin.
 
 Usage:
-  python3 check_route.py <project-root> [--adapters <adapter-dir>] [--strict]
+  python3 check_route.py <project-root> [--adapters <adapter-dir>]
 
-Exit 0 when valid (or legacy project has no route), 1 on blockers, 2 on usage/dependency errors.
+Exit 0 when valid, 1 on blockers, 2 on usage/dependency errors.
 """
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,33 +27,24 @@ def load_yaml(path: Path) -> dict[str, Any]:
         raise ValueError(f"無法讀取 {path}: {exc}") from exc
 
 
-def is_v07(project: dict[str, Any]) -> bool:
-    raw = str((project.get("pipeline") or {}).get("version") or "")
-    m = re.match(r"(\d+)\.(\d+)", raw)
-    return bool(m and (int(m.group(1)), int(m.group(2))) >= (0, 7))
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--adapters", type=Path)
-    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
     project_path = root / "project.yaml"
     project = load_yaml(project_path) if project_path.is_file() else {}
-    strict = args.strict or is_v07(project)
     route_path = root / "methodology" / "route.yaml"
     adapter_dir = (args.adapters.resolve() if args.adapters else
                    Path(__file__).resolve().parents[1] / "references" / "adapters")
 
     if not route_path.is_file():
         msg = f"{route_path} 不存在"
-        if strict:
-            print(f"BLOCKER {msg}——v0.7 專案須先跑 methodology-router")
-            print("--- 1 blocker(s), 0 warning(s) ---")
-            return 1
+        print(f"BLOCKER {msg}——須先跑 methodology-router")
+        print("--- 1 blocker(s), 0 warning(s) ---")
+        return 1
         print(f"INFO {msg}——舊專案略過，可補跑 methodology-router")
         return 0
 
@@ -107,7 +97,7 @@ def main() -> int:
             blockers.append("project.yaml methodology.secondary 與 route.yaml 不一致")
         if methodology.get("confirmed") is False:
             warnings.append("project.yaml methodology.confirmed 仍為 false")
-    elif strict:
+    else:
         blockers.append("project.yaml 缺 methodology 區塊或尚未同步 route")
 
     print(f"=== check_route: {route_path} ===")

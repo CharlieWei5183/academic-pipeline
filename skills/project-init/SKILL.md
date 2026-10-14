@@ -14,7 +14,7 @@ metadata:
 
 ## 步驟
 
-1. **確認專案位置**：若已有 `project.yaml`，不得直接覆蓋；先判斷是繼續、遷移或另建專案。
+1. **確認專案位置**：若已有 `project.yaml`，不得直接覆蓋；先判斷是繼續或另建專案。
 2. **訪談使用者**（已知的不重問）：
    - 主研究問題、暫定題目與領域；
    - 資料、材料、實驗、訪談、文獻或模擬的現況；
@@ -86,6 +86,6 @@ metadata:
 - goals 是單一事實來源；任何增刪改均須使用者確認，結構性變更重跑拆解審並使 study-design、validation、claims 與稿件關卡過期。
 - 推翻既有決策時（任何 skill）：先呈示原 D# 條目，經使用者確認後才以 `supersedes` 條目落地——跨 session 防翻案的主要機制。
 - 專案內所有路徑引用一律相對於專案根目錄。
-- 舊專案不自動升版。遷移到 v0.7 時先備份，再由 status 盤點缺失 artifacts；一旦將 `pipeline.version` 設為 0.7.3，新硬關卡即生效。`appendix_questions` 為附加、可選欄位（缺省視同 `[]`），對舊專案回溯相容。
+- `appendix_questions` 為附加、可選欄位，缺省視同 `[]`。
 - 收尾申報：「本階段更新：pipeline.version → 0.7.3；goals 寫入 <N> 個 SQ；下一站：methodology-router」。
 - 收尾必記一筆 D#：追加 `decisions.yaml` 條目，`stage: project-init`、`checkpoint: 階段收尾`，並填 `question`（本階段對應的問題層：`main` 或子問題 id 如 `SQ2`）、`exec_issue`（只在這筆是該問題之下的執行問題時填，一句話）、`method`（對應該層的方法：main＝研究設計、SQ＝分析方法、有 exec_issue＝解決該執行問題的做法）、`evidence`（本階段的指令、腳本路徑、fingerprint 或輸出檔路徑清單）；照建議原樣通過也要記。這一筆是進度時間軸的資料來源，沒記就不會出現在時間軸上。
