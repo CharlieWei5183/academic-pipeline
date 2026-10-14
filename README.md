@@ -4,10 +4,10 @@
 
 <h1>academic-pipeline</h1>
 
-<p><strong>可稽核、可重現的研究—論文全流程 Claude Code plugin</strong></p>
+<p><strong>從研究到論文，可稽核、可重現的 Claude Code plugin</strong></p>
 
-<p>從研究問題走到投稿檔案：每一步留下 artifact、交給獨立角色審查、由腳本機械把關，<br>
-方向性的決定一律交還給你。</p>
+<p>從研究問題一路做到投稿檔案。每一步都留下 artifact，由獨立角色審查、腳本機械把關；<br>
+方向性的決定由你來做。</p>
 
 <p>
 <a href="https://code.claude.com/docs/en/plugin-marketplaces"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-D97757?style=flat-square"></a>
@@ -37,7 +37,7 @@
 </picture>
 
 > [!IMPORTANT]
-> **AI 不替你拍板。** 流程上有 11 個人工確認關卡（上圖橙色），不確認就不往下走；方向性取捨一律寫進 `decisions.yaml`（D#）。潤稿站可以略過，但不能取代 ★ 中文定稿與 ★ 英文確認。
+> 流程上有 11 個人工確認關卡（上圖橙色），你不確認，流程就停在那裡；方向性的取捨都寫進 `decisions.yaml`（D#）。潤稿站可以略過，但不能取代 ★ 中文定稿與 ★ 英文確認。
 
 <details>
 <summary><strong>目錄</strong></summary>
@@ -60,19 +60,19 @@
 
 ## 關於本專案
 
-`academic-pipeline` 是一套以 artifacts、獨立角色與確定性檢核構成的研究—論文 pipeline，涵蓋從專案初始化、方法學路由、資料分析，到中英文稿撰寫、虛擬同儕審查、投稿與排版的全流程。設計目標是可稽核、可重現、能跨 Cowork session 穩定執行的 agent 驅動研究流程；所有輸出為繁體中文。
+`academic-pipeline` 是一套從研究到論文的 pipeline，由 artifacts、獨立審查角色與確定性檢核組成，範圍從專案初始化、方法學路由、資料分析、中英文稿撰寫、虛擬同儕審查，一直到投稿與排版。整個流程可稽核、可重現，跨 Cowork session 也能穩定執行。所有輸出為繁體中文。
 
-核心原則：`project.yaml` 的 `state` 只是快取；protocol、plans、results、validation、claims、audit reports 等 artifacts 才是狀態真相。任何承重來源變動，都必須使下游 pass 狀態失效。
+三條核心原則：
 
 | 原則 | 怎麼落實 |
 |---|---|
-| **artifacts 才是狀態真相** | protocol、plans、results、validation、claims 都有 schema 與 fingerprint；上游一變，下游的 pass 自動失效，不能沿用。 |
-| **機械歸腳本、判斷歸 agent、取捨歸人** | 能機械判定的（schema、封存、重跑、數字一致性）交給確定性腳本；需要領域判斷的交給專責 agent；方向性選擇呈你確認並記入 `decisions.yaml`。 |
-| **起草者不審自己** | 設計、分析、主張、翻譯都由另一個角色獨立審查；審查 agent 只拿材料，不拿起草者的辯解。 |
+| artifacts 才是狀態真相 | `project.yaml` 的 `state` 只是快取。protocol、plans、results、validation、claims、audit reports 都有 schema 與 fingerprint；任何承重來源一變，下游的 pass 就失效，不能沿用。 |
+| 機械歸腳本、判斷歸 agent、取捨歸人 | 能機械判定的（schema、封存、重跑、數字一致性）交給確定性腳本，需要領域判斷的交給對應的 agent，方向性選擇由你確認並記入 `decisions.yaml`。 |
+| 起草者不審自己 | 設計、分析、主張、翻譯都由另一個角色審查；審查 agent 只拿材料，不拿起草者的辯解。 |
 
 文中的 **SSOT**（single source of truth，單一事實來源）就是這些 artifacts：同一件事實只存在一個檔，其他檔案與頁面都從它衍生，要改內容就改 SSOT。清單見[主要事實與治理 artifacts](#主要事實與治理-artifacts)。
 
-**支援的研究類型**：route adapter 決定每個專案要走哪些 gate、交哪些 artifacts——`quantitative-inference`（定量推論）· `predictive-ml`（預測／ML）· `qualitative`（質性）· `mixed-methods`（混合方法）· `systematic-review-meta-analysis`（系統性回顧／統合分析）· `simulation-computational`（模擬計算）· `theoretical-mathematical`（理論數學）。
+支援七種研究類型，各由一個 route adapter 決定專案要走哪些 gate、交哪些 artifacts：`quantitative-inference`（定量推論）、`predictive-ml`（預測／ML）、`qualitative`（質性）、`mixed-methods`（混合方法）、`systematic-review-meta-analysis`（系統性回顧／統合分析）、`simulation-computational`（模擬計算）、`theoretical-mathematical`（理論數學）。
 
 <p align="right"><a href="#readme-top">回到頂端 ↑</a></p>
 
@@ -109,7 +109,7 @@ claude plugin install academic-pipeline@charlie-plugins
 | 「幫我從數據一路做到投稿」 | `status` | 依現況逐站導向下一個 skill |
 | 「整理文獻」 | `lit-review` | Zotero 與網路搜尋、retraction 檢查、文獻矩陣 |
 | 「送審看看」 | `peer-review` | 3–4 席 persona 全文審稿，editor 評分裁決 |
-| 「這支腳本為什麼報錯」 | `debug-pipeline` | 單一根因定位與最小修補 |
+| 「這支腳本為什麼出錯」 | `debug-pipeline` | 單一根因定位與最小修補 |
 
 <p align="right"><a href="#readme-top">回到頂端 ↑</a></p>
 
@@ -120,9 +120,9 @@ claude plugin install academic-pipeline@charlie-plugins
   <img alt="系統架構：你在最上層確認與取捨；skills 依序執行流程站、委派 agents 判斷、執行確定性腳本 gate；狀態全部寫入 SSOT artifacts；進度層在流程線外唯讀 artifacts" src="docs/figures/architecture-light.svg" width="100%">
 </picture>
 
-每個 skill 都是同一個節奏：讀 artifacts → 委派 agent 判斷 → 跑腳本 gate → 呈你確認 → 寫回 artifacts。進度層（`status`、hook、進度頁面、收件匣）不在流程線上，只讀 artifacts、不改 SSOT。
+每個 skill 都照同一個順序做事：讀 artifacts → 委派 agent 判斷 → 跑腳本 gate → 呈你確認 → 寫回 artifacts。進度層（`status`、hook、進度頁面、收件匣）不在流程線上，只讀 artifacts、不改 SSOT。
 
-**誰起草、誰審查**
+各項產出由誰起草、誰獨立審查：
 
 | 產出（站） | 起草／執行 | 獨立審查 |
 |---|---|---|
@@ -147,11 +147,13 @@ claude plugin install academic-pipeline@charlie-plugins
   <img alt="Pipeline 流程：七個階段的站點順序，橙色為人工確認關卡 1–11，青色為確定性腳本 gate，虛線為內建選用站" src="docs/figures/pipeline-flow-light.svg" width="100%">
 </picture>
 
-橙色＝人工確認關卡，編號同下表，不確認就不往下走；青色＝確定性腳本 gate，由 checker 機械判定；虛線＝內建選用站，略過不報錯；其餘為 skill 流程站。圖檔由 [`docs/figures/build_figures.py`](docs/figures/build_figures.py) 產生，改流程時改那支腳本再重跑。
+橙色＝人工確認關卡，編號同下表，不確認就不往下走；青色＝確定性腳本 gate，由 checker 機械判定；虛線＝內建選用站，可以略過；其餘為 skill 流程站。圖檔由 [`docs/figures/build_figures.py`](docs/figures/build_figures.py) 產生，改流程時改那支腳本再重跑。
 
-`status` 不在流程線上——任何時點都能呼叫它掃描 artifacts、重算 fingerprint，指出第一個未通過或已過期的 gate 並導向對應 skill。route adapter 可把定量 `analyze-data` 換成質性 audit trail、proof audit、systematic-review synthesis 或 mixed-method integration，required gates 仍由 route 機械檢查。
+route adapter 可以把定量的 `analyze-data` 換成質性 audit trail、proof audit、systematic-review synthesis 或 mixed-method integration，required gates 仍由 route 機械檢查。
 
-`debug-pipeline` 同屬流程線外：當任一執行、clean-room rerun 或 checker 失敗且根因未知時反應式觸發，做單一根因定位與最小修補後，把因修補而失效的下游 gate 交回 `status` 重新分診；它不改 sealed plan、不覆寫正式結果。
+`status` 不在流程線上，任何時點都能呼叫：它掃描 artifacts、重算 fingerprint，找出第一個未通過或已過期的 gate，再導向對應的 skill。
+
+`debug-pipeline` 也在流程線外。任一執行、clean-room rerun 或 checker 失敗、且根因不明時才用到它：先定位單一根因、做最小修補，再把因修補而失效的下游 gate 交回 `status` 重新分診。它不改 sealed plan，也不覆寫正式結果。
 
 <details>
 <summary>純文字版主流程</summary>
@@ -189,7 +191,7 @@ project-init
 
 ## 人工確認關卡
 
-下表只列**不確認就無法往下走**的硬關卡，編號與上面兩張圖一致。
+下表只列不確認就無法往下走的硬關卡，編號與上面兩張圖一致。
 
 | # | 關卡 | 所屬 skill | 確認什麼 | 不確認的後果 |
 |---|---|---|---|---|
@@ -206,74 +208,74 @@ project-init
 | 11 | 排版收尾 | `typeset` | 產物清單、check_build、自引清單 | `state.submission.build` 不寫入 |
 
 > [!WARNING]
-> ★ 兩處是語言定稿點：潤稿站（`chinese-academic-editing`／`academic-english-editing`）可以略過，但**不能取代**這兩個人工確認。潤稿只改語言呈現，不得動數字、markers、citekey、claim strength 或 validation boundary；潤稿後必須建立新版本並重跑該語言的完整 consistency。
+> ★ 兩處是語言定稿點：潤稿站（`chinese-academic-editing`／`academic-english-editing`）可以略過，但不能取代這兩個人工確認。潤稿只改語言呈現，不得動數字、markers、citekey、claim strength 或 validation boundary；潤稿後必須建立新版本並重跑該語言的完整 consistency。
 
-除上表外，多數 skill 另有取捨性質的確認（`lit-review` 的搜尋關鍵字、`evaluate` 的 SQ 狀態變更、`evidence-synthesis` 的 protocol 封存、`write-supplementary` 的素材取捨、`journal-match` 的 target 與 cascade）。上表只列不確認就無法往下走的硬關卡。
+除了這 11 個硬關卡，多數 skill 還有取捨性質的確認，例如 `lit-review` 的搜尋關鍵字、`evaluate` 的 SQ 狀態變更、`evidence-synthesis` 的 protocol 封存、`write-supplementary` 的素材取捨、`journal-match` 的 target 與 cascade。
 
 <p align="right"><a href="#readme-top">回到頂端 ↑</a></p>
 
 ## 核心設計
 
 <details>
-<summary><strong>版本化研究與分析計畫</strong>：sealed plan 以 content hash 封存，修改只能出新版本</summary>
+<summary>版本化研究與分析計畫：sealed plan 以 content hash 封存，修改只能出新版本</summary>
 
-`study-design` skill 與 `research-designer` agent 把研究設計落地為 `protocol/study-protocol.yaml`、`analysis/plans/<SQ>-vN.yaml` 與 `analysis/plans/index.yaml`。confirmed plan 以 content hash 封存；修改須建立新版本並標示 `supersedes`、`amendment_reason` 與差異，不得原地改寫。每筆 result 必須連回 active `plan_id`、`model_id` 與 `data_fingerprint`。
+`study-design` skill 與 `research-designer` agent 把研究設計寫成 `protocol/study-protocol.yaml`、`analysis/plans/<SQ>-vN.yaml` 與 `analysis/plans/index.yaml`。confirmed plan 以 content hash 封存；修改須建立新版本並標示 `supersedes`、`amendment_reason` 與差異，不得原地改寫。每筆 result 必須連回 active `plan_id`、`model_id` 與 `data_fingerprint`。
 
 </details>
 
 <details>
-<summary><strong>clean-room rerun</strong>：只複製 inputs 從零重建，重建不出來就失敗</summary>
+<summary>clean-room rerun：只複製 inputs 從零重建，重建不出來就失敗</summary>
 
 `analyze-data` 強制「執行 sealed plan → schema/manifest 檢核 → clean-room rerun → code-review → validate-results → 人工確認」。`rerun_all.py` 只複製 inputs，fingerprint 涵蓋 raw data、完整 `analysis/scripts/`、run-order、protocol／active plans、data profile/audit、manifest、方法路由與環境 lock；未從零重建輸出即失敗。
 
 </details>
 
 <details>
-<summary><strong>獨立結果驗證</strong>：承重結果交給 statistical-validator 壓測與獨立重算</summary>
+<summary>獨立結果驗證：承重結果交給 statistical-validator 壓測與獨立重算</summary>
 
 `validate-results` skill 與 `statistical-validator` agent 以 `analysis/validation.yaml` 記錄模型診斷、影響點、替代規格、缺失值、多重比較、穩定性與承重結果的獨立重算；質性／系統性回顧／混合方法／理論研究改用對應 adapter validation artifacts。
 
 </details>
 
 <details>
-<summary><strong>獨立主張反方審查</strong>：interpreter 只能起草，claim-critic 逐條攻擊</summary>
+<summary>獨立主張反方審查：interpreter 只能起草，claim-critic 逐條攻擊</summary>
 
 `interpreter` 只能起草 `claims.yaml`；`claim-audit` skill 與 `claim-critic` agent 逐條攻擊 entailment、主張強度、反證、適用邊界與探索轉驗證問題。任一上游 fingerprint 漂移都會擋下舊 audit。
 
 </details>
 
 <details>
-<summary><strong>英文定稿後的完整一致性 gate</strong>：gate fingerprint 擋下過期的 pass</summary>
+<summary>英文定稿後的完整一致性 gate：gate fingerprint 擋下過期的 pass</summary>
 
 `translate-en` 後強制執行完整 `check-consistency(en)`，重查上游 route/plans/audit/validation、數字表格引用圖文、中英 claim strength 與方法語意。`check_gate.py` 以 gate fingerprint 防止沿用過期 pass。
 
 </details>
 
 <details>
-<summary><strong>治理與方法 adapter</strong>：七種 adapter 各自定義 required gates 與契約</summary>
+<summary>治理與方法 adapter：七種 adapter 各自定義 required gates 與契約</summary>
 
-`methodology-router`、`data-audit`、`evidence-synthesis`、`integrity-check` 提供一般研究所需治理；內建七種 adapter——`quantitative-inference`、`predictive-ml`、`qualitative`、`mixed-methods`、`systematic-review-meta-analysis`、`simulation-computational`、`theoretical-mathematical`——各自定義 required gates、plan／validation／results 契約、interpretation limits 與 reporting guideline。
+`methodology-router`、`data-audit`、`evidence-synthesis`、`integrity-check` 提供一般研究所需的治理。內建七種 adapter（`quantitative-inference`、`predictive-ml`、`qualitative`、`mixed-methods`、`systematic-review-meta-analysis`、`simulation-computational`、`theoretical-mathematical`），各自定義 required gates、plan／validation／results 契約、interpretation limits 與 reporting guideline。
 
 </details>
 
 <details>
-<summary><strong>主問題與附錄問題分離</strong>：子問題問現象，附錄問題問分析本身</summary>
+<summary>主問題與附錄問題分離：子問題問現象，附錄問題問分析本身</summary>
 
 `goals` 分為 `sub_questions`（問「現象」：X 與 Y 是否關聯、機制、邊界）與 `appendix_questions`（問「分析本身」：換方法／換設定下主結果是否維持）。目標覆蓋只以 `sub_questions` 判定主問題是否答足；附錄問題不計入主覆蓋，但同受 `check_coverage.py` 的逐項 integrity 檢查。機械關卡上兩者同等：附錄問題一樣可以有 sealed plan（`init_plan.py --sq AQ1`）、`results.json` 結果鍵、validation item、claims 與 exploration 轉正目標，`check_plan.py`／`check_validation.py`／`check_claims.py`／`check_exploration.py` 都認 `AQ#`；唯一差別是 AQ 缺 active plan 或缺 validation item 只 WARNING，主問題仍 BLOCKER。
 
 </details>
 
 <details>
-<summary><strong>內建英文潤稿站</strong>：只改語言呈現，不動數字與主張強度</summary>
+<summary>內建英文潤稿站：只改語言呈現，不動數字與主張強度</summary>
 
 `academic-english-editing` 為內建 skill，源自 `academic-humanizer` v0.3.3（MIT）的 Layer 1／2／3／5，逐節標註來源；刻意不含會改動 claim strength 的 Layer 4（發現 over-claim 只標記回 `claim-audit`）。掛點只改語言呈現，不得動數字、markers、citekey、claim strength、validation boundary 或方法語意，潤稿後重跑對應語言的 full consistency。
 
 </details>
 
 <details>
-<summary><strong>內建中文潤稿站</strong>：語域基準是「像期刊論文」，不往口語走</summary>
+<summary>內建中文潤稿站：語域基準是「像期刊論文」，不往口語走</summary>
 
-`chinese-academic-editing` 為內建 skill，與英文站同一套掛點合約，但語域基準是「像期刊論文」而非「像人整理過」——去 AI 味不往口語走。另含 Layer 4「結果與討論的陳述規格」：效果量與不確定度同時報、不以裸 p 值作主句、數字精度以 `display` 為準、限制節不得改成正面語氣、摘要不得移除正文保留的核心限定，並以強度對照表限制「同級可換、跨級不動」。該層錨定 `write-manuscript` 第 4／5／6 步與 `check_numbers.py` 的既有豁免定義，不新增契約。外部 user skill `chinese-deai-editing` 退出 pipeline 掛點（語域基準不同），仍可獨立用於非稿件的中文材料。
+`chinese-academic-editing` 為內建 skill，與英文站同一套掛點合約，但語域基準是「像期刊論文」而非「像人整理過」，去 AI 味時不往口語走。另含 Layer 4「結果與討論的陳述規格」：效果量與不確定度同時報、不以裸 p 值作主句、數字精度以 `display` 為準、限制節不得改成正面語氣、摘要不得移除正文保留的核心限定，並以強度對照表限制「同級可換、跨級不動」。該層錨定 `write-manuscript` 第 4／5／6 步與 `check_numbers.py` 的既有豁免定義，不新增契約。外部 user skill `chinese-deai-editing` 退出 pipeline 掛點（語域基準不同），仍可獨立用於非稿件的中文材料。
 
 </details>
 
@@ -298,7 +300,7 @@ project-init
 
 ### Agents（18）
 
-含七席獨立審查角色：`methodology-router`、`research-designer`、`data-auditor`、`statistical-validator`、`evidence-auditor`、`claim-critic`、`integrity-officer`。角色專責分工：設計者不審自己的設計、分析者不驗自己的結果、主張起草者不審自己的主張。
+其中七席是獨立審查角色：`methodology-router`、`research-designer`、`data-auditor`、`statistical-validator`、`evidence-auditor`、`claim-critic`、`integrity-officer`。設計者不審自己的設計，分析者不驗自己的結果，主張起草者也不審自己的主張。
 
 <details>
 <summary>18 個 agents 一覽</summary>
@@ -328,7 +330,7 @@ project-init
 
 ### 確定性腳本
 
-機械檢核歸 scripts、領域判斷歸 agents、人工確認與方向性取捨寫入 `decisions.yaml`。主要腳本：
+各檢核範圍的主要腳本：
 
 | 範圍 | 腳本 |
 |---|---|
@@ -367,11 +369,11 @@ python3 skills/revise/scripts/record_review_score.py \
   project.yaml reviews/roundN/editor-decision.md
 ```
 
-minor re-check 不建立新 score；下一個完整 panel 輪才新增，寫入後再跑 `check_ledger.py` 計算邊際遞減。中文潤稿站 `chinese-academic-editing` 為內建選用 skill；與英文站同樣只改語言呈現，潤稿後須重跑 full `check-consistency(zh)`，且不能取代★中文人工定稿。
+minor re-check 不建立新 score；下一個完整 panel 輪才新增，寫入後再跑 `check_ledger.py` 計算邊際遞減。中文潤稿站 `chinese-academic-editing` 是內建的選用 skill，和英文站一樣只改語言呈現；潤稿後須重跑 full `check-consistency(zh)`，也不能取代 ★ 中文人工定稿。
 
 ## 主要事實與治理 artifacts
 
-`progress/` 以上是 SSOT；`progress/` 底下是衍生產物與使用者資料，不是 SSOT。
+下面清單中，`progress/` 之前的檔案都是 SSOT；`progress/` 底下是衍生產物與使用者資料，不是 SSOT。
 
 ```text
 project.yaml                                  # 專案設定；state 只是快取
@@ -432,16 +434,16 @@ progress/logs/hook.log                        # hook 執行紀錄
 
 <img alt="關聯分頁：問題、方法、驗證、結果、圖表五欄的關聯圖，分 Main、Extended Data、Supplementary 三個區帶" src="docs/figures/progress-relations.png" width="100%">
 
-- **五欄**：問題 → 方法 → 驗證 → 結果 → 圖表。方法是計畫版本（舊版收合）；plan 的 robustness 項收成一個敏感性分析群，子分析縮排在群下，都用 L 形父子線連（沒有另外的「敏感性對照」線）。
-- **結果的粒度＝plan 的宣告粒度**：`outputs` 宣告的主要結果一條一個節點；子分析的次要鍵合成一個次要結果節點；未宣告的鍵用虛線標出。有 `supports` 的支撐結果縮排在主結果之下。
-- **三個區帶**：Main 是主結果鏈；Extended Data 放延伸資料（圖表依 manifest `role`，方法、結果、驗證由 `analysis/extended-data.yaml` 指定，問題節點不能放）；Supplementary 放附錄問題及其一切、補充圖表。每個區帶內再依問題分成橫向的問題帶。
-- **互動**：點選亮上下游、搜尋、兩點找路徑、逐 SQ 導覽；結果節點面板可看表與圖。主問題降為附錄問題後，舊 id 以「問題 id 別名」併進現行問題。拖放節點可以改歸屬，見下一節的[結構化動作](#結構化動作)。
+- 圖分五欄：問題 → 方法 → 驗證 → 結果 → 圖表。方法節點是計畫版本（舊版收合）；plan 的 robustness 項收成一個敏感性分析群，子分析縮排在群下，都用 L 形父子線連（沒有另外的「敏感性對照」線）。
+- 結果節點依 plan 的宣告粒度畫：`outputs` 宣告的主要結果一條一個節點，子分析的次要鍵合成一個次要結果節點，未宣告的鍵用虛線標出。有 `supports` 的支撐結果縮排在主結果之下。
+- 圖上分三個區帶。Main 是主結果鏈；Extended Data 放延伸資料（圖表依 manifest `role`，方法、結果、驗證由 `analysis/extended-data.yaml` 指定，問題節點不能放）；Supplementary 放附錄問題及其底下的一切，以及補充圖表。每個區帶內再依問題分成橫向的問題帶。
+- 點選節點會亮出上下游，另有搜尋、兩點找路徑、逐 SQ 導覽；結果節點的面板可看表與圖。主問題降為附錄問題後，舊 id 以「問題 id 別名」併進現行問題。拖放節點可以改歸屬，見下一節的[結構化動作](#結構化動作)。
 
 #### 文獻
 
 <img alt="文獻分頁：問題點與文獻點的 3D 引用圖，文獻點的顏色與大小表示圈內被引數" src="docs/figures/progress-literature.png" width="100%">
 
-- 讀 `literature/citation-graph.json`：問題點、文獻點、文獻—問題的 `cited_for` 線與文獻之間的 `cites` 線。座標由產生資料的腳本算好，renderer 只讀不重算。
+- 讀 `literature/citation-graph.json`：問題點、文獻點、文獻與問題之間的 `cited_for` 線，以及文獻之間的 `cites` 線。座標由產生資料的腳本算好，renderer 只讀不重算。
 - 文獻點的顏色與大小＝圈內被引數（被本圖其他文獻引用的次數，對數刻度）；資料有 `global_citations` 時 tooltip 另列全球被引數。
 - 自動慢轉，可拖曳旋轉、滾輪縮放。缺檔時顯示「尚無文獻引用資料」，其他分頁不受影響。
 
@@ -511,14 +513,14 @@ python3 skills/status/scripts/progress_server.py <root> [--port N] [--allow-appl
 | `package_build` | `build_submission_package.py` | 打包投稿檔案 | 投稿檔案分頁的「打包」 |
 | `batch` | `run_batch.py` | 多個動作一次預覽、一次套用 | 暫存面板的「全部預覽／全部套用」 |
 
-**共同規則**
+所有動作共用下列規則：
 
 - 先 `--dry-run`：在暫存工作區把整串變更真跑一次，不寫專案檔，印出摘要與 token。再 `--apply`：token 沒變才動專案；改到的檔先備份，任一步失敗就還原。
 - 每次套用記一筆 D#，收件匣那筆跟著結案，進度頁面重畫。
 - 涉及 plan 的動作不原地改 plan：來源／目標各出一版 amendment，results、validation、waiver 跟著改掛到新版。
 - 批次裡後面的步驟若引用前面步驟改掉的 plan／問題 id，會自動改指新 id。
 
-**在頁面上操作**
+在頁面上操作時：
 
 - 拖曳時即時畫出候選落點；不合法的落點線框變紅，放開也不送出。
 - 放開即暫存：動作直接進「暫存動作」面板，圖上的位置跟著重排，可以復原、編輯、刪除或調順序。想先看表單再送，勾「放開時先開表單」。
