@@ -266,6 +266,24 @@ def test_figure_states() -> None:
         assert g["stats"]["by_type"]["figure"] == 0 and g["stats"]["figures_unreviewed"] == 0 and "depicts" not in {e["type"] for e in g["edges"]}
 
 
+def section_end(html: str, start: int) -> int:
+    """從 start 的 <section 起算，回傳與它配對的 </section> 結尾位置（處理巢狀 section）。"""
+    depth, pos = 0, start
+    while True:
+        nxt_open = html.find("<section", pos)
+        nxt_close = html.find("</section>", pos)
+        if nxt_close < 0:
+            raise AssertionError("section 未閉合")
+        if 0 <= nxt_open < nxt_close:
+            depth += 1
+            pos = nxt_open + len("<section")
+        else:
+            depth -= 1
+            pos = nxt_close + len("</section>")
+            if depth == 0:
+                return pos
+
+
 def test_embed_figures_flag() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -285,11 +303,17 @@ def test_embed_figures_flag() -> None:
         assert "data:image/svg+xml;base64," in html_text, "內嵌後 HTML 須含 data URI"
         ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
         assert [n for n in ir["graph"]["nodes"] if n["id"] == "f:fig_a"][0]["meta"]["data_uri"].startswith("data:image/svg+xml;base64,")
-        # 預設不內嵌
+        # 預設不內嵌：--embed-figures 只管關聯圖的圖表節點（IR meta.data_uri 與面板大圖）。
+        # 投稿檔案分頁的縮圖本來就內嵌（0.23.0 起的設計，由 run_v0230 守），比對前先切掉那個分頁。
         rc, out, err = run(root)
         assert rc == 0, out + err
+        ir = json.loads((root / "progress/PROGRESS.ir.json").read_text(encoding="utf-8"))
+        assert all("data_uri" not in (n.get("meta") or {}) for n in ir["graph"]["nodes"]), "預設不得內嵌圖檔"
         html_text = (root / "progress/PROGRESS.html").read_text(encoding="utf-8")
-        assert "data:image" not in html_text, "預設不得內嵌圖檔"
+        start = html_text.index('<section id="tab-submission"')
+        end = section_end(html_text, start)
+        assert html_text.count("data:image", start, end) >= 1, "投稿分頁的縮圖仍應內嵌"
+        assert "data:image" not in html_text[:start] + html_text[end:], "預設不得內嵌圖檔（投稿分頁的縮圖除外）"
     # 超過 5 MB → 跳過並 WARNING
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -316,6 +340,9 @@ def test_html_panels_and_self_contained() -> None:
             assert token not in html_text, f"HTML 不得含 {token}"
         # 靜態 HTML 只有燈箱那個空 <img>（圖只在 JS 面板產生，沒有任何靜態 src）；SSOT 字串逸出；表格資料保留在內嵌 IR
         static = html_text.split('<script id="progress-ir"')[0]
+        # 投稿檔案分頁的縮圖是靜態 <img src="data:…">（0.23.0 起的設計，由 run_v0230 守），比對前先切掉那個分頁
+        cut = static.index('<section id="tab-submission"')
+        static = static[:cut] + static[section_end(static, cut):]
         assert re.search(r"<img[^>]*\ssrc=", static) is None and static.count("<img") == 1, static.count("<img")
         assert "x\\u003cy" in html_text and "三列的表 \\u003cb>" in html_text
         raw = (root / "progress/PROGRESS.html").read_bytes()
@@ -695,7 +722,8 @@ def test_inbox_docs_registered() -> None:
     need("skills/status/SKILL.md", "progress/PROGRESS.inbox.yaml", "progress_server.py", "check_inbox.py", "--resolve", "--dismiss", "loopback")
     body = text("skills/project-init/SKILL.md")
     tree = body[body.index("4. **建立結構**"):body.index("5. **建立決策日誌**")]
-    assert "progress/PROGRESS.inbox.yaml" in tree
+    # 0.24.0 起資料夾樹把收件匣縮排在 progress/ 底下，樹裡寫的是 PROGRESS.inbox.yaml（與 run_v0110 對 hook.log 的寫法一致）
+    assert "progress/" in tree and "PROGRESS.inbox.yaml" in tree
     need("CHANGELOG.md", "progress_server.py", "check_inbox.py", "progress/PROGRESS.inbox.yaml")
     need("tests/README.md", "progress_server.py", "check_inbox.py")
 
