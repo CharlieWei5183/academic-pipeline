@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.25.2（2026-10-14）
+
+兩個 bug 修正，SSOT 與輸出內容都不變。
+
+1. **進度頁面伺服器在持鎖時送出回應**：`progress_server.py` 的 `/api/actions/apply` 遇到缺 token（400）或 token
+   過期（409）時，`return self._json(...)` 寫在 `try` 裡，回應先送出、`finally` 才放掉 action lock。瀏覽器收到 409
+   會立刻重跑預覽，那個預覽可能撞上還沒放掉的鎖，誤得「另一個動作正在執行，請稍後」。改成在鎖內只決定回應、
+   放鎖之後才送。`run_v0170_regressions.py` 在高負載下偶發失敗就是這個原因。
+2. **`render_progress.py` 的無效跳脫字元**：內嵌 JS 的正規表示式（`\d` 等）寫在一般 Python 字串裡，Python 3.12 起每次
+   載入都印 `SyntaxWarning: invalid escape sequence`，之後的版本會變成 SyntaxError。全部改成 `\\d`；以 AST 比對過，
+   所有字串常數逐位元相同，輸出的 HTML 不變。
+3. **測試**：新增 `tests/run_v0252_regressions.py`（3 項）——以 spy 記錄每次送出回應當下鎖是否仍被持有（舊版會記到
+   `(409, True)`、`(400, True)`），並連跑五輪「409 → 立刻預覽」；repo 內每支 .py 以「警告即錯誤」重新編譯；登記。
+
 ## 0.25.1（2026-10-14）
 
 `run_v0120_regressions.py` 修回綠燈，只改測試、程式行為不變。三條斷言寫在後來的功能之前，一直是紅的
