@@ -588,14 +588,14 @@ python3 tests/run_literature3d_regressions.py
 
 ## 出處與致謝
 
-skills、agents、確定性腳本與 pipeline 設計絕大多數由作者（Charlie）自行開發。只有下面三個 skill 參考了外部來源：
+skills、agents、確定性腳本與 pipeline 設計絕大多數由作者（Charlie）自行開發。只有下面三個 skill 參考了外部來源，上游的版權與授權聲明照錄在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)：
 
 **`debug-pipeline`** ← `superpowers` v6.1.1（MIT，Jesse Vincent／obra）
 
 - 沿用：`systematic-debugging` 的診斷程序（四階段診斷、多元件邊界取證、三振後質疑架構）；撰寫規範（frontmatter／description 紀律、trigger-eval 測試法）參考 `writing-skills`，規格化過程（先判斷該不該拆、先推薦再列選項、分節逐段確認）參考 `brainstorming`。
 - 本 plugin 新增：fingerprint 分層定位、manifest 樣本流向守恆、`analysis/validation/` 隔離、「不得縮小稽核範圍換轉綠」、治理接 `decisions.yaml` D#／`study-design` amendment、複用 `reviewer-methods`、定位在流程線外。
 
-**`academic-english-editing`** ← user skill `academic-humanizer` v0.3.3（MIT）
+**`academic-english-editing`** ← `academic-humanizer` v0.3.3（MIT，AIScientists-Dev；其 Layer 1 沿用 `blader/humanizer`，MIT）
 
 - 沿用：Layer 1／2／3／5、核心原則與流程。
 - 本 plugin 新增：掛點合約；刻意不含 Layer 4。
