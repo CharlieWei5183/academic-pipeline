@@ -88,11 +88,11 @@
 ### 安裝
 
 ```bash
-claude plugin marketplace add ChiaHsuanWei/academic-pipeline
+claude plugin marketplace add CharlieWei5183/academic-pipeline
 claude plugin install academic-pipeline@charlie-plugins
 ```
 
-在 session 裡也可以輸入 `/plugin marketplace add ChiaHsuanWei/academic-pipeline`，再到 `/plugin` 面板安裝。
+在 session 裡也可以輸入 `/plugin marketplace add CharlieWei5183/academic-pipeline`，再到 `/plugin` 面板安裝。
 
 > [!NOTE]
 > skill 清單與 `SessionEnd` hook 在 session 開始時載入。安裝或更新 plugin 之後，要開新的 session 才會生效。
