@@ -359,7 +359,7 @@ def test_headless(tmp: Path) -> bool:
         s8 = state()
         assert s8['n'] == '1' and s8['ap'] is True and s8['why'] == '先全部預覽' and s8['batch']['stale'] is False, s8
         T71._reload(ws)
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         assert state()['n'] == '0'
         _goto(ws, port2)
@@ -367,7 +367,7 @@ def test_headless(tmp: Path) -> bool:
         s9 = state()
         assert s9['n'] == '1' and s9['ap'] is True and s9['why'] == 'server 未開 --allow-apply' and document_disabled(ws, 'staged-preview'), s9
         T71._reload(ws)
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         # (8) 舊批次項目一鍵撤回：直接 POST 兩筆 batch → 頁面列出 → 撤回 → 都 dismissed
         st, d = _post(port, '/api/inbox', {'kind': 'batch', 'payload': {'actions': [{'kind': 'nest_result', 'payload': {'key': 'k2', 'under': ''}}]}})

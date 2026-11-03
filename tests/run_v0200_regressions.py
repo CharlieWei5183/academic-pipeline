@@ -661,7 +661,7 @@ def test_headless(tmp: Path) -> bool:
         assert not d.get('missing') and d['label'].startswith('Extended Data 歸屬：') and '移出 Extended Data（回 Main 帶）' in d['label'] and 'drop-ok' in d['bandHl'], d
         st = json.loads(ws.eval("JSON.stringify({n:document.getElementById('staged-count').textContent,staged:window.__apStaged(),r2:window.__apNode('p:SQ1-v1#R2'),agg:window.__apNode('r:SQ1-v1#R2#secondary')})"))
         assert st['n'] == '1' and st['staged'][0]['payload'] == {'node': 'p:SQ1-v1#R2', 'tier': ''} and st['r2']['band'] == 'main' and st['agg']['band'] == 'main', st
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         assert ws.eval("document.getElementById('staged-count').textContent") == '0' and json.loads(ws.eval("JSON.stringify(window.__apNode('p:SQ1-v1#R2'))"))['band'] == 'ext'
     finally:
