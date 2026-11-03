@@ -5296,11 +5296,81 @@ box-shadow:0 6px 22px rgba(15,20,25,.18);font-size:12.5px;line-height:1.55}
 .lit3d-tip .lit3d-tip-sub{color:var(--muted)}
 .lit3d-tip .lit3d-tip-meta{margin-top:4px;padding-top:4px;border-top:1px solid var(--line);color:var(--muted)}
 @media (max-width:520px){.lit3d-legend{gap:4px 12px}}
+.lit3d-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;margin:0 0 10px}
+.lit3d-search{position:relative;display:flex;align-items:center;gap:8px}
+.lit3d-search input{font:inherit;font-size:13px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
+background:var(--bg);color:var(--fg);width:min(340px,70vw)}
+.lit3d-search input:focus{outline:2px solid var(--current);outline-offset:-1px}
+.lit3d-src{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.lit3d-results{position:absolute;left:0;top:calc(100% + 4px);z-index:8;width:min(470px,92vw);max-height:390px;overflow:auto;
+margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+box-shadow:0 8px 26px rgba(15,20,25,.2)}
+.lit3d-results[hidden]{display:none}
+.lit3d-res{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12.5px;line-height:1.45}
+.lit3d-res.is-sel,.lit3d-res:hover{background:var(--proj)}
+.lit3d-res.is-out{opacity:.5}
+.lit3d-res-m{flex:1;min-width:0}
+.lit3d-res-m b{font-weight:650}
+.lit3d-res-m small{display:block;color:var(--muted);font-size:11.5px}
+.lit3d-res-more{padding:6px 8px;font-size:12px;color:var(--muted)}
+.lit3d-results mark,.lit3d-panel mark{background:rgba(230,159,0,.32);color:inherit;border-radius:2px;padding:0 1px}
+.lit3d-filter{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.lit3d-flbl{font-size:12.5px;color:var(--muted);margin-right:2px}
+.lit3d-chip{display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:12.5px;padding:3px 10px;
+border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--muted);cursor:pointer}
+.lit3d-chip b{font-weight:600;font-variant-numeric:tabular-nums;color:var(--muted)}
+.lit3d-chip.is-on{color:var(--fg);border-color:var(--t-question);background:var(--proj)}
+.lit3d-chip:not(.is-on) .lit3d-dot{opacity:.3}
+.lit3d-chip:focus-visible,.lit3d-fall:focus-visible,.lit3d-pn-btn:focus-visible{outline:2px solid var(--current);outline-offset:1px}
+.lit3d-fall{font:inherit;font-size:12.5px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;background:var(--card);
+color:var(--fg);cursor:pointer}
+.lit3d-fall[disabled]{opacity:.45;cursor:default}
+.lit3d-chain{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:var(--fg)}
+.lit3d-panel{position:absolute;top:10px;right:10px;bottom:10px;z-index:6;width:min(340px,44%);overflow:auto;
+padding:10px 12px 12px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:9px;
+box-shadow:0 6px 22px rgba(15,20,25,.16);font-size:12.5px;line-height:1.5}
+.lit3d-panel[hidden]{display:none}
+.lit3d-pn-bar{display:flex;align-items:center;gap:8px;margin:-2px 0 8px}
+.lit3d-pn-kind{flex:1;font-size:11.5px;color:var(--muted);text-align:center}
+.lit3d-pn-btn{font:inherit;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);
+color:var(--fg);cursor:pointer}
+.lit3d-pn-btn[disabled]{opacity:.4;cursor:default}
+.lit3d-pn-info .lit3d-tip-id{font-size:13.5px;font-weight:650;color:var(--t-question)}
+.lit3d-pn-info .lit3d-tip-title{margin:3px 0;font-weight:600}
+.lit3d-pn-info .lit3d-tip-sub{color:var(--muted)}
+.lit3d-pn-info .lit3d-tip-meta{margin-top:4px;padding-top:4px;border-top:1px solid var(--line);color:var(--muted)}
+.lit3d-pn-h{display:flex;align-items:center;gap:6px;margin:12px 0 4px;font-size:12px;font-weight:650}
+.lit3d-bar.is-out{height:2px;background:var(--up)}
+.lit3d-bar.is-in{height:2px;background:repeating-linear-gradient(90deg,var(--down) 0 5px,transparent 5px 9px)}
+.lit3d-legend li.lit3d-dirs{gap:6px}
+.lit3d-depth{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.lit3d-seg{font:inherit;font-size:12.5px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;background:var(--card);
+color:var(--muted);cursor:pointer}
+.lit3d-seg.is-on{color:var(--fg);border-color:var(--current);background:var(--proj);font-weight:600}
+.lit3d-seg:focus-visible{outline:2px solid var(--current);outline-offset:1px}
+.lit3d-depth .lit3d-chain{margin-left:6px;gap:5px}
+.lit3d-pn-sum{margin:10px 0 0;padding:5px 8px;border-radius:6px;background:var(--proj);font-size:12px}
+.lit3d-pn-more{margin:4px 0 0 22px}
+.lit3d-legend li.lit3d-dirs .lit3d-bar.is-in{margin-left:8px}
+.lit3d-pn-none{margin:0;color:var(--muted)}
+.lit3d-pn-list{margin:0;padding:0;list-style:none}
+.lit3d-pn-item{display:flex;align-items:flex-start;gap:7px;width:100%;text-align:left;font:inherit;font-size:12.5px;line-height:1.4;
+padding:4px 6px;border:0;border-radius:5px;background:none;color:var(--fg);cursor:pointer}
+.lit3d-pn-item:hover,.lit3d-pn-item:focus-visible{background:var(--proj);outline:none}
+.lit3d-pn-item.is-out{opacity:.45}
+.lit3d-pn-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;margin-top:4px}
+.lit3d-pn-m{flex:1;min-width:0}
+.lit3d-pn-t{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lit3d-pn-c{flex:0 0 auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:1px}
+.lit3d-pn-acts{margin-top:8px}
+@media (max-width:700px){.lit3d-panel{position:static;width:auto;max-height:55vh;border:0;border-top:1px solid var(--line);
+border-radius:0;box-shadow:none}}
 """
 
 # 互動與原型一致：自動慢轉、拖曳旋轉、滾輪／雙指縮放、hover 或點擊高亮加 tooltip、鍵盤、prefers-reduced-motion。
 # 與原型的差別：資料改讀頁面既有的 progress-ir；拿掉會和分頁 hash 打架的裸 token 深層連結，改開 window.lit3dSelect(id)；
 # 分頁隱藏時停掉 requestAnimationFrame（隱藏時 canvas 量到的尺寸是 0，切回來要先重量一次）。
+# 0.26.0：搜尋、釘選後的右側面板、依問題篩選、選取時依方向畫引用線並可延伸 1–3 層（上游／下游各自 BFS、不混走）。
 LIT_JS = """
 (function(){
   "use strict";
@@ -5329,6 +5399,72 @@ LIT_JS = """
     if (e.k === "ll"){ cites[s]++; }
     else { qOf[s].push(NODES[t].id); litCount[t] = (litCount[t] || 0) + 1; }
   }
+  /* 面板用的鄰接清單：outC 引用了、inC 被引用於、qIdx 對應問題、litOfQ 問題底下的文獻 */
+  var outC = [], inC = [], qIdx = [], litOfQ = [], idIndex = {};
+  for (var i = 0; i < N; i++){ outC.push([]); inC.push([]); qIdx.push([]); litOfQ.push([]); idIndex[NODES[i].id] = i; }
+  for (var ei = 0; ei < EDGES.length; ei++){
+    var e2 = EDGES[ei];
+    if (e2.k === "ll"){ outC[e2.s].push(e2.t); inC[e2.t].push(e2.s); }
+    else { qIdx[e2.s].push(e2.t); litOfQ[e2.t].push(e2.s); }
+  }
+
+  /* ---- 依問題篩選：inF[i] = 1 在篩選內；全部問題都開＝不篩（連沒掛問題的背景文獻也顯示）。
+         分組只用 cited_for（goals 宣告的問題），不推論社群；篩選外的點淡化、不能點選 ---- */
+  var qList = [];
+  for (var i = 0; i < N; i++) if (NODES[i].q) qList.push(i);
+  var qOn = {}, chain = false, FOUT = 0.07;
+  qList.forEach(function(q){ qOn[q] = true; });
+  var inF = new Uint8Array(N);
+  for (var i = 0; i < N; i++) inF[i] = 1;
+  function filterActive(){
+    for (var k = 0; k < qList.length; k++) if (!qOn[qList[k]]) return true;
+    return false;
+  }
+
+  /* ---- 選取時延伸引用鏈：上游＝沿「引用了」走（知識來源）、下游＝沿「被引用於」走（影響範圍），
+         兩個方向各自 BFS 到 chainD 層，不混走（混走第 2 層就會亮到大半張圖，算的也不是引用鏈）。
+         upLvl[i]／dnLvl[i] ＝ i 第一次被走到的層數（1..chainD），0 ＝不在鏈上；選取點自己是第 0 層 ---- */
+  var chainD = 1, useUp = true, useDn = true, chainKey = "";
+  var upLvl = new Int8Array(N), dnLvl = new Int8Array(N);
+  var HOP_EA = [0, 1, 0.62, 0.40], HOP_EW = [0, 1.6, 1.15, 0.85], HOP_NA = [1, 1, 0.8, 0.62];
+  function bfs(start, adj, lvl, D){
+    lvl.fill(0);
+    if (start < 0) return;
+    var seen = {}, front = [start];
+    seen[start] = 1;
+    for (var k = 1; k <= D && front.length; k++){
+      var nx = [];
+      for (var a = 0; a < front.length; a++){
+        var nb = adj[front[a]];
+        for (var b = 0; b < nb.length; b++){
+          var j = nb[b];
+          if (seen[j]) continue;
+          seen[j] = 1; lvl[j] = k; nx.push(j);
+        }
+      }
+      front = nx;
+    }
+  }
+  function ensureChain(act){
+    var key = act + "|" + chainD + "|" + (useUp ? 1 : 0) + (useDn ? 1 : 0);
+    if (key === chainKey) return;
+    chainKey = key;
+    bfs(useUp ? act : -1, outC, upLvl, chainD);
+    bfs(useDn ? act : -1, inC, dnLvl, chainD);
+  }
+  /* 一條 cites 邊 s → t 在鏈上的方向與層數：上游＝s 是選取點或第 k−1 層上游（k ≤ chainD）；
+     下游＝t 是選取點或第 k−1 層下游。兩者都成立（引用成環）時算上游。回傳 [dir, hop]，不在鏈上 [0, 0] */
+  function edgeHop(ed, act){
+    var ua = ed.s === act ? 0 : (upLvl[ed.s] || -1);
+    if (useUp && ua >= 0 && ua < chainD) return [1, ua + 1];
+    var db = ed.t === act ? 0 : (dnLvl[ed.t] || -1);
+    if (useDn && db >= 0 && db < chainD) return [2, db + 1];
+    return [0, 0];
+  }
+  function nodeHop(j){
+    var u = upLvl[j], d = dnLvl[j];
+    return u && d ? Math.min(u, d) : (u || d);
+  }
 
   /* ---- 主題色：canvas 不繼承 CSS，需自己讀 token ---- */
   var C = {};
@@ -5352,6 +5488,9 @@ LIT_JS = """
     C.q = hex2rgb(g("--t-question"), [68,119,170]);
     C.lit = hex2rgb(g("--t-lit"), [168,117,27]);
     C.cur = hex2rgb(g("--current"), [0,114,178]);
+    /* 選取時的引用方向沿用關聯圖的上下游色：引用了（往來源）＝ --up、被引用於（往後續）＝ --down */
+    C.up = hex2rgb(g("--up"), [213,94,0]);
+    C.down = hex2rgb(g("--down"), [0,114,178]);
     C.ramp = readRamp(g);
   }
   /* 色階只定義在 CSS 的 --lit-ramp-0…N（亮暗各一組），這裡讀到沒有為止，JS 不寫死階數 */
@@ -5414,6 +5553,7 @@ LIT_JS = """
   var ZMIN = 0.45, ZMAX = 4.0;
   var CAM = 3.2;
   var hoverIdx = -1, pinIdx = -1, tipAnchor = "cursor";
+  var peekIdx = -1, anim = null, hist = [];
   var dragging = false, moved = false, resumeAt = 0, lastX = 0, lastY = 0;
   var W = 0, H = 0, dpr = 1;
   var sx = new Float64Array(N), sy = new Float64Array(N);
@@ -5447,6 +5587,8 @@ LIT_JS = """
     var act = activeIdx();
     var hasAct = act >= 0;
     var near = nbr[act] || {};
+    ensureChain(act);
+    var actQ = hasAct && NODES[act].q;
 
     for (var i = 0; i < N; i++){
       var nd = NODES[i];
@@ -5476,11 +5618,18 @@ LIT_JS = """
     for (var m = 0; m < eArr.length; m++){
       var idx = eArr[m], ed = EDGES[idx];
       var fade = 1 - Math.min(1, Math.max(0, (depthBuf[idx] - (CAM - 1)) / 2));
-      var on = !hasAct || ed.s === act || ed.t === act;
-      var dim = on ? 1 : 0.15;
+      /* 選取（滑過或釘選）時，引用鏈上的 cites 依方向分開畫：
+         dir 1 ＝上游（引用了）實線、dir 2 ＝下游（被引用於）虛線；顏色之外另有線型，不只靠顏色區分。
+         越外層越細越淡（HOP_EW／HOP_EA）；第 1 層就是直接連到選取點的那些線。方向關掉的那一側當背景線 */
+      var eh = (hasAct && ed.k === "ll") ? edgeHop(ed, act) : [0, 0];
+      var dir = eh[0], hop = eh[1];
+      var on = !hasAct || (ed.k === "lq" ? (ed.s === act || ed.t === act) : dir > 0);
+      var dim = (on ? 1 : 0.15) * ((inF[ed.s] && inF[ed.t]) || (hasAct && on) ? 1 : FOUT);
       var al, col, lw;
       if (ed.k === "lq"){
         col = C.q; lw = 0.9; al = (0.14 + 0.24 * fade) * (on && hasAct ? 3.0 : 1) * dim;
+      } else if (dir){
+        col = dir === 1 ? C.up : C.down; lw = HOP_EW[hop]; al = (0.55 + 0.35 * fade) * HOP_EA[hop];
       } else {
         col = C.edge; lw = 0.8; al = (0.12 + 0.20 * fade) * (on && hasAct ? 3.0 : 1) * dim;
       }
@@ -5488,11 +5637,13 @@ LIT_JS = """
       if (al < 0.012) continue;
       ctx.strokeStyle = rgba(col, al);
       ctx.lineWidth = lw;
+      ctx.setLineDash(dir === 2 ? [5, 4] : []);
       ctx.beginPath();
       ctx.moveTo(sx[ed.s], sy[ed.s]);
       ctx.lineTo(sx[ed.t], sy[ed.t]);
       ctx.stroke();
     }
+    ctx.setLineDash([]);
 
     /* 節點：由遠到近 */
     var nArr = Array.prototype.slice.call(order);
@@ -5502,8 +5653,11 @@ LIT_JS = """
       var j = nArr[v];
       var node = NODES[j];
       var f2 = 1 - Math.min(1, Math.max(0, (sd[j] - (CAM - 1)) / 2));
-      var lit = !hasAct || j === act || near[j];
-      var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15);
+      /* 亮：選取點、文獻—問題的直接鄰居、引用鏈上的點（外層的點略淡）；方向關掉的那一側不亮 */
+      var nh = hasAct ? nodeHop(j) : 0;
+      var lit = !hasAct || j === act || (near[j] && (actQ || node.q)) || nh > 0;
+      var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15) * (inF[j] || j === act ? 1 : FOUT);
+      if (nh > 1) alpha *= HOP_NA[nh];
       var rr = sr[j];
       if (j === act) rr *= 1.45;
       ctx.fillStyle = rgba(litRGB[j] || (node.q ? C.q : C.lit), alpha);
@@ -5514,6 +5668,16 @@ LIT_JS = """
         ctx.strokeStyle = rgba(C.cur, 0.95);
         ctx.lineWidth = 2;
         ctx.stroke();
+      } else if (j === peekIdx){
+        /* 滑過面板或搜尋結果的某一項：在圖上用虛線圈出那一點 */
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = rgba(C.cur, 0.95);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(sx[j], sy[j], rr + 4, 0, 6.283185307179586);
+        ctx.stroke();
+        ctx.restore();
       }
       if (node.q) labels.push([j, rr, alpha]);
     }
@@ -5537,7 +5701,16 @@ LIT_JS = """
     if (!running) return;
     var dt = prevTs ? Math.min(0.05, (ts - prevTs) / 1000) : 0;
     prevTs = ts;
-    var auto = !mqMotion.matches && !dragging && activeIdx() < 0 && ts >= resumeAt;
+    if (anim){
+      if (anim.t0 === null) anim.t0 = ts;
+      var u = Math.min(1, (ts - anim.t0) / anim.dur);
+      var ee = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+      rotY = anim.y0 + (anim.y1 - anim.y0) * ee;
+      rotX = anim.x0 + (anim.x1 - anim.x0) * ee;
+      zoom = anim.z0 + (anim.z1 - anim.z0) * ee;
+      if (u >= 1) anim = null;
+    }
+    var auto = !anim && !mqMotion.matches && !dragging && activeIdx() < 0 && ts >= resumeAt;
     if (auto) rotY += 0.12 * dt;
     draw();
     rafId = requestAnimationFrame(frame);
@@ -5567,7 +5740,8 @@ LIT_JS = """
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function thousands(n){ return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ","); }
-  function tipHTML(i){
+  /* inPanel：右側面板用——「連到問題」「引用 N 篇」由面板下方的清單呈現，這裡不重複 */
+  function tipHTML(i, inPanel){
     var nd = NODES[i];
     if (nd.q){
       var note = nd.note ? esc(nd.note) : "（project.yaml 的 goals 沒有這個 id）";
@@ -5582,9 +5756,9 @@ LIT_JS = """
     return '<div class="lit3d-tip-sub">' + (head || esc(nd.id)) + '</div>' +
            '<div class="lit3d-tip-title">' + esc(nd.title || nd.id) + '</div>' +
            '<div class="lit3d-tip-sub">' + esc(nd.journal) + '　' + esc(nd.doi) + '</div>' +
-           '<div class="lit3d-tip-meta">連到問題：' + esc(qs) +
-           '<br>引用 ' + cites[i] + ' 篇' +
-           '<br>本圖內被引 ' + (nd.cin || 0) + ' 次' + world + '</div>';
+           '<div class="lit3d-tip-meta">' +
+           (inPanel ? '' : '連到問題：' + esc(qs) + '<br>引用 ' + cites[i] + ' 篇<br>') +
+           '本圖內被引 ' + (nd.cin || 0) + ' 次' + world + '</div>';
   }
   function placeTip(px, py){
     var sw = stage.clientWidth, sh = stage.clientHeight;
@@ -5609,6 +5783,7 @@ LIT_JS = """
   function pick(px, py){
     var best = -1, bestDepth = Infinity;
     for (var i = 0; i < N; i++){
+      if (!inF[i] && i !== pinIdx) continue;   /* 篩選外的點不能點選 */
       var dx = px - sx[i], dy = py - sy[i];
       var lim = sr[i] + 6;
       if (dx * dx + dy * dy <= lim * lim && sd[i] < bestDepth){
@@ -5634,7 +5809,7 @@ LIT_JS = """
       dragging = false;
       return;
     }
-    dragging = true; moved = false;
+    dragging = true; moved = false; anim = null;
     lastX = ev.clientX; lastY = ev.clientY;
     if (canvas.setPointerCapture) { try { canvas.setPointerCapture(ev.pointerId); } catch (x) {} }
     canvas.focus({ preventScroll:true });
@@ -5658,13 +5833,14 @@ LIT_JS = """
       return;
     }
     if (ev.pointerType === "mouse"){
+      /* 滑過看 tooltip；已釘選時滑過別的點照樣有 tooltip，釘選的那一點資訊在右側面板 */
       var p = localPt(ev);
       var hit = pick(p[0], p[1]);
       if (hit !== hoverIdx){
         hoverIdx = hit;
-        if (hit >= 0 && pinIdx < 0) showTip(hit, "cursor", p[0], p[1]);
-        else if (pinIdx < 0) hideTip();
-      } else if (hit >= 0 && pinIdx < 0 && tipAnchor === "cursor"){
+        if (hit >= 0 && hit !== pinIdx) showTip(hit, "cursor", p[0], p[1]);
+        else hideTip();
+      } else if (hit >= 0 && hit !== pinIdx && tipAnchor === "cursor"){
         placeTip(p[0], p[1]);
       }
     }
@@ -5675,20 +5851,22 @@ LIT_JS = """
     if (!dragging) return;
     dragging = false;
     resumeAt = performance.now() + 3000;
-    if (!moved && ev.pointerType !== "mouse"){
+    if (!moved && ev.type === "pointerup"){
+      /* 點一下（滑鼠或觸控）：點到點就釘選並開右側面板，點空白處取消 */
       var p = localPt(ev);
       var hit = pick(p[0], p[1]);
-      if (hit >= 0){ pinIdx = hit; showTip(hit, "node", sx[hit], sy[hit]); }
-      else { pinIdx = -1; hideTip(); }
+      if (hit >= 0) select(hit, {});
+      else unpin();
     }
   }
   canvas.addEventListener("pointerup", endPointer);
   canvas.addEventListener("pointercancel", endPointer);
   canvas.addEventListener("pointerleave", function(ev){
-    if (ev.pointerType === "mouse" && pinIdx < 0){ hoverIdx = -1; hideTip(); }
+    if (ev.pointerType === "mouse"){ hoverIdx = -1; hideTip(); }
   });
   canvas.addEventListener("wheel", function(ev){
     ev.preventDefault();
+    anim = null;
     zoom = Math.min(ZMAX, Math.max(ZMIN, zoom * Math.exp(-ev.deltaY * 0.0016)));
   }, { passive:false });
 
@@ -5701,23 +5879,360 @@ LIT_JS = """
     else if (k === "ArrowDown") rotX = Math.min(1.45, rotX + 0.12);
     else if (k === "+" || k === "=") zoom = Math.min(ZMAX, zoom * 1.12);
     else if (k === "-" || k === "_") zoom = Math.max(ZMIN, zoom / 1.12);
-    else if (k === "Escape"){ pinIdx = -1; hoverIdx = -1; hideTip(); }
+    else if (k === "Escape"){ unpin(); }
     else used = false;
-    if (used){ ev.preventDefault(); resumeAt = performance.now() + 3000; }
+    if (used){ ev.preventDefault(); anim = null; resumeAt = performance.now() + 3000; }
   });
 
-  /* ---- 對外：選一個點並釘住 tooltip（測試與之後的跨分頁跳轉用）---- */
-  window.lit3dSelect = function(id){
-    for (var i = 0; i < N; i++){
-      if (NODES[i].id === id){
-        pinIdx = i; hoverIdx = -1;
-        resize();
-        draw();
-        showTip(i, "node", sx[i], sy[i]);
-        return true;
+  /* ---- 轉到正面：把第 i 點轉到視線正前方（畫面中央、最靠近鏡頭），走最短的角度 ---- */
+  function focusTo(i){
+    var nd = NODES[i];
+    var ty = -Math.atan2(nd.x, nd.z);
+    var tx = Math.min(1.45, Math.max(-1.45, Math.atan2(nd.y, Math.sqrt(nd.x * nd.x + nd.z * nd.z))));
+    var d = ty - rotY;
+    d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    ty = rotY + d;
+    var tz = Math.max(zoom, 1.25);
+    if (mqMotion.matches || !running){ rotY = ty; rotX = tx; zoom = tz; anim = null; return; }
+    anim = {t0: null, dur: 650, y0: rotY, y1: ty, x0: rotX, x1: tx, z0: zoom, z1: tz};
+  }
+
+  /* ---- 右側面板：釘選的點的書目＋可點的鄰居清單（對應問題／引用了／被引用於；問題點列連到的文獻）---- */
+  var panel = document.getElementById("lit3d-panel");
+  /* 「Kim, R. et al.」→ Kim et al.；「Garcia, A. & Novak, B.」→ Garcia & Novak；單一作者 → 姓 */
+  function shortLabel(j){
+    var nd = NODES[j];
+    if (nd.q) return nd.id;
+    var au = String(nd.authors || "");
+    var a = au.split(",")[0].trim() || nd.id;
+    if (au.indexOf("et al") >= 0) a += " et al.";
+    else if (au.indexOf("&") >= 0) a += " & " + (au.split("&")[1].split(",")[0].trim() || "…");
+    return a + (nd.year ? "（" + nd.year + "）" : "");
+  }
+  function dotColor(j){ return rgba(NODES[j].q ? C.q : (litRGB[j] || C.lit), 1); }
+  function itemHTML(j){
+    var nd = NODES[j];
+    var main = nd.q ? esc(nd.id) + '<span class="lit3d-pn-t">' + esc(nd.note || "") + '</span>'
+                    : esc(shortLabel(j)) + '<span class="lit3d-pn-t">' + esc(nd.title || nd.id) + '</span>';
+    var badge = nd.q ? '<span class="lit3d-pn-c">' + litOfQ[j].length + ' 篇</span>'
+                     : '<span class="lit3d-pn-c" title="本圖內被引次數">被引 ' + (nd.cin || 0) + '</span>';
+    return '<li><button type="button" class="lit3d-pn-item' + (inF[j] ? '' : ' is-out') + '" data-i="' + j + '"' +
+           (inF[j] ? '' : ' title="在目前的篩選外"') + '>' +
+           '<span class="lit3d-pn-dot" style="background:' + dotColor(j) + '"></span>' +
+           '<span class="lit3d-pn-m">' + main + '</span>' + badge + '</button></li>';
+  }
+  /* sw：標題前的線型小樣，和圖上選取時的畫法一致（is-q 文獻—問題、is-out 引用了、is-in 被引用於）；
+     hop：第幾層（線樣跟著變淡）；key：長清單展開狀態的鍵——超過 LIST_CAP 篇先列前段，按「再顯示」展開 */
+  var LIST_CAP = 30, expanded = {};
+  function listHTML(title, arr, empty, sw, hop, key){
+    var op = hop > 1 ? ' style="opacity:' + HOP_EA[hop] + '"' : '';
+    var s = '<h4 class="lit3d-pn-h">' + (sw ? '<span class="lit3d-bar ' + sw + '"' + op + '></span>' : '') +
+            title + '（' + arr.length + '）</h4>';
+    if (!arr.length) return s + '<p class="lit3d-pn-none">' + empty + '</p>';
+    var cut = key && !expanded[key] && arr.length > LIST_CAP;
+    var show = cut ? arr.slice(0, LIST_CAP) : arr;
+    return s + '<ul class="lit3d-pn-list">' + show.map(itemHTML).join("") + '</ul>' +
+           (cut ? '<button type="button" class="lit3d-pn-btn lit3d-pn-more" data-act="more" data-key="' + key + '">再顯示 ' +
+                  (arr.length - LIST_CAP) + ' 篇</button>' : '');
+  }
+  function atHop(lvl, k){
+    var out = [];
+    for (var j = 0; j < N; j++) if (lvl[j] === k) out.push(j);
+    return out.sort(byCin);
+  }
+  function countChain(lvl){
+    var n = 0;
+    for (var j = 0; j < N; j++) if (lvl[j]) n++;
+    return n;
+  }
+  function yr(j){ return parseInt(NODES[j].year, 10) || 0; }
+  function byCin(a, b){ return (NODES[b].cin || 0) - (NODES[a].cin || 0) || yr(a) - yr(b) || a - b; }
+  function byYear(a, b){ return yr(b) - yr(a) || byCin(a, b); }
+  function renderPanel(keepScroll){
+    var i = pinIdx;
+    if (i < 0){ panel.hidden = true; panel.innerHTML = ""; return; }
+    var top = keepScroll ? panel.scrollTop : 0;
+    var nd = NODES[i];
+    var h = '<div class="lit3d-pn-bar">' +
+      '<button type="button" class="lit3d-pn-btn" data-act="back"' + (hist.length ? '' : ' disabled') +
+      ' title="回到上一個選取的點">← 上一個</button>' +
+      '<span class="lit3d-pn-kind">' + (nd.q ? '問題' : '文獻') + '</span>' +
+      '<button type="button" class="lit3d-pn-btn" data-act="close" aria-label="關閉（Esc）" title="關閉（Esc）">×</button></div>' +
+      '<div class="lit3d-pn-info">' + tipHTML(i, true) + '</div>';
+    if (nd.q){
+      h += '<div class="lit3d-pn-acts"><button type="button" class="lit3d-pn-btn" data-act="solo">只看這個問題</button></div>';
+      h += listHTML('連到的文獻', litOfQ[i].slice().sort(byCin), '沒有文獻連到這個問題', 'is-q');
+    } else {
+      /* 第 1 層清單一律列（這篇自己的書目事實）；延伸層只列開著的方向，依圈內被引數排序 */
+      ensureChain(i);
+      if (chainD > 1 && (useUp || useDn)){
+        h += '<p class="lit3d-pn-sum">延伸 ' + chainD + ' 層內：' +
+             (useUp ? '上游 ' + countChain(upLvl) + ' 篇' : '') + (useUp && useDn ? '、' : '') +
+             (useDn ? '下游 ' + countChain(dnLvl) + ' 篇' : '') + '</p>';
+      }
+      h += listHTML('對應問題', qIdx[i].slice(), '沒有連到任何問題（背景文獻）', 'is-q');
+      h += listHTML('引用了', outC[i].slice().sort(byYear), '本圖內沒有它引用的文獻', 'is-out', 1);
+      if (useUp) for (var k = 2; k <= chainD; k++)
+        h += listHTML('上游第 ' + k + ' 層', atHop(upLvl, k), '再往上沒有圈內文獻', 'is-out', k, 'up' + k);
+      h += listHTML('被引用於', inC[i].slice().sort(byYear), '本圖內沒有文獻引用它', 'is-in', 1);
+      if (useDn) for (var k = 2; k <= chainD; k++)
+        h += listHTML('下游第 ' + k + ' 層', atHop(dnLvl, k), '再往下沒有圈內文獻', 'is-in', k, 'dn' + k);
+    }
+    panel.innerHTML = h;
+    panel.hidden = false;
+    panel.scrollTop = top;
+  }
+  function select(i, opt){
+    opt = opt || {};
+    if (opt.push !== false && pinIdx >= 0 && pinIdx !== i) hist.push(pinIdx);
+    if (pinIdx !== i) expanded = {};
+    pinIdx = i; hoverIdx = -1; peekIdx = -1;
+    hideTip();
+    renderPanel(false);
+    if (opt.focus) focusTo(i);
+    resumeAt = performance.now() + 3000;
+  }
+  function unpin(){
+    pinIdx = -1; hoverIdx = -1; peekIdx = -1; hist = [];
+    hideTip();
+    renderPanel(false);
+  }
+  panel.addEventListener("click", function(ev){
+    var b = ev.target.closest && ev.target.closest("button");
+    if (!b || b.disabled) return;
+    var act = b.getAttribute("data-act");
+    if (act === "close"){ unpin(); canvas.focus({ preventScroll:true }); return; }
+    if (act === "back"){ var j = hist.pop(); if (j !== undefined) select(j, {push:false, focus:true}); return; }
+    if (act === "solo"){ soloQuestion(pinIdx); return; }
+    if (act === "more"){ expanded[b.getAttribute("data-key")] = true; renderPanel(true); return; }
+    var di = b.getAttribute("data-i");
+    if (di !== null) select(parseInt(di, 10), {focus:true});
+  });
+  panel.addEventListener("mouseover", function(ev){
+    var b = ev.target.closest && ev.target.closest(".lit3d-pn-item");
+    peekIdx = b ? parseInt(b.getAttribute("data-i"), 10) : -1;
+  });
+  panel.addEventListener("mouseleave", function(){ peekIdx = -1; });
+
+  /* ---- 依問題篩選的按鈕 ---- */
+  var chips = Array.prototype.slice.call(section.querySelectorAll(".lit3d-chip[data-q]"));
+  var allBtn = document.getElementById("lit3d-all");
+  var chainCb = document.getElementById("lit3d-chain");
+  var fCount = document.getElementById("lit3d-fcount");
+  var N_LIT = 0;
+  for (var i = 0; i < N; i++) if (!NODES[i].q) N_LIT++;
+  function recomputeFilter(){
+    var act = filterActive();
+    for (var i = 0; i < N; i++) inF[i] = act ? 0 : 1;
+    if (act){
+      for (var k = 0; k < qList.length; k++){
+        var q = qList[k];
+        if (!qOn[q]) continue;
+        inF[q] = 1;
+        for (var m = 0; m < litOfQ[q].length; m++) inF[litOfQ[q][m]] = 1;
+      }
+      if (chain){
+        /* 連同直接引用：從篩選內的文獻往外走一步 cites（引用了＋被引用於） */
+        var seed = [];
+        for (var i = 0; i < N; i++) if (inF[i] && !NODES[i].q) seed.push(i);
+        for (var s3 = 0; s3 < seed.length; s3++){
+          var a3 = seed[s3];
+          for (var m = 0; m < outC[a3].length; m++) inF[outC[a3][m]] = 1;
+          for (var m = 0; m < inC[a3].length; m++) inF[inC[a3][m]] = 1;
+        }
       }
     }
-    return false;
+    var shown = 0;
+    for (var i = 0; i < N; i++) if (inF[i] && !NODES[i].q) shown++;
+    chips.forEach(function(b){
+      var on = !!qOn[idIndex[b.getAttribute("data-q")]];
+      b.classList.toggle("is-on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    if (allBtn) allBtn.disabled = !act;
+    if (chainCb) chainCb.disabled = !act;
+    if (fCount) fCount.textContent = act ? "顯示 " + shown + "／" + N_LIT + " 篇" : "全部 " + N_LIT + " 篇";
+    if (pinIdx >= 0) renderPanel(true);
+    if (!qRes.hidden) runSearch();
+  }
+  function soloQuestion(q){
+    qList.forEach(function(x){ qOn[x] = (x === q); });
+    recomputeFilter();
+  }
+  chips.forEach(function(b){
+    b.addEventListener("click", function(){
+      var q = idIndex[b.getAttribute("data-q")];
+      qOn[q] = !qOn[q];
+      recomputeFilter();
+    });
+  });
+  if (allBtn) allBtn.addEventListener("click", function(){ qList.forEach(function(x){ qOn[x] = true; }); recomputeFilter(); });
+
+  /* ---- 延伸層數與方向 ---- */
+  var depthBtns = Array.prototype.slice.call(section.querySelectorAll(".lit3d-depth button[data-depth]"));
+  var upCb = document.getElementById("lit3d-up"), dnCb = document.getElementById("lit3d-dn");
+  function chainChanged(){
+    chainKey = "";
+    depthBtns.forEach(function(b){
+      var on = parseInt(b.getAttribute("data-depth"), 10) === chainD;
+      b.classList.toggle("is-on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    if (pinIdx >= 0) renderPanel(true);
+  }
+  function setDepth(d){ chainD = Math.max(1, Math.min(3, d)); chainChanged(); }
+  depthBtns.forEach(function(b){
+    b.addEventListener("click", function(){ setDepth(parseInt(b.getAttribute("data-depth"), 10)); });
+  });
+  if (upCb) upCb.addEventListener("change", function(){ useUp = upCb.checked; chainChanged(); });
+  if (dnCb) dnCb.addEventListener("change", function(){ useDn = dnCb.checked; chainChanged(); });
+  if (chainCb) chainCb.addEventListener("change", function(){ chain = chainCb.checked; recomputeFilter(); });
+
+  /* ---- 搜尋：id／作者／年份／標題／期刊／DOI（問題點另比對 goals 說明），空白分隔的每個詞都要命中 ---- */
+  var qInput = document.getElementById("lit3d-q");
+  var qRes = document.getElementById("lit3d-results");
+  var qCount = document.getElementById("lit3d-q-count");
+  var hay = NODES.map(function(nd){
+    return [nd.id, nd.authors, nd.year, nd.title, nd.journal, nd.doi, nd.note].filter(function(x){ return x; })
+           .join(" ").toLowerCase();
+  });
+  var resIdx = [], resSel = -1, RES_MAX = 12;
+  function mark(text, toks){
+    text = String(text || "");
+    var low = text.toLowerCase(), hit = new Uint8Array(text.length);
+    toks.forEach(function(t){
+      if (!t) return;
+      for (var p = low.indexOf(t); p >= 0; p = low.indexOf(t, p + 1)) for (var q = p; q < p + t.length; q++) hit[q] = 1;
+    });
+    var out = "", open = false;
+    for (var c = 0; c < text.length; c++){
+      if (hit[c] && !open){ out += "<mark>"; open = true; }
+      if (!hit[c] && open){ out += "</mark>"; open = false; }
+      out += esc(text.charAt(c));
+    }
+    return out + (open ? "</mark>" : "");
+  }
+  function resultHTML(j, toks, k){
+    var nd = NODES[j];
+    var main = nd.q ? '<b>' + mark(nd.id, toks) + '</b> ' + mark(nd.note || "", toks)
+      : '<b>' + mark(shortLabel(j), toks) + '</b> ' + mark(nd.title || "", toks) +
+        '<small>' + mark(nd.id, toks) + (nd.doi ? '　' + mark(nd.doi, toks) : '') + '</small>';
+    var badge = nd.q ? '<span class="lit3d-pn-c">問題</span>' : '<span class="lit3d-pn-c">被引 ' + (nd.cin || 0) + '</span>';
+    return '<li class="lit3d-res' + (inF[j] ? '' : ' is-out') + '" role="option" id="lit3d-r' + k + '" data-i="' + j + '"' +
+           ' aria-selected="false"><span class="lit3d-pn-dot" style="background:' + dotColor(j) + '"></span>' +
+           '<span class="lit3d-res-m">' + main + '</span>' + badge + '</li>';
+  }
+  function setResSel(k){
+    resSel = k;
+    var items = qRes.querySelectorAll(".lit3d-res");
+    for (var m = 0; m < items.length; m++){
+      var on = m === k;
+      items[m].classList.toggle("is-sel", on);
+      items[m].setAttribute("aria-selected", on ? "true" : "false");
+      if (on && items[m].scrollIntoView) items[m].scrollIntoView({block:"nearest"});
+    }
+    if (k >= 0) qInput.setAttribute("aria-activedescendant", "lit3d-r" + k);
+    else qInput.removeAttribute("aria-activedescendant");
+    peekIdx = k >= 0 ? resIdx[k] : -1;
+  }
+  function closeResults(){
+    qRes.hidden = true;
+    qInput.setAttribute("aria-expanded", "false");
+    peekIdx = -1;
+  }
+  function runSearch(){
+    var q = (qInput.value || "").trim().toLowerCase();
+    resIdx = []; resSel = -1;
+    if (!q){ qRes.innerHTML = ""; qCount.textContent = ""; closeResults(); return; }
+    var toks = q.split(/\\s+/).filter(function(x){ return x; });
+    var hits = [];
+    for (var i = 0; i < N; i++){
+      var h = hay[i], ok = true;
+      for (var t = 0; t < toks.length; t++) if (h.indexOf(toks[t]) < 0){ ok = false; break; }
+      if (!ok) continue;
+      var id = NODES[i].id.toLowerCase();
+      hits.push([id === q ? 0 : (id.indexOf(toks[0]) === 0 ? 1 : 2), -(NODES[i].cin || 0), i]);
+    }
+    hits.sort(function(a, b){ return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]; });
+    qCount.textContent = hits.length + " 筆符合";
+    resIdx = hits.slice(0, RES_MAX).map(function(x){ return x[2]; });
+    var html = resIdx.map(function(j, k){ return resultHTML(j, toks, k); }).join("");
+    if (!hits.length) html = '<li class="lit3d-res-more">沒有符合的文獻</li>';
+    else if (hits.length > RES_MAX) html += '<li class="lit3d-res-more">另有 ' + (hits.length - RES_MAX) + ' 筆，加關鍵字縮小範圍</li>';
+    qRes.innerHTML = html;
+    qRes.hidden = false;
+    qInput.setAttribute("aria-expanded", "true");
+    setResSel(resIdx.length ? 0 : -1);
+  }
+  function choose(k){
+    var j = resIdx[k];
+    if (j === undefined) return;
+    closeResults();
+    select(j, {focus:true});
+    canvas.focus({ preventScroll:true });
+  }
+  qInput.addEventListener("input", runSearch);
+  qInput.addEventListener("focus", function(){ if (qInput.value.trim()) runSearch(); });
+  qInput.addEventListener("blur", function(){ setTimeout(closeResults, 120); });
+  qInput.addEventListener("keydown", function(ev){
+    var k = ev.key;
+    if (k === "ArrowDown" && resIdx.length){ ev.preventDefault(); setResSel((resSel + 1) % resIdx.length); }
+    else if (k === "ArrowUp" && resIdx.length){ ev.preventDefault(); setResSel((resSel - 1 + resIdx.length) % resIdx.length); }
+    else if (k === "Enter"){ ev.preventDefault(); choose(resSel >= 0 ? resSel : 0); }
+    else if (k === "Escape"){
+      ev.preventDefault();
+      if (qInput.value){ qInput.value = ""; runSearch(); } else { qInput.blur(); }
+    }
+  });
+  qRes.addEventListener("mousedown", function(ev){
+    var li = ev.target.closest && ev.target.closest(".lit3d-res");
+    if (!li) return;
+    ev.preventDefault();   /* 先於 blur，避免清單在 click 之前就收掉 */
+    var k = Array.prototype.indexOf.call(qRes.querySelectorAll(".lit3d-res"), li);
+    choose(k);
+  });
+  qRes.addEventListener("mousemove", function(ev){
+    var li = ev.target.closest && ev.target.closest(".lit3d-res");
+    if (!li) return;
+    var k = Array.prototype.indexOf.call(qRes.querySelectorAll(".lit3d-res"), li);
+    if (k !== resSel) setResSel(k);
+  });
+
+  /* ---- 全頁鍵盤（只在本分頁顯示時）：/ 聚焦搜尋、Esc 關面板 ---- */
+  document.addEventListener("keydown", function(ev){
+    if (section.hidden) return;
+    var tag = (ev.target && ev.target.tagName || "").toLowerCase();
+    var typing = tag === "input" || tag === "textarea" || tag === "select";
+    if (ev.key === "/" && !typing){ ev.preventDefault(); qInput.focus(); qInput.select(); }
+    else if (ev.key === "Escape" && !typing && pinIdx >= 0 && ev.target !== canvas){ unpin(); }
+    else if (!typing && !ev.ctrlKey && !ev.metaKey && !ev.altKey && (ev.key === "1" || ev.key === "2" || ev.key === "3")){
+      setDepth(parseInt(ev.key, 10));
+    }
+  });
+
+  /* ---- 對外：目前設定下某點的引用鏈層數（只讀，測試用；頁面本身不呼叫）---- */
+  window.lit3dChain = function(id){
+    var i = idIndex[id];
+    if (i === undefined) return null;
+    chainKey = "";
+    ensureChain(i);
+    var up = {}, dn = {};
+    for (var j = 0; j < N; j++){
+      if (upLvl[j]) up[NODES[j].id] = upLvl[j];
+      if (dnLvl[j]) dn[NODES[j].id] = dnLvl[j];
+    }
+    chainKey = "";   /* 下一次 draw 依當時的選取點重算 */
+    return {depth: chainD, up: up, dn: dn, useUp: useUp, useDn: useDn};
+  };
+
+  /* ---- 對外：選一個點並開右側面板（測試與之後的跨分頁跳轉用；不轉視角，測試要的投影幾何才穩定）---- */
+  window.lit3dSelect = function(id){
+    var i = idIndex[id];
+    if (i === undefined) return false;
+    resize();
+    select(i, {push:false});
+    draw();
+    return true;
   };
 
   /* ---- 對外：讀一個點的刻度與投影幾何（只讀，測試用；頁面本身不呼叫）---- */
@@ -5774,6 +6289,45 @@ def _literature_tab(ir: dict) -> list[str]:
             cls=(' is-first' if i == 0 else (' is-last' if i == len(ticks) - 1 else '')),
             pos=_lit_tick_pos(v, max_cin) * 100, v=v)
         for i, v in enumerate(ticks))
+    # 搜尋與依問題篩選：問題清單與每題連到的文獻數都從 IR 的 data 算，順序照 data.nodes（即 citation-graph 的順序）
+    data = lit.get('data') or {}
+    dnodes, dedges = data.get('nodes') or [], data.get('edges') or []
+    qcount: dict[int, int] = {}
+    for e in dedges:
+        if e.get('k') == 'lq':
+            qcount[e.get('t')] = qcount.get(e.get('t'), 0) + 1
+    n_lit = sum(1 for n in dnodes if not n.get('q'))
+    chips = ''.join(
+        f'<button type="button" class="lit3d-chip is-on" data-q="{_h(n.get("id"))}" aria-pressed="true" '
+        f'title="{_h(n.get("note") or n.get("id"))}"><span class="lit3d-dot is-q"></span>{_h(n.get("id"))}'
+        f'<b>{qcount.get(i, 0)}</b></button>'
+        for i, n in enumerate(dnodes) if n.get('q'))
+    tools = [
+        '<div class="lit3d-tools">',
+        '<div class="lit3d-search">'
+        '<input type="search" id="lit3d-q" placeholder="搜尋標題、作者、年份、DOI 或 id（/ 聚焦）" autocomplete="off" '
+        'role="combobox" aria-autocomplete="list" aria-controls="lit3d-results" aria-expanded="false" aria-label="搜尋文獻">'
+        '<span class="lit3d-src" id="lit3d-q-count"></span>'
+        '<ul class="lit3d-results" id="lit3d-results" role="listbox" hidden></ul></div>',
+    ]
+    if chips:
+        tools.append(
+            '<div class="lit3d-filter" role="group" aria-label="依問題篩選">'
+            f'<span class="lit3d-flbl">依問題篩選</span>{chips}'
+            '<button type="button" class="lit3d-fall" id="lit3d-all" disabled>全部</button>'
+            '<label class="lit3d-chain"><input type="checkbox" id="lit3d-chain" disabled>連同直接引用</label>'
+            f'<span class="lit3d-src" id="lit3d-fcount">全部 {n_lit} 篇</span></div>')
+    tools.append(
+        '<div class="lit3d-depth" role="group" aria-label="選取時延伸引用鏈">'
+        '<span class="lit3d-flbl">選取時延伸</span>'
+        '<button type="button" class="lit3d-seg is-on" data-depth="1" aria-pressed="true">1 層</button>'
+        '<button type="button" class="lit3d-seg" data-depth="2" aria-pressed="false">2 層</button>'
+        '<button type="button" class="lit3d-seg" data-depth="3" aria-pressed="false">3 層</button>'
+        '<label class="lit3d-chain"><input type="checkbox" id="lit3d-up" checked>'
+        '<span class="lit3d-bar is-out"></span>上游</label>'
+        '<label class="lit3d-chain"><input type="checkbox" id="lit3d-dn" checked>'
+        '<span class="lit3d-bar is-in"></span>下游</label></div>')
+    tools.append('</div>')
     lines += [
         '<ul class="lit3d-legend">',
         '<li><span class="lit3d-dot is-q"></span>問題點</li>',
@@ -5784,14 +6338,19 @@ def _literature_tab(ir: dict) -> list[str]:
         '<span class="lit3d-dot is-hi"></span></span></li>',
         '<li><span class="lit3d-bar is-q"></span>文獻—問題</li>',
         '<li><span class="lit3d-bar is-c"></span>文獻引用文獻</li>',
+        '<li class="lit3d-dirs"><span>選取一點時：</span><span class="lit3d-bar is-out"></span>上游（引用了）'
+        '<span class="lit3d-bar is-in"></span>下游（被引用於）<span>・越外層越細越淡</span></li>',
         '</ul>',
-        '<p class="lit3d-hint">拖曳旋轉・滾輪或雙指縮放・指到點看文獻・方向鍵旋轉、加減號縮放、Esc 取消選取</p>',
+        '<p class="lit3d-hint">拖曳旋轉・滾輪或雙指縮放・指到點看文獻、點一下釘選並列出引用關係・/ 搜尋・'
+        '1／2／3 延伸層數・方向鍵旋轉、加減號縮放、Esc 取消選取</p>',
+        *tools,
         '<div class="lit3d-stage" id="lit3d-stage">',
         '<canvas id="lit3d-canvas" class="lit3d-canvas" tabindex="0" role="img" '
         f'aria-label="文獻引用 3D 圖。文獻點的顏色越醒目、點畫得越大，代表被本圖其他文獻引用越多次，'
         f'從 0 次到 {max_cin} 次；刻度取對數，低次數之間分得比較開。'
         f'方向鍵旋轉，加減號縮放，Esc 取消選取。"></canvas>',
         '<div class="lit3d-tip" id="lit3d-tip" hidden></div>',
+        '<aside class="lit3d-panel" id="lit3d-panel" aria-label="選取的文獻與引用關係" hidden></aside>',
         '</div>',
         f'<p class="notice">來源：<code>{source}</code>；節點 {lit.get("nodes", 0)}、'
         f'文獻—問題 {counts.get("cited_for", 0)} 條、文獻引用文獻 {counts.get("cites", 0)} 條；'

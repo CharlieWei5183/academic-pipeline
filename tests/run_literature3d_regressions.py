@@ -533,7 +533,8 @@ def test_log_scale_and_size(tmp: Path) -> None:
     assert 'var lim = sr[i] + 6;' in js and 'var rr = sr[j];' in js
     assert js.count('sr[') == 4, js.count('sr[')
     # 深度透明度、hover 變淡、由遠到近的畫序都沒動
-    assert 'var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15);' in js
+    # （篩選另乘一個因子：篩選外淡到 FOUT，前兩個因子不變）
+    assert 'var alpha = (0.34 + 0.66 * f2) * (lit ? 1 : 0.15) * (inF[j] || j === act ? 1 : FOUT);' in js
     assert 'nArr.sort(function(p, q){ return sd[q] - sd[p]; });' in js
 
     # 畫出來的 HTML：刻度值與位置
@@ -685,7 +686,9 @@ def test_headless_tooltip(tmp: Path) -> bool:
         ws.send('Page.navigate', url=page.as_uri() + '#literature')
         T3._wait(ws, "document.readyState==='complete'", bool, timeout=60)
         T3._wait(ws, "String(typeof window.lit3dSelect)", lambda v: v == 'function', timeout=30)
-        tip = "(function(){window.lit3dSelect('%s');return document.getElementById('lit3d-tip').innerHTML;})()"
+        # 釘選後的書目改在右側面板（tooltip 只剩滑過時用），同一段 tipHTML
+        tip = ("(function(){window.lit3dSelect('%s');"
+               "return document.querySelector('#lit3d-panel .lit3d-pn-info').innerHTML;})()")
         # 有 global_citations 的文獻點：兩行都在，全球被引數帶千分位
         t1 = ws.eval(tip % 'demo1990a')
         assert '本圖內被引 1 次' in t1, t1
