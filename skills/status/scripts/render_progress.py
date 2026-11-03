@@ -3646,6 +3646,441 @@ def _validate_submission(sub) -> list[str]:
 
 # ---------- IR ----------
 
+# ---------- 流程檢視與上游影響（0.27.0）----------
+# 里程分頁的「流程」檢視：借 archify workflow 的畫法——泳道（專案層／每條研究問題／文獻）、階段帶、分叉與匯合。
+# 站序、連線分類、硬前置與人工確認關卡都寫死在這裡；依據是各 skill 的「前置」段，每條線的 why 進 tooltip。
+# 只讀 lanes 已判好的狀態，不新讀任何 SSOT；座標由這裡算好寫進 IR 的 flow，JS 只負責互動。
+FLOW_PHASES = ('立案與設計', '資料與證據', '判讀與主張', '撰稿', '審查與中文定稿', '英文化', '投稿')   # 與 README 總覽圖的七個階段同名
+# 每列一站（或並行的兩站）；泳道 P＝專案層、Q＝每條研究問題（SQ 在前、AQ 在後）、L＝文獻（專案層的 lit-review／evidence-synthesis）
+FLOW_ROWS = (
+    ('立案與設計', (('P', 'project-init'),)),
+    ('立案與設計', (('P', 'methodology-router'),)),
+    ('立案與設計', (('P', 'integrity-check'),)),
+    ('立案與設計', (('Q', 'study-design'),)),
+    ('資料與證據', (('P', 'data-audit'),)),
+    ('資料與證據', (('Q', 'analyze-data'), ('L', 'lit-review'))),
+    ('資料與證據', (('P', 'analyze-data:rerun'), ('L', 'evidence-synthesis'))),
+    ('資料與證據', (('Q', 'validate-results'),)),
+    ('資料與證據', (('Q', 'evaluate'),)),
+    ('判讀與主張', (('P', 'evaluate:full'),)),
+    ('判讀與主張', (('Q', 'interpret-results'),)),
+    ('判讀與主張', (('Q', 'claim-audit'),)),
+    ('撰稿', (('P', 'figure-design'),)),
+    ('撰稿', (('P', 'write-manuscript'),)),
+    ('撰稿', (('P', 'write-supplementary'),)),
+    ('審查與中文定稿', (('P', 'check-consistency'),)),
+    ('審查與中文定稿', (('P', 'peer-review'),)),
+    ('審查與中文定稿', (('P', 'revise'),)),
+    ('英文化', (('P', 'translate-en'),)),
+    ('投稿', (('P', 'submission-prep'),)),
+    ('投稿', (('P', 'typeset'),)),
+)
+# 畫出來的線：(from, to, 分類, why, mode, off)。分類 hard＝硬前置（skill 前置段寫明要先完成）、soft＝建議順序、
+# cond＝條件式硬前置、loop＝迴圈；mode 是匯合的語意（all＝每條問題都要、any＝任一條即可）；off 是同一對列之間第二條
+# 匯流排的位移（分叉往上、匯合往下），避免與主匯流排交叉
+FLOW_EDGE_CLASSES = ('hard', 'soft', 'cond', 'loop')
+FLOW_EDGES = (
+    ('P:project-init', 'P:methodology-router', 'hard', 'methodology-router：project-init 之後才做，讀 project.yaml 的 goals', '', 0),
+    ('P:methodology-router', 'P:integrity-check', 'soft', '主流程順序（status 主流程）', '', 0),
+    ('P:integrity-check', 'Q:study-design', 'hard', 'study-design 前置：route 已確認；prestudy 至少已列出適用性', '', 0),
+    ('Q:study-design', 'P:data-audit', 'soft', 'data-audit 前置：計畫尚未封存仍可先稽核（只是建議順序）', '', 0),
+    ('P:data-audit', 'Q:analyze-data', 'hard', 'analyze-data 前置硬關卡：check_route／check_integrity prestudy／check_plan --require-confirmed／check_data_audit', '', 0),
+    ('P:data-audit', 'L:lit-review', 'soft', '主流程：analyze-data 與 lit-review 並行', '', -6),
+    ('Q:analyze-data', 'P:analyze-data:rerun', 'hard', 'clean rerun 重跑既有正式分析（任一條問題有結果即可）', 'any', 0),
+    ('L:lit-review', 'L:evidence-synthesis', 'hard', 'evidence-synthesis：after lit-review', '', 0),
+    ('P:analyze-data:rerun', 'Q:validate-results', 'hard', 'validate-results 前置：執行 artifact 可重建', '', 0),
+    ('Q:validate-results', 'Q:evaluate', 'hard', 'evaluate result-fit 前置：須先通過 clean rerun、code-review 與 validate-results', '', 0),
+    ('Q:evaluate', 'P:evaluate:full', 'hard', 'evaluate full 前置：分析型 SQ 都要有 results 與 V# links（每條都要）', 'all', 0),
+    ('L:evidence-synthesis', 'P:evaluate:full', 'cond', 'evaluate full 前置：文獻型 SQ 須有已審查的 evidence links（有文獻型 SQ 時才是硬前置）', '', 6),
+    ('P:evaluate:full', 'Q:interpret-results', 'hard', 'interpret-results 前置：last_full_evaluation pass（單 SQ 增量判讀例外）', '', 0),
+    ('Q:interpret-results', 'Q:claim-audit', 'hard', 'claim-audit 前置：claims.yaml 存在且未確認', '', 0),
+    ('Q:claim-audit', 'P:figure-design', 'soft', 'figure-design：claims 若有就讀（只是建議順序）', '', 0),
+    ('P:figure-design', 'P:write-manuscript', 'soft', '主流程順序', '', 0),
+    ('P:write-manuscript', 'P:write-supplementary', 'hard', 'write-supplementary 前置：state.zh_latest 非空（正文先於 SI）', '', 0),
+    ('P:write-supplementary', 'P:check-consistency', 'soft', 'write-supplementary：before check-consistency', '', 0),
+    ('P:check-consistency', 'P:peer-review', 'hard', 'peer-review：after a current consistency gate has passed', '', 0),
+    ('P:peer-review', 'P:revise', 'soft', '處理審稿意見', '', 0),
+    ('P:revise', 'P:peer-review', 'loop', 'peer-review ⇄ revise，直到 accept／收斂／輪數上限', '', 0),
+    ('P:revise', 'P:translate-en', 'hard', 'translate-en 前置：zh_final 經使用者確認，且該版有 pass 的完整 consistency gate', '', 0),
+    ('P:translate-en', 'P:submission-prep', 'hard', 'submission-prep：after the confirmed English manuscript has passed the full English consistency gate', '', 0),
+    ('P:submission-prep', 'P:typeset', 'hard', 'typeset：after submission-prep passes', '', 0),
+)
+# 直接硬前置（判「順序異常」用：這站已完成，但它的直接硬前置未完成；間接的由上游節點自己判）。
+# lane：P＝專案層節點（含文獻站）、same＝同一條問題、allQ／anyQ＝所有問題（全部都要／任一即可）
+FLOW_PREREQ = {
+    'methodology-router': (('P', 'project-init', 'methodology-router：after project-init'),),
+    'study-design': (('P', 'methodology-router', 'study-design 前置 1：route 已確認'),
+                     ('P', 'integrity-check', 'study-design 前置 2：prestudy 至少已列出適用性')),
+    'analyze-data': (('P', 'methodology-router', 'analyze-data 前置硬關卡：check_route.py'),
+                     ('P', 'integrity-check', 'analyze-data 前置硬關卡：check_integrity.py --stage prestudy'),
+                     ('same', 'study-design', 'analyze-data 前置硬關卡：check_plan.py --require-confirmed'),
+                     ('P', 'data-audit', 'analyze-data 前置硬關卡：check_data_audit.py')),
+    'evidence-synthesis': (('P', 'lit-review', 'evidence-synthesis：after lit-review'),),
+    'analyze-data:rerun': (('anyQ', 'analyze-data', 'clean rerun：至少要有一條問題的正式分析'),),
+    'validate-results': (('same', 'analyze-data', 'validate-results：要有正式結果'),
+                         ('P', 'analyze-data:rerun', 'validate-results 共通前置：執行 artifact 可重建')),
+    'evaluate': (('same', 'validate-results', 'evaluate result-fit 前置：validate-results'),
+                 ('P', 'analyze-data:rerun', 'evaluate result-fit 前置：clean rerun')),
+    'evaluate:full': (('P', 'methodology-router', 'evaluate full 前置：route 指定的 gates 均已完成'),
+                      ('allQ', 'validate-results', 'evaluate full 前置：分析型 SQ 必須有 results 與 V# links')),
+    'interpret-results': (('P', 'evaluate:full', 'interpret-results 前置 1：last_full_evaluation pass'),
+                          ('same', 'validate-results', 'interpret-results 前置 2：validation pass／qualified'),
+                          ('P', 'evidence-synthesis', 'interpret-results 前置 3：evidence-synthesis pass／qualified')),
+    'claim-audit': (('same', 'interpret-results', 'claim-audit 前置 1：claims.yaml 存在'),
+                    ('same', 'validate-results', 'claim-audit 前置 2：對應 results 已通過 validate-results'),
+                    ('P', 'evidence-synthesis', 'claim-audit 前置 3：evidence-synthesis 已完成')),
+    'write-supplementary': (('P', 'write-manuscript', 'write-supplementary 前置：state.zh_latest 非空'),),
+    'peer-review': (('P', 'check-consistency', 'peer-review 前置：current consistency gate pass'),),
+    'translate-en': (('P', 'check-consistency', 'translate-en 前置：zh_final 有 pass 的完整 consistency gate'),),
+    'submission-prep': (('P', 'translate-en', 'submission-prep：after the confirmed English manuscript'),),
+    'typeset': (('P', 'submission-prep', 'typeset：after submission-prep passes'),),
+}
+# README 總覽圖的 11 個人工確認關卡，掛在對應的站上
+FLOW_GATES = {
+    'methodology-router': (1, 'route 確認'), 'study-design': (2, '計畫封存'), 'data-audit': (3, '資料處置'),
+    'evaluate': (4, '結果契合'), 'claim-audit': (5, 'claims 確認'), 'figure-design': (6, '圖表驗收'),
+    'write-manuscript': (7, '中文成稿'), 'revise': (8, '★ 中文定稿'), 'translate-en': (9, '★ 英文確認'),
+    'submission-prep': (10, '投稿包補件'), 'typeset': (11, '排版收尾'),
+}
+FLOW_LW, FLOW_CW, FLOW_RH, FLOW_PH, FLOW_TOP, FLOW_R, FLOW_BUS = 236, 84, 36, 30, 82, 8, 18   # 標籤欄寬、泳道寬、列高、階段標題高、頂部、節點半徑、匯流排距
+FLOW_BAD = ('pending', 'unknown', 'blocked', 'expired')
+FLOW_STATS_KEYS = ('nodes', 'edges', 'crossings', 'edge_node_overlaps', 'anomalies', 'upstream_edges', 'rest_edges')
+# 關聯圖的上游影響：從過期或受阻的節點沿這幾種邊往下游傳（cites／refers／decomposes／supersedes 不傳）
+IMPACT_EDGE_TYPES = ('plans', 'sensitivity', 'produces', 'validated_by', 'primary', 'robustness', 'depicts', 'supports',
+                     'embedded_in')
+IMPACT_STATES = ('expired', 'blocked')
+
+
+def _flow_checks(nodes: dict[str, dict], edges: list[dict]) -> tuple[int, int]:
+    """流程圖的版面檢查：線段真交叉數（水平×垂直、不含端點與共線重疊）與線段穿過非端點節點的次數。"""
+    segs = [(ei, e['points'][i - 1], e['points'][i]) for ei, e in enumerate(edges) for i in range(1, len(e['points']))]
+    cross = 0
+    for i in range(len(segs)):
+        ei, a1, a2 = segs[i]
+        for j in range(i + 1, len(segs)):
+            ej, b1, b2 = segs[j]
+            if ei == ej:
+                continue
+            sh, th = a1[1] == a2[1], b1[1] == b2[1]
+            if sh == th:
+                continue
+            (h1, h2), (v1, v2) = ((a1, a2), (b1, b2)) if sh else ((b1, b2), (a1, a2))
+            x1, x2 = sorted((h1[0], h2[0]))
+            y1, y2 = sorted((v1[1], v2[1]))
+            if x1 + 0.5 < v1[0] < x2 - 0.5 and y1 + 0.5 < h1[1] < y2 - 0.5:
+                cross += 1
+    over = 0
+    for ei, p, q in segs:
+        e = edges[ei]
+        x1, x2 = sorted((p[0], q[0]))
+        y1, y2 = sorted((p[1], q[1]))
+        for nd in nodes.values():
+            if nd['key'] in (e['from'], e['to']):
+                continue
+            dx = max(x1 - nd['x'], 0, nd['x'] - x2)
+            dy = max(y1 - nd['y'], 0, nd['y'] - y2)
+            if (dx * dx + dy * dy) ** 0.5 < FLOW_R + 1:
+                over += 1
+    return cross, over
+
+
+def build_flow(lanes: list[dict], current_stage: str) -> dict:
+    """里程分頁「流程」檢視的資料（IR flow）：泳道、列、節點座標、線的折點、順序異常、剩下的路與受阻／過期的上游。
+
+    節點只帶 lane_index／node_index 指回 lanes（狀態、摘要、證據以 lanes 為準，不在這裡複製）。
+    """
+    proj = next((i for i, lane in enumerate(lanes) if lane['kind'] == 'project'), None)
+    flanes: list[dict] = []
+    if proj is not None:
+        flanes.append({'key': 'P', 'kind': 'project', 'label': '專案層', 'lane_index': proj})
+    for i, lane in enumerate(lanes):
+        if lane['kind'] != 'project':
+            flanes.append({'key': f'Q:{lane["id"]}', 'kind': lane['kind'], 'label': lane['label'], 'lane_index': i})
+    if proj is not None:
+        flanes.append({'key': 'L', 'kind': 'lit', 'label': '文獻', 'lane_index': proj})
+    for j, fl in enumerate(flanes):
+        fl['x'] = FLOW_LW + FLOW_CW * j + FLOW_CW // 2
+    by_key = {fl['key']: fl for fl in flanes}
+
+    def lane_list(code: str) -> list[dict]:
+        if code == 'Q':
+            return [fl for fl in flanes if fl['key'].startswith('Q:')]
+        return [by_key[code]] if code in by_key else []
+
+    rows: list[dict] = []
+    phases: list[dict] = []
+    y, prev = FLOW_TOP, None
+    for i, (ph, items) in enumerate(FLOW_ROWS):
+        if ph != prev:
+            phases.append({'name': ph, 'y0': y, 'y1': y, 'rows': []})
+            y += FLOW_PH
+            prev = ph
+        rows.append({'phase': ph, 'y': y + FLOW_RH // 2, 'items': [{'lane': c, 'stage': s} for c, s in items]})
+        phases[-1]['rows'].append(i)
+        y += FLOW_RH
+        phases[-1]['y1'] = y
+    width, height = FLOW_LW + FLOW_CW * len(flanes) + 12, y + 16
+
+    nodes: dict[str, dict] = {}
+    sq_order: list[str] = []
+    for ri, row in enumerate(rows):
+        for it in row['items']:
+            if it['lane'] == 'Q':
+                sq_order.append(it['stage'])
+            for fl in lane_list(it['lane']):
+                lane = lanes[fl['lane_index']]
+                ni = next((k for k, n in enumerate(lane['nodes']) if n['stage'] == it['stage']), None)
+                if ni is None:
+                    continue
+                key = f'{fl["key"]}|{it["stage"]}'
+                nodes[key] = {'key': key, 'lane': fl['key'], 'stage': it['stage'], 'lane_index': fl['lane_index'],
+                              'node_index': ni, 'row': ri, 'x': fl['x'], 'y': row['y'], 'current': False, 'next': False,
+                              'gate': FLOW_GATES.get(it['stage'], (0, ''))[0], 'annotations': [], 'anomalies': []}
+
+    def state(key: str) -> str:
+        nd = nodes[key]
+        return lanes[nd['lane_index']]['nodes'][nd['node_index']]['state']
+
+    # 目前站：專案層沿用 lanes 的 current；status 的 next_stage 若是 SQ 站，標出各問題停在該站（前一站已完成）的節點
+    for nd in nodes.values():
+        if not nd['lane'].startswith('Q:') and lanes[nd['lane_index']]['nodes'][nd['node_index']]['current']:
+            nd['current'] = True
+    if current_stage in sq_order:
+        i = sq_order.index(current_stage)
+        for fl in lane_list('Q'):
+            key = f'{fl["key"]}|{current_stage}'
+            prev_ok = i == 0 or state(f'{fl["key"]}|{sq_order[i - 1]}') == 'done'
+            if key in nodes and state(key) != 'done' and prev_ok:
+                nodes[key]['current'] = True
+    for fl in lane_list('Q'):   # 每條問題的下一站：依站序第一個未完成的站
+        for sid in sq_order:
+            key = f'{fl["key"]}|{sid}'
+            if key in nodes and state(key) != 'done':
+                nodes[key]['next'] = not nodes[key]['current']
+                break
+    for nd in nodes.values():
+        lane = lanes[nd['lane_index']]
+        nd['annotations'] = [a['id'] for a in lane['annotations']
+                             if a['stage'] and (a['stage'] == nd['stage'] or nd['stage'].split(':')[0] == a['stage'])]
+
+    def resolve(nd: dict, spec: str, sid: str) -> list[str]:
+        if spec == 'P':
+            keys = [f'P|{sid}', f'L|{sid}']
+        elif spec == 'same':
+            keys = [f'{nd["lane"]}|{sid}'] if nd['lane'].startswith('Q:') else []
+        else:
+            keys = [f'{fl["key"]}|{sid}' for fl in lane_list('Q')]
+        return [k for k in keys if k in nodes]
+
+    for key, nd in nodes.items():
+        if state(key) != 'done':
+            continue
+        for spec, sid, why in FLOW_PREREQ.get(nd['stage'], ()):
+            deps = resolve(nd, spec, sid)
+            if spec == 'anyQ':
+                if deps and not any(state(d) == 'done' for d in deps):
+                    nd['anomalies'].append({'stage': sid, 'mode': 'any', 'deps': deps, 'why': why})
+            else:
+                bad = [d for d in deps if state(d) in FLOW_BAD]
+                if bad:
+                    nd['anomalies'].append({'stage': sid, 'mode': 'all' if spec == 'allQ' else '', 'deps': bad, 'why': why})
+
+    edges: list[dict] = []
+    for a, b, cls, why, mode, off in FLOW_EDGES:
+        ac, asid = a.split(':', 1)
+        bc, bsid = b.split(':', 1)
+        if ac == 'Q' and bc == 'Q':
+            pairs = [(fl, fl) for fl in lane_list('Q')]
+        else:
+            pairs = [(fa, fb) for fa in lane_list(ac) for fb in lane_list(bc)]
+        for fa, fb in pairs:
+            fk, tk = f'{fa["key"]}|{asid}', f'{fb["key"]}|{bsid}'
+            if fk not in nodes or tk not in nodes:
+                continue
+            f, t = nodes[fk], nodes[tk]
+            if cls == 'loop':
+                kind = 'loop'
+            elif fa is fb:
+                kind = 'seq'
+            elif ac == 'Q':
+                kind = 'join'
+            elif bc == 'Q' or ac == 'P':
+                kind = 'fork'
+            else:
+                kind = 'join'
+            fr = 14 if f['current'] else FLOW_R
+            tr = 15 if t['current'] else FLOW_R + 2
+            if kind == 'seq':
+                pts = [[f['x'], f['y'] + fr], [t['x'], t['y'] - tr]]
+            elif kind == 'loop':
+                pts = [[f['x'] - fr, f['y']], [f['x'] - 26, f['y']], [f['x'] - 26, t['y']], [t['x'] - tr, t['y']]]
+            elif kind == 'fork':
+                bus = f['y'] + FLOW_BUS + off
+                pts = [[f['x'], f['y'] + fr], [f['x'], bus], [t['x'], bus], [t['x'], t['y'] - tr]]
+            else:
+                bus = t['y'] - FLOW_BUS - 2 + off
+                pts = [[f['x'], f['y'] + fr], [f['x'], bus], [t['x'], bus], [t['x'], t['y'] - tr]]
+            pts = [p for i, p in enumerate(pts) if i == 0 or p != pts[i - 1]]
+            edges.append({'from': fk, 'to': tk, 'cls': cls, 'kind': kind, 'mode': mode, 'why': why, 'points': pts,
+                          'upstream': '', 'rest': False})
+
+    # 剩下的路＝從目前站往下游可達的線；受阻／過期的上游＝從受阻或過期節點出去的線
+    reach = {k for k, nd in nodes.items() if nd['current']}
+    queue = sorted(reach)
+    while queue:
+        k0 = queue.pop(0)
+        for e in edges:
+            if e['from'] == k0 and e['to'] not in reach:
+                reach.add(e['to'])
+                queue.append(e['to'])
+    for e in edges:
+        s = state(e['from'])
+        e['upstream'] = s if s in IMPACT_STATES else ''
+        e['rest'] = e['from'] in reach
+    cross, over = _flow_checks(nodes, edges)
+    return {
+        'prereq': {k: [{'lane': a, 'stage': b, 'why': c} for a, b, c in v] for k, v in FLOW_PREREQ.items()},
+        'gates': {k: {'n': n, 'name': name} for k, (n, name) in FLOW_GATES.items()},
+        'phases': phases,
+        'rows': rows,
+        'lanes': flanes,
+        'nodes': list(nodes.values()),
+        'edges': edges,
+        'size': {'w': width, 'h': height},
+        'stats': {'nodes': len(nodes), 'edges': len(edges), 'crossings': cross, 'edge_node_overlaps': over,
+                  'anomalies': sum(1 for nd in nodes.values() if nd['anomalies']),
+                  'upstream_edges': sum(1 for e in edges if e['upstream']), 'rest_edges': sum(1 for e in edges if e['rest'])},
+    }
+
+
+def build_impact(graph: dict) -> dict:
+    """關聯圖的上游影響（IR graph.impact）：從過期或受阻的節點沿 IMPACT_EDGE_TYPES 往下游 BFS。
+
+    nodes＝被牽連的節點 → {expired: [來源節點], blocked: [來源節點]}（不改節點自己的 state，只是標出來）；
+    edges＝沿路的邊索引；edge_kind＝每條邊上色用的種類（來源節點受阻或被受阻牽連 → blocked，否則 expired）。
+    """
+    by_id = {n['id']: n for n in graph['nodes']}
+    out: dict[str, list[int]] = {}
+    for i, e in enumerate(graph['edges']):
+        out.setdefault(e['from'], []).append(i)
+    seeds = [n['id'] for n in graph['nodes'] if n.get('state') in IMPACT_STATES]
+    affected: dict[str, dict[str, list[str]]] = {}
+    for s in seeds:
+        kind = by_id[s]['state']
+        seen, queue = {s}, [s]
+        while queue:
+            k = queue.pop(0)
+            for i in out.get(k, []):
+                e = graph['edges'][i]
+                if e['type'] not in IMPACT_EDGE_TYPES or e['to'] in seen:
+                    continue
+                seen.add(e['to'])
+                queue.append(e['to'])
+                rec = affected.setdefault(e['to'], {'expired': [], 'blocked': []})
+                if s not in rec[kind]:
+                    rec[kind].append(s)
+    bad = set(seeds) | set(affected)
+
+    def kind_at(nid: str) -> str:
+        st = by_id[nid].get('state')
+        if st in IMPACT_STATES:
+            return st
+        return 'blocked' if affected.get(nid, {}).get('blocked') else 'expired'
+
+    edges = [i for i, e in enumerate(graph['edges'])
+             if e['type'] in IMPACT_EDGE_TYPES and e['to'] in affected and e['from'] in bad]
+    nodes = {k: {'expired': sorted(v['expired']), 'blocked': sorted(v['blocked'])} for k, v in sorted(affected.items())}
+    return {
+        'edge_types': list(IMPACT_EDGE_TYPES),
+        'seeds': seeds,
+        'nodes': nodes,
+        'edges': edges,
+        'edge_kind': {str(i): kind_at(graph['edges'][i]['from']) for i in edges},
+        'stats': {'seeds': len(seeds), 'nodes': len(nodes),
+                  'done_nodes': sum(1 for k in nodes if by_id[k].get('state') == 'done'), 'edges': len(edges)},
+    }
+
+
+def _validate_flow(flow, ir: dict) -> list[str]:
+    """IR-18：里程分頁「流程」檢視的資料。"""
+    if not isinstance(flow, dict):
+        return ['IR-18 flow']
+    errors: list[str] = []
+    for key in ('phases', 'rows', 'lanes', 'nodes', 'edges', 'size', 'stats'):
+        if key not in flow:
+            errors.append(f'IR-18 flow.{key}')
+    if errors:
+        return errors
+    stage_ids = [s.get('id') for s in ir.get('stages') or [] if isinstance(s, dict)]
+    row_stages = [it.get('stage') for r in flow['rows'] if isinstance(r, dict) for it in r.get('items') or [] if isinstance(it, dict)]
+    if sorted(row_stages) != sorted(stage_ids):
+        errors.append('IR-18 flow.rows 要涵蓋每一站恰一次')
+    lanes = ir.get('lanes') if isinstance(ir.get('lanes'), list) else []
+    keys: set[str] = set()
+    for i, nd in enumerate(flow['nodes'] if isinstance(flow['nodes'], list) else []):
+        sub = f'IR-18 flow.nodes[{i}]'
+        if not isinstance(nd, dict) or not isinstance(nd.get('key'), str):
+            errors.append(sub)
+            continue
+        keys.add(nd['key'])
+        li, ni = nd.get('lane_index'), nd.get('node_index')
+        ok = isinstance(li, int) and 0 <= li < len(lanes) and isinstance(lanes[li], dict) and isinstance(ni, int) \
+            and 0 <= ni < len(lanes[li].get('nodes') or []) and lanes[li]['nodes'][ni].get('stage') == nd.get('stage')
+        if not ok:
+            errors.append(f'{sub}.lane_index／node_index')
+        if not all(isinstance(nd.get(k), bool) for k in ('current', 'next')) or not isinstance(nd.get('anomalies'), list) \
+                or not isinstance(nd.get('annotations'), list):
+            errors.append(f'{sub} 欄位型別')
+    for i, e in enumerate(flow['edges'] if isinstance(flow['edges'], list) else []):
+        sub = f'IR-18 flow.edges[{i}]'
+        if not isinstance(e, dict) or e.get('from') not in keys or e.get('to') not in keys:
+            errors.append(f'{sub}.from／to')
+            continue
+        if e.get('cls') not in FLOW_EDGE_CLASSES:
+            errors.append(f'{sub}.cls')
+        pts = e.get('points')
+        if not isinstance(pts, list) or len(pts) < 2 or not all(
+                isinstance(p, list) and len(p) == 2 and all(isinstance(v, (int, float)) for v in p) for p in pts):
+            errors.append(f'{sub}.points')
+        if e.get('upstream') not in ('', *IMPACT_STATES):
+            errors.append(f'{sub}.upstream')
+    st = flow['stats']
+    if not isinstance(st, dict) or any(not isinstance(st.get(k), int) for k in FLOW_STATS_KEYS):
+        errors.append('IR-18 flow.stats')
+    elif st['nodes'] != len(keys) or st['edges'] != len(flow['edges']):
+        errors.append('IR-18 flow.stats.nodes／edges')
+    return errors
+
+
+def _validate_impact(graph) -> list[str]:
+    """IR-19：關聯圖的上游影響。來源必須是過期或受阻的節點、被牽連的節點與邊都要存在。"""
+    if not isinstance(graph, dict) or not isinstance(graph.get('nodes'), list) or not isinstance(graph.get('edges'), list):
+        return []   # graph 本身壞了由 IR-11 報
+    imp = graph.get('impact')
+    if not isinstance(imp, dict) or any(k not in imp for k in ('edge_types', 'seeds', 'nodes', 'edges', 'edge_kind', 'stats')):
+        return ['IR-19 graph.impact']
+    errors: list[str] = []
+    by_id = {n.get('id'): n for n in graph['nodes'] if isinstance(n, dict)}
+    for s in imp['seeds'] if isinstance(imp['seeds'], list) else []:
+        if s not in by_id or by_id[s].get('state') not in IMPACT_STATES:
+            errors.append(f'IR-19 graph.impact.seeds：{s}')
+    seeds = set(imp['seeds']) if isinstance(imp['seeds'], list) else set()
+    for nid, rec in (imp['nodes'].items() if isinstance(imp['nodes'], dict) else []):
+        if nid not in by_id or not isinstance(rec, dict) or any(
+                not isinstance(rec.get(k), list) or not set(rec[k]) <= seeds for k in IMPACT_STATES):
+            errors.append(f'IR-19 graph.impact.nodes[{nid}]')
+    n_edges = len(graph['edges'])
+    for i in imp['edges'] if isinstance(imp['edges'], list) else []:
+        if not isinstance(i, int) or not 0 <= i < n_edges or graph['edges'][i].get('type') not in IMPACT_EDGE_TYPES \
+                or imp['edge_kind'].get(str(i)) not in IMPACT_STATES:
+            errors.append(f'IR-19 graph.impact.edges：{i}')
+    st = imp['stats']
+    if not isinstance(st, dict) or st.get('nodes') != len(imp['nodes'] or {}) or st.get('edges') != len(imp['edges'] or []) \
+            or st.get('seeds') != len(imp['seeds'] or []):
+        errors.append('IR-19 graph.impact.stats')
+    return errors
+
+
 def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = False,
              literature_path: Path | None = None, write_cache: bool = True, previews: bool = True) -> dict:
     proj = src.data('project') if src.status('project') == 'ok' else {}
@@ -3669,6 +4104,10 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
             n_nodes += 1
             by_state[n['state']] = by_state.get(n['state'], 0) + 1
     graph = build_graph(src, lanes, embed_figures)
+    graph['impact'] = build_impact(graph)
+    flow = build_flow(lanes, next_stage)
+    if flow['stats']['crossings'] or flow['stats']['edge_node_overlaps']:
+        src.warnings.append(f'流程檢視版面：交叉 {flow["stats"]["crossings"]}、線穿過節點 {flow["stats"]["edge_node_overlaps"]}（預期都是 0）')
     inbox = build_inbox(src, graph)
     literature = build_literature(src, literature_path)
     submission = build_submission(root, graph['nodes'], write_cache, previews)
@@ -3684,6 +4123,7 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         'stats': {'lanes': len(lanes), 'nodes': n_nodes, 'by_state': by_state,
                   'annotations': sum(len(lane['annotations']) for lane in lanes), 'inbox_pending': inbox['pending']},
         'graph': graph,
+        'flow': flow,
         'inbox': inbox,
         'literature': literature,
         'submission': submission,
@@ -3696,7 +4136,7 @@ def validate_ir(ir) -> list[str]:
     if not isinstance(ir, dict):
         return ['IR-01 top-level 不是 object']
     for key in ('schema_version', 'generated_at', 'project_root', 'project', 'stages', 'lanes', 'stats', 'graph',
-                'inbox', 'literature', 'submission'):
+                'flow', 'inbox', 'literature', 'submission'):
         if key not in ir:
             errors.append(f'IR-01 top-level.{key}')
     if ir.get('schema_version') != SCHEMA_VERSION:
@@ -3781,6 +4221,9 @@ def validate_ir(ir) -> list[str]:
         if any(k not in stats['by_state'] for k in STATES) or sum(stats['by_state'].get(k, 0) for k in STATES) != n_nodes:
             errors.append('IR-10 stats.by_state')
     errors.extend(validate_graph(ir.get('graph')))
+    errors.extend(_validate_impact(ir.get('graph')))
+    if 'flow' in ir:
+        errors.extend(_validate_flow(ir.get('flow'), ir))
     inbox = ir.get('inbox')
     if not isinstance(inbox, dict) or not isinstance(inbox.get('present'), bool) or not isinstance(inbox.get('pending'), int) \
             or not isinstance(inbox.get('items'), list):
@@ -3958,6 +4401,11 @@ JS = """
   var stateZh={done:'完成',expired:'過期',blocked:'受阻',pending:'未到',unknown:'不明'};
   var panel=document.getElementById('detail');var body=document.getElementById('detail-body');
   var selected=null;
+  // 0.27.0 流程檢視：IR flow 的節點以 lane_index／node_index 指回 lanes，與表格共用同一個面板
+  var FL=ir.flow||{nodes:[],edges:[],lanes:[]},flowSvg=document.getElementById('flow-svg'),flowByKey={},flowByIdx={},flowEls={},flowEdgeEls=[];
+  FL.nodes.forEach(function(n){flowByKey[n.key]=n;flowByIdx[n.lane_index+'|'+n.node_index]=n;});
+  var mviews={flow:document.getElementById('mview-flow'),table:document.getElementById('mview-table')};
+  var CLS_ZH={hard:'硬前置',soft:'建議順序',cond:'條件式硬前置',loop:'迴圈'};
   function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   function show(laneIdx,nodeIdx){
     var lane=ir.lanes[laneIdx];var n=lane.nodes[nodeIdx];
@@ -3974,19 +4422,93 @@ JS = """
     if(n.history.length){h+='<dt>history（'+n.history.length+'）</dt><dd><ul>';n.history.forEach(function(x){h+='<li>'+esc(x.date||'—')+'：'+esc(x.summary)+'</li>';});h+='</ul></dd>';}
     if(lane.status_reason){h+='<dt>status_reason</dt><dd>'+esc(lane.status_reason)+'</dd>';}
     h+='</dl>';
+    var fn=flowByIdx[laneIdx+'|'+nodeIdx];if(fn)h+=flowSection(fn);
     body.innerHTML=h;panel.hidden=false;
     if(selected)selected.classList.remove('selected');
     selected=document.querySelector('.node[data-lane="'+laneIdx+'"][data-node="'+nodeIdx+'"]');
     if(selected)selected.classList.add('selected');
+    flowSelect(fn?fn.key:null);
   }
-  function close(){panel.hidden=true;if(selected){selected.classList.remove('selected');selected=null;}}
+  function close(){panel.hidden=true;if(selected){selected.classList.remove('selected');selected=null;}flowSelect(null);}
   document.querySelectorAll('.node').forEach(function(btn){btn.addEventListener('click',function(){show(+btn.dataset.lane,+btn.dataset.node);});});
   document.getElementById('detail-close').addEventListener('click',close);
   document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
   document.querySelectorAll('input[data-state]').forEach(function(cb){cb.addEventListener('change',function(){
-    document.querySelectorAll('.node[data-state="'+cb.dataset.state+'"]').forEach(function(el){el.classList.toggle('filtered',!cb.checked);});});});
+    document.querySelectorAll('.node[data-state="'+cb.dataset.state+'"],.fl-node[data-state="'+cb.dataset.state+'"]').forEach(function(el){el.classList.toggle('filtered',!cb.checked);});});});
   var tog=document.getElementById('toggle-annot');
   tog.addEventListener('change',function(){document.querySelectorAll('tr.annot-row').forEach(function(tr){tr.hidden=!tog.checked;});});
+  // ---- 0.27.0 流程檢視：座標與分類都在 IR flow（Python 算好），這裡只做檢視切換、開關、選取、面板與跨分頁跳轉 ----
+  function flowSection(fn){
+    var h='<div class="fl-sec"><h3>流程檢視</h3>';
+    if(fn.current)h+='<span class="fl-chip cur">目前站</span>';
+    if(fn.next)h+='<span class="fl-chip cur">該問題的下一站</span>';
+    if(fn.anomalies.length)h+='<span class="fl-chip anom">順序異常</span>';
+    var g=(FL.gates||{})[fn.stage];if(g)h+='<span class="fl-chip gate">人工確認關卡 '+g.n+'：'+esc(g.name)+'</span>';
+    var ids=relIdsOf(fn);
+    if(ids.length){var tz={method:'方法',validation:'驗證',result:'結果',figure:'圖表',question:'問題'},t0=relNode(ids[0]);
+      h+='<div><button type="button" class="fl-jump" data-rel-ids="'+esc(ids.join(' '))+'">在關聯分頁看對應的'+esc(tz[t0.type]||'')+'節點（'+ids.length+' 個）</button></div>';}
+    h+='<dl>';
+    var pre=(FL.prereq||{})[fn.stage]||[];
+    h+='<dt>直接硬前置</dt><dd>';
+    if(!pre.length)h+='無（只有建議順序）';
+    else{h+='<ul>';pre.forEach(function(p){var deps=resolve(fn,p.lane,p.stage);
+      h+='<li>'+(deps.length?deps.map(function(k){var s=flowState(k);return gotoFlow(k)+' <span class="'+(s==='done'?'ok':'bad')+'">'+esc(stateZh[s]||s)+'</span>';}).join('、'):esc(stageLabel[p.stage]||p.stage)+'（無此站）')+
+        (p.lane==='allQ'?'（每條都要）':(p.lane==='anyQ'?'（任一條即可）':''))+'<br><span class="src">'+esc(p.why)+'</span></li>';});h+='</ul>';}
+    h+='</dd>';
+    if(fn.anomalies.length){h+='<dt>順序異常（'+fn.anomalies.length+'）</dt><dd><ul>'+fn.anomalies.map(function(a){return '<li>'+a.deps.map(function(k){return gotoFlow(k)+' <span class="bad">'+esc(stateZh[flowState(k)]||flowState(k))+'</span>';}).join('、')+'<br><span class="src">'+esc(a.why)+'</span></li>';}).join('')+'</ul></dd>';}
+    var ins=FL.edges.filter(function(e){return e.to===fn.key;}),outs=FL.edges.filter(function(e){return e.from===fn.key;});
+    if(ins.length||outs.length){h+='<dt>連線</dt><dd><ul>';
+      ins.forEach(function(e){h+='<li>← '+gotoFlow(e.from)+' <span class="src">'+esc(CLS_ZH[e.cls]||e.cls)+'：'+esc(e.why)+'</span></li>';});
+      outs.forEach(function(e){h+='<li>→ '+gotoFlow(e.to)+' <span class="src">'+esc(CLS_ZH[e.cls]||e.cls)+'：'+esc(e.why)+'</span></li>';});
+      h+='</ul></dd>';}
+    if(fn.annotations.length){var lane=ir.lanes[fn.lane_index];h+='<dt>決策註記</dt><dd><ul>'+fn.annotations.map(function(id){var a=lane.annotations.filter(function(x){return x.id===id;})[0]||{};return '<li>'+esc(id)+'（'+esc(a.date||'—')+'）：'+esc(a.summary||'')+'</li>';}).join('')+'</ul></dd>';}
+    return h+'</dl></div>';
+  }
+  function flowName(k){var n=flowByKey[k];if(!n)return k;var ln=FL.lanes.filter(function(l){return l.key===n.lane;})[0];return (ln?ln.label:n.lane)+' · '+(stageLabel[n.stage]||n.stage);}
+  function flowState(k){var n=flowByKey[k];return n?ir.lanes[n.lane_index].nodes[n.node_index].state:'';}
+  function gotoFlow(k){return '<span class="fl-goto" data-flow-key="'+esc(k)+'">'+esc(flowName(k))+'</span>';}
+  function resolve(fn,spec,stage){var ks=[];
+    if(spec==='P')ks=['P|'+stage,'L|'+stage];
+    else if(spec==='same')ks=fn.lane.indexOf('Q:')===0?[fn.lane+'|'+stage]:[];
+    else ks=FL.lanes.filter(function(l){return l.key.indexOf('Q:')===0;}).map(function(l){return l.key+'|'+stage;});
+    return ks.filter(function(k){return !!flowByKey[k];});}
+  function relNode(id){var G=ir.graph;return G?G.nodes.filter(function(n){return n.id===id;})[0]:null;}
+  // 流程站 → 關聯圖節點：研究設計＝方法、正式分析＝結果、結果驗證＝驗證、目標評估＝問題節點、圖表設計＝全部圖表；收合的舊版不算
+  function relIdsOf(fn){var G=ir.graph;if(!G)return [];var q=fn.lane.indexOf('Q:')===0?fn.lane.slice(2):'';
+    if(q&&fn.stage==='evaluate')return G.nodes.filter(function(n){return n.id==='q:'+q;}).map(function(n){return n.id;});
+    var t=q?({'study-design':'method','validate-results':'validation','analyze-data':'result'}[fn.stage]||''):(fn.stage==='figure-design'?'figure':'');
+    if(!t)return [];
+    return G.nodes.filter(function(n){return n.type===t&&!n.collapsed&&(t==='figure'||n.strip==='q:'+q);}).map(function(n){return n.id;});}
+  function flowSelect(key){if(!flowSvg)return;flowSvg.classList.toggle('has-sel',!!key);
+    Object.keys(flowEls).forEach(function(k){flowEls[k].classList.remove('sel','rel');});
+    flowEdgeEls.forEach(function(g){g.classList.remove('sel');});
+    if(!key||!flowEls[key])return;flowEls[key].classList.add('sel');
+    flowEdgeEls.forEach(function(g){var f=g.getAttribute('data-from'),t=g.getAttribute('data-to');if(f===key||t===key){g.classList.add('sel');[f,t].forEach(function(k){if(flowEls[k])flowEls[k].classList.add('rel');});}});
+    (flowByKey[key].anomalies||[]).forEach(function(a){a.deps.forEach(function(k){if(flowEls[k])flowEls[k].classList.add('rel');});});}
+  function fitFlow(){if(!flowSvg)return;var wr=document.getElementById('flow-wrap');var w0=+flowSvg.getAttribute('data-w'),w=Math.max(w0,(wr?wr.clientWidth:0)-2);
+    flowSvg.setAttribute('width',w);flowSvg.setAttribute('viewBox','0 0 '+w+' '+flowSvg.getAttribute('height'));
+    Array.prototype.forEach.call(flowSvg.querySelectorAll('.fl-band'),function(r){r.setAttribute('width',w);});}
+  function setMView(v,save){if(!mviews[v])v='flow';Object.keys(mviews).forEach(function(k){if(mviews[k])mviews[k].hidden=(k!==v);});
+    Array.prototype.forEach.call(document.querySelectorAll('[data-mview]'),function(b){b.classList.toggle('active',b.getAttribute('data-mview')===v);});
+    if(save){try{localStorage.setItem('ap-mview',v);}catch(e){}}if(v==='flow')fitFlow();}
+  if(flowSvg){
+    Array.prototype.forEach.call(flowSvg.querySelectorAll('.fl-node'),function(el){flowEls[el.getAttribute('data-key')]=el;});
+    flowEdgeEls=Array.prototype.slice.call(flowSvg.querySelectorAll('.fl-e'));
+    flowSvg.addEventListener('click',function(e){var g=e.target.closest&&e.target.closest('.fl-node');if(g)show(+g.getAttribute('data-lane'),+g.getAttribute('data-node'));else close();});
+    flowSvg.addEventListener('keydown',function(e){var g=e.target.closest&&e.target.closest('.fl-node');if(g&&(e.key==='Enter'||e.key===' ')){e.preventDefault();show(+g.getAttribute('data-lane'),+g.getAttribute('data-node'));}});
+    Array.prototype.forEach.call(document.querySelectorAll('input[data-flowopt]'),function(cb){cb.addEventListener('change',function(){flowSvg.classList.toggle('no-'+cb.getAttribute('data-flowopt'),!cb.checked);});});
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-mview]'),function(b){b.addEventListener('click',function(){setMView(b.getAttribute('data-mview'),true);});});
+  var mv0='flow';try{mv0=localStorage.getItem('ap-mview')||'flow';}catch(e){}
+  setMView(mv0,false);
+  window.addEventListener('resize',fitFlow);
+  document.addEventListener('progress:tab',function(e){if(e.detail&&e.detail.tab==='milestones')fitFlow();});
+  body.addEventListener('click',function(e){
+    var t=e.target.closest&&e.target.closest('.fl-goto');if(t){var fn=flowByKey[t.getAttribute('data-flow-key')];if(fn){setMView('flow',false);show(fn.lane_index,fn.node_index);}return;}
+    var b=e.target.closest&&e.target.closest('.fl-jump');if(b&&window.apRelFocus)window.apRelFocus(b.getAttribute('data-rel-ids').split(' '));});
+  // 關聯分頁 → 里程流程（GRAPH_JS 的面板按鈕呼叫）
+  window.apFlowFocus=function(key){var fn=flowByKey[key];if(!fn)return false;if(window.apShowTab)window.apShowTab('milestones');setMView('flow',false);show(fn.lane_index,fn.node_index);
+    var el=flowEls[key];if(el&&el.scrollIntoView)el.scrollIntoView({block:'center',inline:'center'});return true;};
 })();
 """
 
@@ -4055,6 +4577,204 @@ def _matrix(ir: dict, scope: str) -> str:
     return '\n'.join(out)
 
 
+FLOW_CSS = """
+:root{--gate:#e16f24}
+@media (prefers-color-scheme: dark){:root{--gate:#f0883e}}
+#mview-tabs{display:flex;gap:6px;margin:4px 0 10px}
+#mview-tabs button{font:inherit;padding:3px 14px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--muted);cursor:pointer}
+#mview-tabs button.active{color:var(--fg);font-weight:700;background:var(--proj);border-color:var(--current)}
+#flow-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+#flow-svg{display:block}
+.fl-svg text{font:12px system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;fill:var(--fg)}
+.fl-svg text.fl-phase,.fl-svg text.fl-lane-t{font-size:13px;font-weight:700}
+.fl-svg text.fl-lane-s{font-size:10.5px;font-weight:600;fill:var(--badge-open)}
+.fl-svg text.fl-lane-s.s-addressed{fill:var(--badge-addressed)}.fl-svg text.fl-lane-s.s-blocked{fill:var(--badge-blocked)}.fl-svg text.fl-lane-s.s-dropped{fill:var(--badge-dropped)}
+.fl-svg text.fl-lane-k,.fl-svg text.fl-dcount{font-size:10.5px;fill:var(--muted)}
+.fl-svg .fl-band{fill:var(--proj);opacity:.6}
+.fl-svg .fl-guide{stroke:var(--edge-faint);stroke-width:1}.fl-svg .fl-guide.aq{stroke-dasharray:3 4}
+.fl-svg .fl-gate rect{fill:var(--gate)}.fl-svg .fl-gate text{fill:#fff;font-size:10.5px;font-weight:700}
+.fl-svg .fl-edge{fill:none;stroke:var(--edge);stroke-width:1.6;marker-end:url(#fl-m-base)}
+.fl-svg .fl-edge.e-soft{stroke-dasharray:5 4;stroke-width:1.3}
+.fl-svg .fl-edge.e-cond{stroke-dasharray:1.5 4;stroke-linecap:round}
+.fl-svg .fl-edge.e-loop{stroke-width:1.3}
+#flow-svg:not(.no-rest) .fl-edge.rest{stroke:var(--current);stroke-width:2.4;marker-end:url(#fl-m-rest)}
+#flow-svg:not(.no-up) .fl-edge.up-blocked{stroke:var(--blocked);stroke-width:2.6;marker-end:url(#fl-m-blocked)}
+#flow-svg:not(.no-up) .fl-edge.up-expired{stroke:var(--expired);stroke-width:2.6;marker-end:url(#fl-m-expired)}
+#flow-svg.no-soft .fl-e.c-soft,#flow-svg.no-anom .fl-anom,#flow-svg.no-gates .fl-gate{display:none}
+.fl-svg .fl-ehit{fill:none;stroke:transparent;stroke-width:9}
+.fl-ar-base{fill:var(--edge)}.fl-ar-rest{fill:var(--current)}.fl-ar-blocked{fill:var(--blocked)}.fl-ar-expired{fill:var(--expired)}
+.fl-node{cursor:pointer;outline:none}
+.fl-node .fl-hit{fill:transparent}
+.fl-node:focus-visible .fl-hit,.fl-node.sel .fl-hit{fill:var(--proj);stroke:var(--fg);stroke-width:1;stroke-dasharray:3 2}
+.fl-node .fl-sym{fill:var(--card);stroke:var(--pending);stroke-width:1.6}
+.fl-node.fs-done .fl-sym{fill:var(--done);stroke:none}
+.fl-node.fs-expired .fl-sym{fill:var(--bg-expired);stroke:var(--expired)}.fl-node .fl-half{fill:var(--expired)}
+.fl-node.fs-blocked .fl-sym{fill:var(--blocked);stroke:none}.fl-node .fl-x{stroke:#fff;stroke-width:1.8;stroke-linecap:round}
+.fl-node.fs-unknown .fl-sym{stroke:var(--unknown);stroke-dasharray:2.5 2.5}
+.fl-node .fl-ring-cur{fill:none;stroke:var(--current);stroke-width:2.5}
+.fl-node .fl-ring-next{fill:none;stroke:var(--current);stroke-width:1.2;stroke-dasharray:2 2.5}
+.fl-node .fl-anom{fill:var(--up);stroke:var(--card);stroke-width:1}
+.fl-node.filtered{opacity:.15}
+#flow-svg.has-sel .fl-e:not(.sel){opacity:.16}
+#flow-svg.has-sel .fl-node:not(.sel):not(.rel){opacity:.3}
+#flow-svg .fl-e.sel .fl-edge{stroke-width:2.8}
+.fl-legend svg{flex:none}
+#detail .fl-sec{border-top:1px solid var(--line);margin-top:8px;padding-top:4px}
+#detail .fl-chip{display:inline-block;font-size:12px;padding:0 7px;border-radius:10px;border:1px solid var(--line);margin:0 4px 2px 0}
+#detail .fl-chip.cur{border-color:var(--current);color:var(--current)}#detail .fl-chip.anom{border-color:var(--up);color:var(--up)}#detail .fl-chip.gate{border-color:var(--gate);color:var(--gate)}
+#detail .ok{color:var(--done)}#detail .bad{color:var(--up)}
+#detail .fl-goto{color:var(--current);cursor:pointer;text-decoration:underline dotted}
+#detail button.fl-jump,#gdetail button.goto-flow{font:inherit;font-size:12.5px;margin:2px 6px 0 0;padding:2px 10px;border:1px solid var(--current);color:var(--current);background:none;border-radius:6px;cursor:pointer}
+"""
+
+FLOW_CLS_ZH = {'hard': '硬前置', 'soft': '建議順序', 'cond': '條件式硬前置', 'loop': '迴圈'}
+FLOW_STATUS_CLASSES = ('addressed', 'blocked', 'open', 'dropped')
+
+
+def _flow_d(points: list) -> str:
+    return 'M' + ' L'.join(f'{x:g},{y:g}' for x, y in points)
+
+
+def _flow_name(flow: dict, key: str, stage_label: dict) -> str:
+    lane_label = {fl['key']: fl['label'] for fl in flow['lanes']}
+    lane, _, stage = key.partition('|')
+    return f'{lane_label.get(lane, lane)}・{stage_label.get(stage, stage)}'
+
+
+def _svg_flow(ir: dict) -> str:
+    """里程分頁「流程」檢視的 SVG：座標全取自 IR flow（build_flow 算好），這裡只負責畫；互動在 JS。"""
+    flow, lanes = ir['flow'], ir['lanes']
+    stage_label = {s['id']: s['label'] for s in ir['stages']}
+    w, h = flow['size']['w'], flow['size']['h']
+
+    def node_ir(nd: dict) -> dict:
+        return lanes[nd['lane_index']]['nodes'][nd['node_index']]
+
+    out = [f'<svg id="flow-svg" class="fl-svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" data-w="{w}" role="img" '
+           f'aria-label="流程檢視：由上往下是流程順序，左到右是專案層、各研究問題與文獻">', '<defs>']
+    for mid, cls in (('fl-m-base', 'fl-ar-base'), ('fl-m-rest', 'fl-ar-rest'), ('fl-m-blocked', 'fl-ar-blocked'),
+                     ('fl-m-expired', 'fl-ar-expired')):
+        out.append(f'<marker id="{mid}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" '
+                   f'orient="auto-start-reverse"><path class="{cls}" d="M0,0.8 L9,5 L0,9.2 z"></path></marker>')
+    out.append('</defs><g class="fl-bands">')
+    for k, ph in enumerate(flow['phases']):
+        if k % 2 == 0:
+            out.append(f'<rect class="fl-band" x="0" y="{ph["y0"]}" width="{w}" height="{ph["y1"] - ph["y0"]}"></rect>')
+        out.append(f'<text class="fl-phase" x="10" y="{ph["y0"] + FLOW_PH // 2 + 5}">{k + 1}  {_h(ph["name"])}</text>')
+    out.append('</g><g class="fl-guides">')
+    for fl in flow['lanes']:
+        aq = ' aq' if fl['kind'] == 'aq' else ''
+        out.append(f'<line class="fl-guide{aq}" x1="{fl["x"]}" y1="{FLOW_TOP - 4}" x2="{fl["x"]}" y2="{h - 10}"></line>')
+    out.append('</g><g class="fl-heads">')
+    for fl in flow['lanes']:
+        lane = lanes[fl['lane_index']]
+        out.append(f'<g data-lane-key="{_h(fl["key"])}"><text class="fl-lane-t" x="{fl["x"]}" y="{FLOW_TOP - 46}" text-anchor="middle">{_h(fl["label"])}</text>')
+        if fl['kind'] in ('sq', 'aq'):
+            status = (lane['status'] or 'open').lower()
+            scls = status if status in FLOW_STATUS_CLASSES else 'open'
+            out.append(f'<text class="fl-lane-s s-{scls}" x="{fl["x"]}" y="{FLOW_TOP - 29}" text-anchor="middle">{_h(status)}</text>')
+            if fl['kind'] == 'aq':
+                out.append(f'<text class="fl-lane-k" x="{fl["x"]}" y="{FLOW_TOP - 14}" text-anchor="middle">附錄</text>')
+            tip = f'{fl["label"]}：{lane["question"]}' + (f'（{lane["status_reason"]}）' if lane['status_reason'] else '')
+            out.append(f'<title>{_h(tip)}</title>')
+        elif fl['kind'] == 'lit':
+            out.append(f'<text class="fl-lane-k" x="{fl["x"]}" y="{FLOW_TOP - 29}" text-anchor="middle">專案層的文獻站</text>')
+        out.append('</g>')
+    out.append('</g><g class="fl-rows">')
+    for row in flow['rows']:
+        names = '  ∥  '.join(stage_label.get(it['stage'], it['stage']) for it in row['items'])
+        out.append(f'<text class="fl-row" x="26" y="{row["y"] + 4}">{_h(names)}</text>')
+        for it in row['items']:
+            gate = FLOW_GATES.get(it['stage'])
+            if gate:
+                tip = f'人工確認關卡 {gate[0]}：{gate[1]}（{stage_label.get(it["stage"], it["stage"])}）'
+                out.append(f'<g class="fl-gate"><rect x="{FLOW_LW - 50}" y="{row["y"] - 8}" width="24" height="16" rx="8"></rect>'
+                           f'<text x="{FLOW_LW - 38}" y="{row["y"] + 4}" text-anchor="middle">{gate[0]}</text><title>{_h(tip)}</title></g>')
+    out.append('</g><g class="fl-edges">')
+
+    def prio(e: dict) -> int:
+        return 2 if e['upstream'] else (1 if e['rest'] else 0)
+    for e in sorted(flow['edges'], key=prio):
+        cls = f'fl-edge e-{e["cls"]}' + (' rest' if e['rest'] else '') + (f' up-{e["upstream"]}' if e['upstream'] else '')
+        mode = {'all': '（每條問題都要）', 'any': '（任一條即可）'}.get(e['mode'], '')
+        tip = (f'{FLOW_CLS_ZH[e["cls"]]}：{_flow_name(flow, e["from"], stage_label)} → {_flow_name(flow, e["to"], stage_label)}'
+               f'{mode}\n{e["why"]}')
+        d = _flow_d(e['points'])
+        out.append(f'<g class="fl-e c-{e["cls"]}" data-from="{_h(e["from"])}" data-to="{_h(e["to"])}"><path class="{cls}" d="{d}"></path>'
+                   f'<path class="fl-ehit" d="{d}"><title>{_h(tip)}</title></path></g>')
+    out.append('</g><g class="fl-nodes">')
+    for nd in flow['nodes']:
+        n = node_ir(nd)
+        st = n['state']
+        name = _flow_name(flow, nd['key'], stage_label)
+        cls = f'fl-node fs-{st}' + (' cur' if nd['current'] else '') + (' nxt' if nd['next'] else '') + (' anom' if nd['anomalies'] else '')
+        aria = f'{name}，{STATE_ZH.get(st, st)}' + ('，目前站' if nd['current'] else '')
+        parts = [f'<g class="{cls}" data-key="{_h(nd["key"])}" data-lane="{nd["lane_index"]}" data-node="{nd["node_index"]}" '
+                 f'data-state="{st}" transform="translate({nd["x"]},{nd["y"]})" tabindex="0" role="button" aria-label="{_h(aria)}">',
+                 '<circle class="fl-hit" r="15"></circle>']
+        if nd['current']:
+            parts.append('<circle class="fl-ring-cur" r="13"></circle>')
+        elif nd['next']:
+            parts.append('<circle class="fl-ring-next" r="12"></circle>')
+        parts.append(f'<circle class="fl-sym" r="{FLOW_R}"></circle>')
+        if st == 'expired':
+            parts.append(f'<path class="fl-half" d="M0 -{FLOW_R} A{FLOW_R} {FLOW_R} 0 0 0 0 {FLOW_R} Z"></path>')
+        elif st == 'blocked':
+            parts.append('<path class="fl-x" d="M-3.2 -3.2 L3.2 3.2 M3.2 -3.2 L-3.2 3.2"></path>')
+        if nd['anomalies']:
+            parts.append('<path class="fl-anom" d="M22 -6 L29 6 L15 6 Z"></path>')
+        if nd['annotations']:
+            parts.append(f'<text class="fl-dcount" x="-15" y="-10" text-anchor="end">D{len(nd["annotations"])}</text>')
+        tip = f'{name}：{STATE_ZH.get(st, st)}' + ('（目前站）' if nd['current'] else '') + f'\n{n["summary"]}' + \
+              (f'\n{n["date"]}' if n['date'] else '') + (f'\n順序異常：{len(nd["anomalies"])} 項直接硬前置未完成' if nd['anomalies'] else '')
+        parts.append(f'<title>{_h(tip)}</title></g>')
+        out.append(''.join(parts))
+    out.append('</g></svg>')
+    return '\n'.join(out)
+
+
+def _flow_stat_line(ir: dict) -> str:
+    flow = ir['flow']
+    stage_label = {s['id']: s['label'] for s in ir['stages']}
+    cur = [_flow_name(flow, nd['key'], stage_label) for nd in flow['nodes'] if nd['current']]
+    st = flow['stats']
+    return (f'目前站：{"、".join(cur) or "—"}｜順序異常 {st["anomalies"]}｜受阻／過期的上游線 {st["upstream_edges"]}'
+            f'｜版面檢查：交叉 {st["crossings"]}、線穿過節點 {st["edge_node_overlaps"]}')
+
+
+def _flow_view(ir: dict) -> list[str]:
+    """里程分頁「流程」檢視：工具列、統計列、圖例、SVG。"""
+    lines = [
+        '<div id="mview-flow">',
+        '<div class="controls fl-controls">',
+        '<label><input type="checkbox" data-flowopt="rest" checked> 標出剩下的路</label>',
+        '<label><input type="checkbox" data-flowopt="up" checked> 標出受阻／過期的上游</label>',
+        '<label><input type="checkbox" data-flowopt="anom" checked> 標出順序異常</label>',
+        '<label><input type="checkbox" data-flowopt="soft" checked> 顯示建議順序線</label>',
+        '<label><input type="checkbox" data-flowopt="gates" checked> 人工確認關卡</label>',
+        '</div>',
+        f'<p class="notice" id="flow-stat">{_h(_flow_stat_line(ir))}</p>',
+        '<div class="legend fl-legend">',
+        '<span><span class="dot done"></span> 完成</span><span><span class="dot expired"></span> 過期</span>'
+        '<span><span class="dot blocked"></span> 受阻</span><span><span class="dot pending"></span> 未到</span>'
+        '<span><span class="dot unknown"></span> 不明</span>',
+        '<span><svg class="fl-svg" width="24" height="24"><g class="fl-node fs-pending" transform="translate(12,12)">'
+        '<circle class="fl-ring-cur" r="10"></circle><circle class="fl-sym" r="5"></circle></g></svg>目前站</span>',
+        '<span><svg class="fl-svg" width="24" height="24"><g class="fl-node fs-pending" transform="translate(12,12)">'
+        '<circle class="fl-ring-next" r="9.5"></circle><circle class="fl-sym" r="5"></circle></g></svg>該問題的下一站</span>',
+        '<span><svg class="fl-svg" width="16" height="16"><g class="fl-node"><path class="fl-anom" d="M8 2 L14 13 L2 13 Z"></path></g></svg>順序異常（已完成但直接硬前置未完成）</span>',
+        '<span><svg class="fl-svg" width="24" height="16"><g class="fl-gate"><rect x="1" y="1" width="22" height="14" rx="7"></rect></g></svg>人工確認關卡</span>',
+        '<span><span class="esw"></span>硬前置</span><span><span class="esw dashed"></span>建議順序</span>',
+        '<span>點線＝條件式硬前置；藍色粗線＝從目前站往下游還要走的路；粉紅／琥珀粗線＝從受阻／過期節點出去的線；滑過任一條線看依據</span>',
+        '</div>',
+        '<div id="flow-wrap">',
+        _svg_flow(ir),
+        '</div>',
+        '</div>',
+    ]
+    return lines
+
+
 GRAPH_CSS = """
 .tabs{display:flex;gap:6px;margin:12px 0 0;border-bottom:1px solid var(--line)}
 .tabs button{border:1px solid var(--line);border-bottom:none;background:var(--card);color:var(--muted);font:inherit;padding:6px 14px;border-radius:8px 8px 0 0;cursor:pointer}
@@ -4092,6 +4812,9 @@ path.trunk{fill:none;stroke:var(--edge);stroke-width:1.6}
 path.edge.st-dashed,path.trunk.st-dashed{stroke-dasharray:6 4}
 path.edge.st-thin,path.trunk.st-thin{stroke-width:.9;stroke:var(--edge-thin)}
 path.edge.e-supersedes,path.edge.e-cites,path.edge.e-refers,path.trunk.e-supersedes,path.trunk.e-cites,path.trunk.e-refers{stroke:var(--edge-faint)}
+/* 0.27.0 上游影響：從過期／受阻節點往下游的線；放在 up／down／onpath 之前，選取時的上下游高亮優先 */
+path.edge.imp-expired{stroke:var(--expired);stroke-width:2;marker-end:url(#arrow-imp-expired)}path.edge.imp-blocked{stroke:var(--blocked);stroke-width:2;marker-end:url(#arrow-imp-blocked)}
+path.trunk.imp-expired{stroke:var(--expired);stroke-width:2.4}path.trunk.imp-blocked{stroke:var(--blocked);stroke-width:2.4}
 path.trunk.up{stroke:var(--up);stroke-width:2.4}path.trunk.down{stroke:var(--down);stroke-width:2.4}path.trunk.onpath{stroke:var(--path);stroke-width:3}
 path.trunk.dim{opacity:.08}
 path.edge.hov,path.trunk.hov{stroke:var(--current)!important;opacity:1!important}
@@ -4193,6 +4916,17 @@ pre.act-summary:empty{display:none}
 #toast[hidden]{display:none}
 #toast a.toast-undo{color:var(--bg);text-decoration:underline;margin-left:10px;font-weight:600;cursor:pointer}
 @media (max-width:700px){#gdetail{position:static;width:auto;max-height:none;margin-top:14px}}
+/* 0.27.0 上游影響的節點標籤、欄頭（捲動時固定在上方；JS placeHeads 跟著平移縮放） */
+#graph-svg.no-imp .imp-pill{display:none}
+.imp-pill rect{fill:var(--expired)}.imp-pill.blocked rect{fill:var(--blocked)}
+#graph-svg text.imp-t{fill:#fff;font-size:10px;font-weight:700}
+.arrow-imp-expired{fill:var(--expired)}.arrow-imp-blocked{fill:var(--blocked)}
+#graph-colheads{pointer-events:none}#graph-colheads .ch-bg{fill:var(--card);opacity:.94}
+#graph-svg #graph-colheads text.ch-t{font-size:12.5px;font-weight:700}
+#graph-svg #graph-colheads text.ch-g{fill:#fff;font-size:10px;font-weight:700}
+#graph-svg #graph-colheads text.ch-n{fill:var(--muted);font-size:11px}
+#graph-colheads .ch-gp{fill:var(--gate)}
+#graph-colheads .ch.dec{display:none}#graph-svg.show-dec #graph-colheads .ch.dec{display:inline}
 """
 
 GRAPH_JS = """
@@ -4273,9 +5007,10 @@ GRAPH_JS = """
   var tabs={};['milestones','relations','literature','submission'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
   var cur='milestones';
   function showTab(name,writeHash){
-    if(!tabs[name])name='milestones';cur=name;
+    if(!tabs[name])name='milestones';var changed=cur!==name;cur=name;
     Object.keys(tabs).forEach(function(k){tabs[k].hidden=(k!==name);var b=document.querySelector('.tabs button[data-tab="'+k+'"]');if(b)b.classList.toggle('active',k===name);});
-    var d=document.getElementById('detail');if(d)d.hidden=true;panel.hidden=true;
+    // 0.27.0 只在真的換分頁時關面板（跨分頁跳轉先開面板、hashchange 才到）
+    var d=document.getElementById('detail');if(changed){if(d)d.hidden=true;panel.hidden=true;}
     if(writeHash){try{if(location.hash!=='#'+name)location.hash='#'+name;}catch(e){}}
     // 文獻分頁的 canvas 要在隱藏時停掉 requestAnimationFrame、顯示時重量尺寸，靠這個事件通知
     try{document.dispatchEvent(new CustomEvent('progress:tab',{detail:{tab:name}}));}catch(e){}
@@ -4452,18 +5187,19 @@ GRAPH_JS = """
     Array.prototype.forEach.call(trunkGroup.children,function(tp){var ms=byKey[tp.getAttribute('data-trunk')]||[];['up','down','onpath','own','dim'].forEach(function(c){tp.classList.remove(c);});
       var any=function(c){return ms.some(function(el){return el.classList.contains(c);});};
       if(any('onpath'))tp.classList.add('onpath');else if(any('up'))tp.classList.add('up');else if(any('down'))tp.classList.add('down');
-      if(any('own'))tp.classList.add('own');if(ms.length&&ms.every(function(el){return el.classList.contains('dim');}))tp.classList.add('dim');});}
+      if(any('own'))tp.classList.add('own');if(ms.length&&ms.every(function(el){return el.classList.contains('dim');}))tp.classList.add('dim');
+      tp.classList.remove('imp-expired','imp-blocked');if(any('imp-blocked'))tp.classList.add('imp-blocked');else if(any('imp-expired'))tp.classList.add('imp-expired');});}
   svg.addEventListener('mouseover',function(e){var t=e.target.closest&&e.target.closest('[data-trunk]');if(!t)return;var ks=trunkKeys(t);Array.prototype.forEach.call(svg.querySelectorAll('[data-trunk]'),function(el){el.classList.toggle('hov',trunkKeys(el).some(function(k){return ks.indexOf(k)>=0;}));});});
   svg.addEventListener('mouseout',function(e){var t=e.target.closest&&e.target.closest('[data-trunk]');if(!t)return;Array.prototype.forEach.call(svg.querySelectorAll('.hov'),function(el){el.classList.remove('hov');});});
   boxOld.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
-  boxDec.addEventListener('change',function(){relayout();if(selected)select(selected,false);});
+  boxDec.addEventListener('change',function(){svg.classList.toggle('show-dec',boxDec.checked);relayout();if(selected)select(selected,false);});
   boxAll.addEventListener('change',function(){redrawEdges();});
   Array.prototype.forEach.call(document.querySelectorAll('input[data-gstate]'),function(cb){cb.addEventListener('change',function(){stateOff[cb.getAttribute('data-gstate')]=!cb.checked;applyFilter();});});
   function applyFilter(){Object.keys(nodeEls).forEach(function(id){nodeEls[id].classList.toggle('filtered',!!stateOff[nodes[id].state]);});
     G.edges.forEach(function(e,i){edgeEls[i].classList.toggle('filtered',!!stateOff[nodes[e.from].state]||!!stateOff[nodes[e.to].state]);});}
   function expandChain(id){var n=nodes[id];if(!n||n.type!=='method'||!(n.meta.superseded_versions||[]).length)return;expanded[id]=!expanded[id];relayout();if(selected)select(selected,false);}
   // ---- 平移／縮放 ----
-  var tx=0,ty=0,sc=1;function apply(){root.setAttribute('transform','translate('+tx+' '+ty+') scale('+sc+')');}
+  var tx=0,ty=0,sc=1;function apply(){root.setAttribute('transform','translate('+tx+' '+ty+') scale('+sc+')');placeHeads();}
   wrap.addEventListener('wheel',function(e){e.preventDefault();var r=wrap.getBoundingClientRect();var mx=e.clientX-r.left+wrap.scrollLeft,my=e.clientY-r.top+wrap.scrollTop;var k=e.deltaY<0?1.1:1/1.1;var ns=Math.min(4,Math.max(.2,sc*k));k=ns/sc;tx=mx-(mx-tx)*k;ty=my-(my-ty)*k;sc=ns;apply();},{passive:false});
   var drag=null,moved=false,nodeDrag=null;
   wrap.addEventListener('mousedown',function(e){if(e.button!==0)return;drag={x:e.clientX,y:e.clientY,tx:tx,ty:ty};moved=false;wrap.classList.add('dragging');});
@@ -4669,6 +5405,9 @@ GRAPH_JS = """
     h+='<dt>title</dt><dd>'+esc(n.title||'—')+'</dd>';
     h+='<dt>state</dt><dd>'+esc(stateZh[n.state]||n.state)+'</dd>';
     h+='<dt>source</dt><dd><span class="src">'+esc(n.source)+'</span></dd>';
+    var impR=(G.impact&&G.impact.nodes||{})[id];
+    if(impR){h+='<dt>上游影響</dt><dd>'+['expired','blocked'].filter(function(k){return impR[k].length;}).map(function(k){return (k==='expired'?'過期來源：':'受阻來源：')+impR[k].map(function(x){return '<span class="goto" data-goto="'+esc(x)+'">'+esc(nodes[x]?nodes[x].label:x)+'</span>';}).join('、');}).join('<br>')+'<br><span class="src">節點自己的 state 仍照原規則判定；這裡是沿規劃、產出、驗證、呈現等線把上游的過期／受阻標出來</span></dd>';}
+    var flk=flowKeyOf(id);if(flk)h+='<dt>里程流程</dt><dd><button type="button" class="goto-flow" data-flow-key="'+esc(flk)+'">看 '+esc(flowLabel(flk))+'</button></dd>';
     var skip=[];
     var bandZh={main:'Main（主結果鏈）',ext:'Extended Data（延伸資料）',supp:'Supplementary（補充：附錄問題與補充圖表）'};
     h+='<dt>區帶</dt><dd>'+esc(bandZh[n.band]||n.band)+(n.type==='figure'?'（依 '+(n.meta.role_source==='manifest'?'manifest role '+esc(n.meta.role||'—'):'呈現的結果推導')+'）':bandSourceZh(id))+'</dd>';
@@ -5251,8 +5990,34 @@ GRAPH_JS = """
     if(!rec.stale&&pend&&staged.length&&rec.actions===stagedActionsJson()){stagedBatchId=rec.id;if(rec.token)actTokens[rec.id]=rec.token;return;}
     if(pend)actPost(DISMISS_PATH,{id:rec.id,note:'暫存清單已變更，此批次項目作廢'}).catch(function(){});
     if(staged.length){stagedStale=true;stagedBatchSave({id:rec.id,stale:true});}else stagedBatchClear();})();
+  // ---- 0.27.0 欄頭、上游影響、與里程流程互相跳轉 ----
+  var colHeads=document.getElementById('graph-colheads');
+  function placeHeads(){if(!colHeads)return;colHeads.setAttribute('transform','translate(0 '+wrap.scrollTop+')');
+    Array.prototype.forEach.call(colHeads.querySelectorAll('.ch'),function(c){c.setAttribute('transform','translate('+(tx+(+c.getAttribute('data-x'))*sc)+',0)');});}
+  wrap.addEventListener('scroll',placeHeads);
+  var boxImp=document.getElementById('toggle-imp');
+  function applyImp(){var on=!boxImp||boxImp.checked;svg.classList.toggle('no-imp',!on);
+    edgeEls.forEach(function(el){if(!el)return;el.classList.remove('imp-expired','imp-blocked');var k=el.getAttribute('data-imp');if(on&&k)el.classList.add('imp-'+k);});syncTrunks();}
+  if(boxImp)boxImp.addEventListener('change',applyImp);
+  var stageLabelG={};(ir.stages||[]).forEach(function(s){stageLabelG[s.id]=s.label;});
+  var FLOW=ir.flow||null,flowKeys={};if(FLOW)FLOW.nodes.forEach(function(n){flowKeys[n.key]=n;});
+  // 關聯圖節點 → 里程流程的站：問題＝目標評估、方法＝研究設計、驗證＝結果驗證、結果＝正式分析、圖表與 report＝圖表設計
+  function flowKeyOf(id){var n=nodes[id];if(!n||!FLOW)return '';var q=(n.strip&&n.strip!=='q:main')?n.strip.slice(2):'',k='';
+    if(n.type==='question')k=(id==='q:main')?'':'Q:'+id.slice(2)+'|evaluate';
+    else if(n.type==='figure'||n.type==='report')k='P|figure-design';
+    else if(q)k='Q:'+q+'|'+({method:'study-design',validation:'validate-results',result:'analyze-data'}[n.type]||'');
+    return flowKeys[k]?k:'';}
+  function flowLabel(k){var n=flowKeys[k],ln=FLOW.lanes.filter(function(l){return l.key===n.lane;})[0];return (ln?ln.label:n.lane)+'・'+(stageLabelG[n.stage]||n.stage);}
+  body.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('.goto-flow');if(b&&window.apFlowFocus)window.apFlowFocus(b.getAttribute('data-flow-key'));});
+  window.apShowTab=function(name){showTab(name,true);};
+  // 里程流程 → 關聯圖：切分頁、選第一個節點（置中、開面板），其餘打亮
+  window.apRelFocus=function(ids){ids=(ids||[]).filter(function(id){return !!nodes[id];});if(!ids.length)return false;showTab('relations',true);
+    var need=false;ids.forEach(function(id){if(!nodeVisible(id)&&currentOf[id]&&!expanded[currentOf[id]]){expanded[currentOf[id]]=true;need=true;}});if(need)relayout();
+    select(ids[0],true);ids.slice(1).forEach(function(id){var el=nodeEls[id];if(el){el.classList.remove('dim');el.classList.add('hit');}});return true;};
   renderStaged();
+  applyImp();
   relayout();
+  placeHeads();
 })();
 """
 
@@ -6389,6 +7154,44 @@ def _node_w(n: dict) -> int:
     return NODE_W - _indent(n)
 
 
+GRAPH_COLHEAD = ('主問題', '問題（SQ／AQ）', '方法', '驗證', '結果', '圖表', '決策')   # 關聯圖五欄（加主問題與決策）的欄頭
+GRAPH_COL_GATE = {2: 'study-design', 4: 'evaluate', 5: 'figure-design'}               # 欄頭掛的人工確認關卡（見 FLOW_GATES）
+COLHEAD_H = GRAPH_PAD                                                                  # 欄頭高＝頂端留白，不推動任何節點
+
+
+def _graph_colheads(nodes: list[dict], width: int) -> str:
+    """關聯圖欄頭：放在 #graph-root 之外，JS 的 placeHeads() 讓它捲動時固定在上方、跟著平移縮放。"""
+    cols = sorted({n['col'] for n in nodes if isinstance(n.get('col'), int) and 0 <= n['col'] < len(GRAPH_COLHEAD)})
+    out = [f'<g id="graph-colheads"><rect class="ch-bg" x="0" y="0" width="{width}" height="{COLHEAD_H}"></rect>']
+    for c in cols:
+        x = GRAPH_PAD + c * COL_PITCH
+        name = GRAPH_COLHEAD[c]
+        part = (f'<g class="ch{" dec" if c == 6 else ""}" data-col="{c}" data-x="{x}" transform="translate({x},0)">'
+                f'<text class="ch-t" x="4" y="14">{_h(name)}</text>')
+        gid = GRAPH_COL_GATE.get(c)
+        if gid:
+            n, gname = FLOW_GATES[gid]
+            gx = 4 + _tw(name, 12.5) + 8
+            part += (f'<rect class="ch-gp" x="{gx:g}" y="3" width="20" height="14" rx="7"></rect>'
+                     f'<text class="ch-g" x="{gx + 10:g}" y="14" text-anchor="middle">{n}</text>'
+                     f'<text class="ch-n" x="{gx + 26:g}" y="14">{_h(gname)}</text>')
+        out.append(part + '</g>')
+    out.append('</g>')
+    return ''.join(out)
+
+
+def _impact_pill(rec: dict | None, w: int, by_id: dict) -> str:
+    """被上游過期／受阻牽連的節點：右上角一個標籤（節點自己的 state 不變）。"""
+    if not rec:
+        return ''
+    kind = 'blocked' if rec.get('blocked') else 'expired'
+    text = '上游受阻' if kind == 'blocked' else '上游過期'
+    srcs = '、'.join(by_id[s]['label'] if s in by_id else s for s in rec.get('blocked', []) + rec.get('expired', []))
+    return (f'<g class="imp-pill {kind}"><rect x="{w - 82}" y="-9" width="76" height="15" rx="7.5"></rect>'
+            f'<text class="imp-t" x="{w - 44}" y="2.5" text-anchor="middle">{text}</text>'
+            f'<title>{_h(text)}：{_h(srcs)}</title></g>')
+
+
 def _num(v: float) -> str:
     """路徑座標：四捨五入到小數兩位，整數不帶小數（與 JS 端 String(Math.round(v*100)/100) 一致）。"""
     r = round(float(v), 2)
@@ -6987,7 +7790,7 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
     out = [f'<svg id="graph-svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="關聯圖">',
            '<defs>']
     for mid, cls in (('arrow', 'arrow-default'), ('arrow-up', 'arrow-up'), ('arrow-down', 'arrow-down'), ('arrow-path', 'arrow-path'),
-                     ('arrow-method', 'arrow-method')):
+                     ('arrow-method', 'arrow-method'), ('arrow-imp-expired', 'arrow-imp-expired'), ('arrow-imp-blocked', 'arrow-imp-blocked')):
         out.append(f'<marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
                    f'<path class="{cls}" d="M0,0 L10,5 L0,10 z"></path></marker>')
     # 區帶：每個區帶一條分隔線＋一個標題（main 的分隔線永遠 off；沒有可見節點的區帶兩者都 off）；main 以外都沒有可見節點時整組 off
@@ -7002,6 +7805,9 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
                      f'{_h(BAND_TITLE[b])}</text>')
     parts.append('</g>' + _strip_lines_svg(graph.get('strips') or [], width) + '<g id="graph-trunks">')
     out.append('</defs><g id="graph-root">' + ''.join(parts))
+    impact = graph.get('impact') or {}
+    imp_kind = {int(k): v for k, v in (impact.get('edge_kind') or {}).items()}
+    imp_nodes = impact.get('nodes') or {}
     for t in route['trunks']:
         out.append(f'<path class="trunk e-{t["type"]} st-{t["style"]}" data-trunk="{_h(t["key"])}" data-gap="{t["gap"]}" data-lane="{t["lane"]}" d="{t["d"]}"></path>')
     out.append('</g><g id="graph-edges">')
@@ -7023,8 +7829,10 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
         off = '' if i in drawn_set else ' off'
         dec = ' dec' if a['type'] == 'decision' or b['type'] == 'decision' else ''
         title = f'{e["type"]}{"（" + e["label"] + "）" if e["label"] else ""}：{e["source"]}'
+        # 0.27.0 上游影響只出 data-imp（class 由 JS applyImp／syncTrunks 依開關加上），既有的 class 字串不變
         out.append(f'<path class="edge e-{e["type"]} st-{e["style"]}{dec}{off}" data-idx="{i}" data-from="{_h(e["from"])}" '
-                   f'data-to="{_h(e["to"])}" data-type="{e["type"]}"' + (f' data-trunk="{_h(trunk)}"' if trunk else '') +
+                   f'data-to="{_h(e["to"])}" data-type="{e["type"]}"' + (f' data-imp="{imp_kind[i]}"' if i in imp_kind else '') +
+                   (f' data-trunk="{_h(trunk)}"' if trunk else '') +
                    f' d="{d}"><title>{_h(title)}</title></path>')
     out.append('</g><g id="graph-nodes">')
     for n in nodes:
@@ -7057,8 +7865,9 @@ def _svg_graph(graph: dict, notes: list[str] | None = None) -> str:
                    + (f'<text class="badge" x="{badge_x:g}" y="23" text-anchor="end">{_h(n["badge"])}</text>' if n['badge'] else '')
                    + (f'<text class="st unval" x="{unval_x:g}" y="23" text-anchor="end">未驗證</text>' if unval else '')
                    + f'<text class="st" x="{st_x}" y="23" text-anchor="end">{_h(state_zh)}</text>'
-                   f'<title>{_h(n["title"] or n["label"])}</title></g>')
-    out.append('</g><g id="drag-preview"></g></g></svg>')   # 拖曳時的即時接線預覽：Python 只出空骨架，JS 畫、不進 IR 與 SSOT
+                   + _impact_pill(imp_nodes.get(n['id']), w, by_id)
+                   + f'<title>{_h(n["title"] or n["label"])}</title></g>')
+    out.append('</g><g id="drag-preview"></g></g>' + _graph_colheads(nodes, width) + '</svg>')   # 拖曳時的即時接線預覽：Python 只出空骨架，JS 畫、不進 IR 與 SSOT
     return '\n'.join(out)
 
 
@@ -8247,6 +9056,7 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<label><input type="checkbox" id="toggle-old"> 顯示舊版計畫</label>',
         '<label><input type="checkbox" id="toggle-alledges"> 顯示全部邊</label>',
         '<label><input type="checkbox" id="toggle-dec"> 顯示決策</label>',
+        '<label><input type="checkbox" id="toggle-imp" checked> 標出受過期／受阻影響的下游</label>',
         '<label title="預設不勾：放開節點直接加進暫存（各 kind 的預設值、理由留給暫存面板整批填）；勾了回到放開先開表單（填理由、加入暫存或單獨送出）"><input type="checkbox" id="opt-form-on-drop"> 放開時先開表單</label>',
         '<button type="button" id="tour-start">導覽（P）</button><button type="button" id="tour-prev">← 上一章</button><button type="button" id="tour-next">下一章 →</button>',
         '<span class="hint">/ 搜尋 · 點節點看上下游（該節點全部邊都顯示）· 點徽章展開該問題的舊版 · Shift+點 找路徑 · P 導覽 · Esc 清除 · 滾輪縮放、拖曳平移</span>',
@@ -8273,11 +9083,14 @@ def _relations_tab(ir: dict, notes: list[str] | None = None) -> list[str]:
         '<span>宣告粒度（0.19.0）：有次要鍵的敏感性子分析底下一個次要結果節點（1 鍵直接顯示鍵名、多鍵「次要結果 n 鍵」；徽章「未登錄 a／未驗證 b」；沒宣告次要鍵的子分析不建），鍵全列在面板，整個節點可拖（裡面的鍵一起搬）；未宣告鍵仍逐鍵虛線</span>',
         '<span>report.md 節點（圖表欄最後一列）：圖表 → report＝嵌入報告（embedded_in，點選才顯）；role=main 且 report.md 沒引用的圖表徽章「報告未引用」</span>',
         '<span><span class="esw faint"></span>取代／引用／決策（點選或「顯示全部邊」才顯）</span>',
+        '<span><span class="esw" style="border-top-color:var(--expired);opacity:1"></span>／<span class="esw" style="border-top-color:var(--blocked);opacity:1"></span>上游影響：從過期／受阻節點沿規劃、產出、驗證、呈現等線往下游；被牽連的節點標「上游過期／上游受阻」（節點自己的 state 不變）</span>',
+        '<span>欄頭的橘色數字＝人工確認關卡（②計畫封存、④結果契合、⑥圖表驗收）</span>',
         '<span>可拖：問題拖到另一個帶或同帶另一個問題上；方法拖到問題上；敏感性子分析拖到別的方法上；結果可拖到別的方法或敏感性子分析（成為其主要／次要結果），或拖到 Main／Supplementary 帶再從下拉選落點（新增子分析、既有 R、別的 plan 的 outputs）；頂層主要結果拖到同 plan 的另一個頂層主要結果上＝掛到主結果下（成為支撐結果），支撐結果拖到所在帶的空白處＝拉回頂層、拖到別的結果上＝換主結果；active plan 拖到另一個問題的 active plan 上＝降為它的敏感性子分析（來源整份成為 R&lt;n+1&gt;、其結果變次要、來源問題無 active plan）；圖表拖到別的帶——放開後只送收件匣，或按「加入暫存」先留在本頁、連拖多次後一次預覽套用（虛線外框＝已暫存）</span>',
         '</div>',
         '<div id="graph-wrap">',
         _svg_graph(graph, notes),
         '</div>',
+        f'<p class="notice" id="impact-stat">上游影響：來源 {graph["impact"]["stats"]["seeds"]}、受影響節點 {graph["impact"]["stats"]["nodes"]}（其中 state 仍是完成 {graph["impact"]["stats"]["done_nodes"]}）、線 {graph["impact"]["stats"]["edges"]}</p>',
         f'<p class="notice">關聯圖：節點 {st["nodes"]}、邊 {st["edges"]}、問題間共用 {st["shared_pairs"]} 組、goals 指向不存在的結果鍵 {st["dangling_result_keys"]}、次要結果鍵 {st["secondary_result_keys"]}（聚合節點 {st.get("secondary_groups", 0)}）、未宣告 {st["undeclared_result_keys"]}、未驗證 {st["unvalidated_result_keys"]}、敏感性子分析 {st["sensitivity_items"]} 項、圖表 {st["by_type"].get("figure", 0)} 張（未審 {st["figures_unreviewed"]}；report.md 引用 {st.get("report_cited_figures", 0)}、主圖未引用 {st.get("report_uncited_main_figures", 0)}）；區帶 main {st["band_main_nodes"]} 節點、ext {st["band_ext_nodes"]} 節點、supp {st["band_supp_nodes"]} 節點、問題帶 {st.get("strips", 0)}、敏感性分析群 {st["sensitivity_groups"]} 組{"、支撐結果 " + str(st["supporting_result_keys"]) + " 鍵" if st.get("supporting_result_keys") else ""}；預設檢視線段交叉 {st["crossings"]}、穿過節點 {st["edge_node_overlaps"]}。欄序：主問題 → 問題（SQ／AQ）→ 方法（計畫版本；縮排＝敏感性子分析）→ 驗證 → 結果（主要逐鍵／有次要鍵的子分析一個次要結果節點／未宣告逐鍵）→ 圖表（最後一列 report.md）→ 決策；區帶由上而下 Main → Extended Data → Supplementary；舊版計畫預設收合。</p>',
         '<aside id="gdetail" hidden><button type="button" class="close" id="gdetail-close">關閉（Esc）</button><div id="gdetail-body"></div></aside>',
         '<div id="lightbox" hidden><img alt=""><div class="lb-cap"></div></div>',
@@ -8448,7 +9261,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{_h(p["title"])} 研究問題里程圖</title>',
-        f'<style>{CSS}{GRAPH_CSS}{LIT_CSS}{SUB_CSS}</style>',
+        f'<style>{CSS}{FLOW_CSS}{GRAPH_CSS}{LIT_CSS}{SUB_CSS}</style>',
         '</head>',
         '<body>',
         '<header>',
@@ -8470,6 +9283,9 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     lines += [
         '<label style="margin-left:auto"><input type="checkbox" id="toggle-annot"> 顯示決策註記</label>',
         '</div>',
+        '<div id="mview-tabs" role="tablist" aria-label="里程分頁的檢視"><button type="button" data-mview="flow" class="active">流程</button><button type="button" data-mview="table">表格</button></div>',
+        *_flow_view(ir),
+        '<div id="mview-table" hidden>',
         '<div class="legend">',
         '<span><span class="dot done"></span> 完成（實心）</span>',
         '<span><span class="dot expired"></span> 過期（半圓）</span>',
@@ -8482,6 +9298,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         _matrix(ir, 'project'),
         f'<h2>研究問題（每條 {len(SQ_STAGES)} 站）</h2>',
         _matrix(ir, 'sq'),
+        '</div>',
         '<aside id="detail" hidden><button type="button" class="close" id="detail-close">關閉（Esc）</button><div id="detail-body"></div></aside>',
         '</section>',
     ]
@@ -8617,6 +9434,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f'{HTML_REL} 已寫入: {html_path}')
     if not args.json:
         print(stats_line(ir))
+        fs, ims = ir['flow']['stats'], ir['graph']['impact']['stats']
+        print(f'流程檢視：節點 {fs["nodes"]}、線 {fs["edges"]}；順序異常 {fs["anomalies"]}、受阻／過期的上游線 {fs["upstream_edges"]}；'
+              f'版面交叉 {fs["crossings"]}、穿過節點 {fs["edge_node_overlaps"]}。關聯圖上游影響：來源 {ims["seeds"]}、受影響節點 {ims["nodes"]}'
+              f'（state 仍是完成 {ims["done_nodes"]}）、線 {ims["edges"]}。')
         print('結果: 完成')
     return 0
 
