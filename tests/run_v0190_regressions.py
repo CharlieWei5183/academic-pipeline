@@ -522,7 +522,7 @@ def test_headless(tmp: Path, multi_root: Path) -> bool:
         s2 = state()
         assert s2['n'] == '1' and s2['r2']['band'] == 'main' and s2['agg']['gone'] is True, s2
         # (4) 復原（清空）→ 聚合節點回來
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         s3 = state()
         assert s3['n'] == '0' and s3['agg']['gone'] is False and s3['r2'] is None, s3
@@ -544,7 +544,7 @@ def test_headless(tmp: Path, multi_root: Path) -> bool:
                                 "agg:window.__apNode('%s'),r1:window.__apNode('r:r1'),r9:window.__apNode('r:r9')})" % A1))
         assert st['n'] == '3' and [x['payload'] for x in st['staged']] == [{'key': k, 'to_plan': 'AQ1-v1', 'to_item': ''} for k in ('r1', 'r2', 'r9')], st['staged']
         assert st['toast'].startswith('已暫存 3 筆：') and st['agg']['gone'] is True and st['r1']['band'] == 'supp' and st['r9']['band'] == 'supp' and st['r1']['subtype'] == 'primary', st
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         assert ws.eval("document.getElementById('staged-count').textContent") == '0' and json.loads(ws.eval("JSON.stringify(window.__apNode('%s'))" % A1))['gone'] is False
     finally:

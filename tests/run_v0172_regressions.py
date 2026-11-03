@@ -196,7 +196,7 @@ def test_headless_positions(tmp: Path) -> bool:
         assert s4['n'] == '1' and s4['k1']['parent'] == 'r:k2' and s4['k2']['y'] == y1 and s4['k1']['y'] == y1 + ROW and s4['k1']['x'] == x1 + INDENT and s4['m1']['y'] == y1 + 5 * ROW, s4
         # (5) 清空 → 回原位
         T71._reload(ws)
-        ws.eval("document.getElementById('staged-clear').click();'ok'")
+        ws.eval("window.__oldPage=1;document.getElementById('staged-clear').click();'ok'")
         T71._wait_page(ws)
         s5 = state()
         assert s5['n'] == '0' and s5['ls'] is None and s5['k1']['y'] == y1 and s5['k2']['y'] == y1 + ROW and s5['k1']['x'] == x1 and s5['k2']['x'] == x1, s5
