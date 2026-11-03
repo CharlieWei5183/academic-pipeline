@@ -614,4 +614,32 @@ python3 tests/run_v0252_regressions.py
   之後才送出。以 spy 包住 handler 的 `_json`，逐次記錄送出當下鎖是否仍被持有，必須全為 False；另連跑五輪
   「409 → 立刻 dry-run」都必須 200。
 - 規格 2：repo 內每支 .py 以「SyntaxWarning 即錯誤」重新編譯一次（`render_progress.py` 內嵌 JS 的 `\d` 已改成 `\\d`）。
-- 規格 3：CHANGELOG 開頭是 `## 0.25.2`、`plugin.json` ≥ 0.25.2、本檔與 README 都登記本測試。
+- 規格 3：CHANGELOG 有 `## 0.25.2` 一節（0.26.0 起不再是第一節）、`plugin.json` ≥ 0.25.2、本檔與 README 都登記本測試。
+
+## run_v0260_regressions.py
+
+0.26.0 文獻分頁的搜尋、右側面板、依問題篩選、引用方向與延伸鏈：
+
+```bash
+python3 tests/run_v0260_regressions.py
+```
+
+fixture 是 `tests/mini-project` 的複本加一份固定的小引用圖（8 篇文獻、兩個問題）：A 引用 B、H，B 引用 C，C 引用 D；
+E、G 引用 A，F 引用 E；G 另引用 B（G 是 A 的下游、B 是 A 的上游，這條線不在 A 的引用鏈上）。
+
+- 規格 1（靜態）：工具列有搜尋框（combobox）、每個問題一個篩選鈕（數字＝`cited_for` 篇數）、「選取時延伸 1／2／3 層」與上游／
+  下游兩個開關，stage 內有右側面板；圖例有上游實線、下游虛線；JS 有 `ensureChain`／`edgeHop`／`window.lit3dChain`，
+  顏色讀 `--up`／`--down`；`sr[` 仍只出現四處。
+- 規格 2（引用鏈，需 headless Chrome）：`window.lit3dChain` 在 1／2／3 層的上下游層數與獨立的 Python BFS 相同；攔截 canvas 的
+  畫線呼叫，引用鏈上每條線的方向（實線＝上游、虛線＝下游）與層數（線寬）都和預期相同，G → B 不在鏈上；關掉下游後沒有
+  虛線；數字鍵 2 切到 2 層。
+- 規格 3（面板，需 headless Chrome）：每個點 `lit3dSelect` 後，面板的「對應問題／引用了／被引用於」（問題點「連到的文獻」）
+  與 `cited_for`／`cites` 逐點一致；tooltip 隱藏；`lit3dSelect` 不轉視角（選取前後 `lit3dProbe` 的投影座標不變）。
+- 規格 4（搜尋與篩選，需 headless Chrome）：多詞搜尋只列全部命中的文獻、命中處有 `<mark>`；Enter 選取後面板是那一篇；
+  關掉 SQ2 後計數為「顯示 n／8 篇」、勾「連同直接引用」再加一步 `cites`、「全部」恢復。
+- 規格 5（登記）：CHANGELOG 開頭是 `## 0.26.0`、`plugin.json` ≥ 0.26.0、本檔與 README 都登記本測試。
+
+找不到 headless Chrome 時，規格 2–4 各印一行略過，規格 1 與 5 照跑。同一版 `run_literature3d_regressions.py` 的 tooltip 測試
+改讀面板的書目區塊（`.lit3d-pn-info`），透明度錨點多一個篩選因子。
+同一版另修 `run_v0172`／`run_v0173`／`run_v0190`／`run_v0200` 的時序：按「清空暫存」（會 reload）之前先設 `window.__oldPage`，
+`_wait_page` 才會等到新頁面，不會在 reload 開始前就回報就緒。

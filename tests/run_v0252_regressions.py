@@ -8,7 +8,7 @@
 - 規格 2（無效跳脫字元）：`render_progress.py` 內嵌 JS 的 `\\d` 等寫在一般字串裡，Python 3.12 起每次載入都印
   SyntaxWarning，之後的版本會變成 SyntaxError。全部改成 `\\\\d`（字串值逐位元不變）；本測試把 repo 內每支 .py 以
   「警告即錯誤」重新編譯一次。
-- 規格 3（登記）：CHANGELOG 開頭是 `## 0.25.2`、`plugin.json` ≥ 0.25.2、tests/README.md 登記本檔。
+- 規格 3（登記）：CHANGELOG 有 `## 0.25.2` 一節（0.26.0 起不再是第一節）、`plugin.json` ≥ 0.25.2、tests/README.md 登記本檔。
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def test_no_syntax_warnings() -> None:
 
 def test_registration() -> None:
     cl = (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert cl.startswith(f"# CHANGELOG\n\n## {V}（"), cl[:60]
+    assert f"\n## {V}（" in cl, "CHANGELOG 缺 0.25.2 一節"   # 0.26.0 起不再是第一節
     ver = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     assert tuple(int(x) for x in ver.split(".")) >= (0, 25, 2), ver
     assert "run_v0252_regressions.py" in (PLUGIN / "tests/README.md").read_text(encoding="utf-8")

@@ -448,6 +448,8 @@ progress/logs/hook.log                        # hook 執行紀錄
 - 讀 `literature/citation-graph.json`：問題點、文獻點、文獻與問題之間的 `cited_for` 線，以及文獻之間的 `cites` 線。座標由產生資料的腳本算好，renderer 只讀不重算。
 - 文獻點的顏色與大小＝圈內被引數（被本圖其他文獻引用的次數，對數刻度）；資料有 `global_citations` 時 tooltip 另列全球被引數。
 - 自動慢轉，可拖曳旋轉、滾輪縮放。缺檔時顯示「尚無文獻引用資料」，其他分頁不受影響。
+- 搜尋（`/`）標題、作者、年份、DOI 或 id，選中後轉到正面；點一下釘選，右側面板列出對應問題、引用了、被引用於，點清單項目可跳過去。
+- 依問題篩選（只看 `cited_for` 某些問題的文獻）；選取時可延伸 1／2／3 層引用鏈，上游（引用了）實線、下游（被引用於）虛線，兩個方向分開走。
 
 #### 投稿檔案
 
@@ -581,6 +583,7 @@ python3 tests/run_v0231_regressions.py
 python3 tests/run_v0240_regressions.py
 python3 tests/run_v0250_regressions.py
 python3 tests/run_v0252_regressions.py
+python3 tests/run_v0260_regressions.py
 python3 tests/run_literature3d_regressions.py
 ```
 
