@@ -637,9 +637,37 @@ E、G 引用 A，F 引用 E；G 另引用 B（G 是 A 的下游、B 是 A 的上
   與 `cited_for`／`cites` 逐點一致；tooltip 隱藏；`lit3dSelect` 不轉視角（選取前後 `lit3dProbe` 的投影座標不變）。
 - 規格 4（搜尋與篩選，需 headless Chrome）：多詞搜尋只列全部命中的文獻、命中處有 `<mark>`；Enter 選取後面板是那一篇；
   關掉 SQ2 後計數為「顯示 n／8 篇」、勾「連同直接引用」再加一步 `cites`、「全部」恢復。
-- 規格 5（登記）：CHANGELOG 開頭是 `## 0.26.0`、`plugin.json` ≥ 0.26.0、本檔與 README 都登記本測試。
+- 規格 5（登記）：CHANGELOG 有 `## 0.26.0` 那一節（0.27.0 起不再是最上面一節）、`plugin.json` ≥ 0.26.0、本檔與 README 都登記本測試。
 
 找不到 headless Chrome 時，規格 2–4 各印一行略過，規格 1 與 5 照跑。同一版 `run_literature3d_regressions.py` 的 tooltip 測試
 改讀面板的書目區塊（`.lit3d-pn-info`），透明度錨點多一個篩選因子。
 同一版另修 `run_v0172`／`run_v0173`／`run_v0190`／`run_v0200` 的時序：按「清空暫存」（會 reload）之前先設 `window.__oldPage`，
 `_wait_page` 才會等到新頁面，不會在 reload 開始前就回報就緒。
+
+## run_v0270_regressions.py
+
+0.27.0 里程分頁「流程」檢視、關聯分頁的欄頭、上游影響與兩個分頁互跳：
+
+```bash
+python3 tests/run_v0270_regressions.py
+```
+
+fixture 是 `run_v0161_regressions.py` 的示範專案（SQ1、SQ2、AQ1、AQ2；AQ2 受阻、沒有 plan；專案層的方法路由、完整性檢查、
+資料稽核都還沒做，測試用的假資料刻意跳過這幾個關卡）；「驗證過期」版只把 `analysis/validation.yaml` 頂層 status 改成 expired。
+
+- 規格 1（IR flow）：列涵蓋每一站恰一次；泳道依序＝專案層、SQ1、SQ2、AQ1、AQ2、文獻；節點 17＋6×4；完整性檢查 → 各問題研究設計
+  是硬前置、研究設計 → 資料稽核是建議順序、各問題目標評估 → 整體評估是「每條都要」、證據綜整 → 整體評估是條件式、修訂 → 虛擬審稿
+  是迴圈；目前站＝專案層整體評估；順序異常的節點集合與測試裡獨立重算的結果相同（示範 6 個、驗證過期 9 個）；受阻／過期的上游線
+  1／4 條；交叉與線穿過節點都是 0，7 條合成泳道（五種 state 輪流）也是 0；IR-18 有牙（拿掉一站、線指到不存在的節點、缺 flow）。
+- 規格 2（IR graph.impact）：驗證過期版受影響的節點與測試裡的獨立 BFS 相同（k1、k2、r1、m1、a1、F_a、F_b，其中 state 仍是完成的 5 個），
+  來源只有過期與受阻的節點，邊的型別都在傳遞清單內，節點自己的 state 不變；示範版只有 AQ2 一個來源、沒有下游；`stats` 與
+  `graph.stats` 的鍵集合不變（舊測試逐鍵比對）；IR-19 有牙。
+- 規格 3（HTML 靜態）：里程分頁有「流程｜表格」、流程 SVG 每站一個節點、每條線一個群組、順序異常的節點數對得上；表格整段保留
+  且預設隱藏；script 仍是 5 個；標籤平衡；關聯圖欄頭七欄、②④⑥三個關卡；`data-imp` 邊數＝impact 邊數、「上游過期」標籤數＝
+  受影響節點數；既有的邊 class 字串不變（影響類別由 JS 依開關加上）。
+- 規格 4（互動，需 headless Chrome）：預設流程檢視；點 SQ1 正式分析開面板、有「流程檢視」段；「在關聯分頁看」→ `#relations`、
+  選 r:k1、其餘結果節點打亮；關聯面板「看 SQ1・正式分析」→ `#milestones`、面板開著、流程節點被選；上游影響開關加上／拿掉
+  邊與幹線的 class；捲動後欄頭的 transform 跟著 `scrollTop`；關掉「建議順序線」後虛線不顯示；切到表格寫進 localStorage。
+- 規格 5（登記）：CHANGELOG 開頭是 `## 0.27.0`、`plugin.json` ≥ 0.27.0、本檔與 README 都登記本測試。
+
+找不到 headless Chrome 時，規格 4 印一行略過，其餘照跑。同一版 `run_v0260_regressions.py` 的 CHANGELOG 斷言改成「0.26.0 那一節仍在」。

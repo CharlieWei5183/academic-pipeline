@@ -27,7 +27,7 @@ sys.path.insert(0, str(PLUGIN / "skills/status/scripts"))
 
 # 分頁 → (截圖範圍的 CSS selector, 最高高度 px)；只截內容區，不含頁首（頁首有本機絕對路徑）
 TABS = {
-    "milestones": ("#tab-milestones", 760),
+    "milestones": ("#tab-milestones", 1150),   # 0.27.0 流程檢視比表格高
     "relations": ("#graph-wrap svg", 0),           # 另外處理，見 shoot()
     "literature": ("#tab-literature .lit3d-wrap", 760),
     "submission": ("#tab-submission", 760),

@@ -17,7 +17,7 @@ gee → beta 不在 alpha 的引用鏈上（gee 是下游、beta 是上游；混
   `lit3dSelect` 不轉視角（選取當下與 1 秒後的投影座標相同）。
 - 規格 4（搜尋與篩選，需 headless Chrome）：多詞搜尋只列全部命中的、命中處有 `<mark>`、Enter 選中第一筆；關掉 SQ2 後
   「顯示 2／8 篇」、勾「連同直接引用」→「顯示 6／8 篇」、「全部」→「全部 8 篇」。
-- 規格 5（登記）：CHANGELOG 開頭是 `## 0.26.0`、`plugin.json` ≥ 0.26.0、tests/README.md 與 README 都登記本檔。
+- 規格 5（登記）：CHANGELOG 有 `## 0.26.0` 那一節、`plugin.json` ≥ 0.26.0、tests/README.md 與 README 都登記本檔。
 找不到 headless Chrome 時規格 2–4 各印一行略過。
 """
 from __future__ import annotations
@@ -342,7 +342,7 @@ def test_headless_search_filter(tmp: Path, page: Path) -> bool:
 
 def test_registration() -> None:
     cl = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert cl.startswith(f'# CHANGELOG\n\n## {V}（'), cl[:60]
+    assert f'\n## {V}（' in cl, cl[:60]   # 0.27.0 起不再是最上面一節，只要那一節仍在
     ver = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version']
     assert tuple(int(x) for x in ver.split('.')) >= (0, 26, 0), ver
     assert 'run_v0260_regressions.py' in (PLUGIN / 'tests/README.md').read_text(encoding='utf-8')
