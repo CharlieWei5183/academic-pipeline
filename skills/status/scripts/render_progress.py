@@ -3379,11 +3379,14 @@ def attach_previews(root: Path, out: dict, write_cache: bool = True) -> None:
     out['preview_stats'] = dict(pv.stats)
 
 
-def build_submission(root: Path, graph_nodes: list[dict], write_cache: bool = True, previews: bool = True) -> dict:
+def build_submission(root: Path, graph_nodes: list[dict], write_cache: bool = True, previews: bool = True,
+                     view_out: dict | None = None) -> dict:
     """投稿檔案分頁的資料（唯讀）：呼叫 derive()，歸帶沿用關聯圖已建好的節點，不重算也不重建 IR。
 
     模組載不進來、或 derive 出例外時回空狀態＋error：分頁照樣出現、只顯示錯誤訊息，不讓整頁渲染失敗。
     manifest／results.json 缺檔與 package.yaml 不存在都不是錯誤，是空狀態（derive 自己會記 warning）。
+    `view_out` 給了就把這一趟 derive() 的原始 view 放進 `view_out['view']`，讓專案地圖分頁沿用同一份，
+    不再自己呼叫 derive()（不帶 key_bands 的 derive() 會回頭建 IR，在 build_ir 裡面呼叫會無限遞迴）。
     """
     scripts_dir = Path(__file__).resolve().parents[2] / 'submission-prep' / 'scripts'
     try:
@@ -3393,6 +3396,8 @@ def build_submission(root: Path, graph_nodes: list[dict], write_cache: bool = Tr
         view = SP.derive(root, key_bands=SP.bands_from_ir_nodes(graph_nodes))
     except Exception as exc:
         return _sub_empty(f'投稿清單衍生規則無法執行（{_one_line(exc)}）')
+    if view_out is not None:
+        view_out['view'] = view
     try:
         out = {
             'source': SUB_MODULE,
@@ -4110,9 +4115,13 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         src.warnings.append(f'流程檢視版面：交叉 {flow["stats"]["crossings"]}、線穿過節點 {flow["stats"]["edge_node_overlaps"]}（預期都是 0）')
     inbox = build_inbox(src, graph)
     literature = build_literature(src, literature_path)
-    submission = build_submission(root, graph['nodes'], write_cache, previews)
+    sub_view: dict = {}
+    submission = build_submission(root, graph['nodes'], write_cache, previews, view_out=sub_view)
     if submission['error']:
         src.warnings.append(f'{submission["source"]}：{submission["error"]}；投稿檔案分頁會顯示錯誤訊息、其他分頁不受影響')
+    project_map = build_project_map(root, src, sub_view.get('view'))
+    if project_map['error']:
+        src.warnings.append(f'專案地圖：{project_map["error"]}；專案地圖分頁只顯示錯誤訊息、其他分頁不受影響')
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': generated_at,
@@ -4127,7 +4136,95 @@ def build_ir(root: Path, src: Sources, generated_at: str, embed_figures: bool = 
         'inbox': inbox,
         'literature': literature,
         'submission': submission,
+        'project_map': project_map,
     }
+
+
+# ---------- 專案地圖分頁（第五個分頁） ----------
+
+def build_project_map(root: Path, src: Sources, view: dict | None) -> dict:
+    """專案地圖分頁的資料（唯讀）：呼叫 project_map.build_map()，衍生規則只在那支腳本裡，renderer 不重寫一套。
+
+    傳入同一個 Sources（讀檔快取、問題 id 別名、WARNING 共用）與投稿檔案分頁那一趟 derive() 的 view
+    （同一份檔案衍生結果，不重算）。view 是 None＝投稿清單衍生失敗：分析 run 的檔案沒有可靠來源，
+    地圖不畫，分頁只顯示原因（不在這裡另外呼叫 derive()，那會回頭建 IR 而遞迴）。
+    模組載不進來、或建圖出例外時同樣回 present False＋error：分頁照樣出現、只顯示錯誤訊息，不讓整頁渲染失敗。"""
+    if view is None:
+        return {'present': False, 'error': '投稿清單衍生失敗，分析 run 的檔案無從列出（見投稿檔案分頁的錯誤訊息）',
+                'map': None, 'stats': {}}
+    try:
+        import project_map as PM
+        mp = PM.build_map(root, src=src, view=view)
+    except Exception as exc:  # noqa: BLE001 — 分頁層級的錯誤隔離
+        return {'present': False, 'error': _one_line(exc), 'map': None, 'stats': {}}
+    stats = {'questions': len(mp['questions']),
+             'plans': sum(len(q['plans']) for q in mp['questions']),
+             'runs': sum(len(p['runs']) for q in mp['questions'] for p in q['plans']),
+             'drafts': len(mp['drafts']),
+             'issues': sum(len(d['issues']) for d in mp['drafts'])}
+    return {'present': bool(mp['questions'] or mp['drafts']), 'error': '', 'map': mp, 'stats': stats}
+
+
+PM_MARK_KINDS = ('results', 'table', 'claims')
+
+
+def _validate_project_map(pm) -> list[str]:
+    """IR-20：專案地圖。只驗形狀與內部一致，內容的正確性由 project_map 自己的回歸測試負責。"""
+    if pm is None:
+        return []
+    if not isinstance(pm, dict) or not isinstance(pm.get('present'), bool) or not isinstance(pm.get('error'), str):
+        return ['IR-20 project_map']
+    mp = pm.get('map')
+    if mp is None:
+        return [] if pm['error'] else ['IR-20 project_map.map']
+    errs: list[str] = []
+    if not isinstance(mp, dict) or not isinstance(mp.get('questions'), list) or not isinstance(mp.get('drafts'), list):
+        return ['IR-20 project_map.map 形狀']
+    for d in mp['drafts']:
+        if not isinstance(d, dict) or not isinstance(d.get('marks'), list):
+            errs.append('IR-20 project_map.drafts')
+            continue
+        if any(m.get('kind') not in PM_MARK_KINDS for m in d['marks']):
+            errs.append(f'IR-20 project_map.drafts[{d.get("file")}] 標記種類')
+        if d.get('issues') and not d.get('latest'):
+            errs.append(f'IR-20 project_map.drafts[{d.get("file")}] 只有最新版能列問題')
+    st = pm.get('stats') or {}
+    if st.get('questions') != len(mp['questions']) or st.get('drafts') != len(mp['drafts']) \
+            or st.get('issues') != sum(len(d.get('issues') or []) for d in mp['drafts']):
+        errs.append('IR-20 project_map.stats')
+    return errs
+
+
+def _map_rel_of(ir: dict) -> dict[str, str]:
+    """專案地圖結果列的跳轉目標：「r:鍵」／「p:計畫」→ 關聯圖裡實際承載它的節點 id。
+    主要結果是 r:<鍵> 自己；次要鍵（只在 robustness expected_keys）在 r:<plan>#R<k>#secondary 聚合節點的 meta.keys 裡。"""
+    out: dict[str, str] = {}
+    for n in (ir.get('graph') or {}).get('nodes') or []:
+        nid = n.get('id') or ''
+        if n.get('type') == 'result' and n.get('subtype') == 'secondary_group':
+            for k in _list(_dict(n.get('meta')).get('keys')):
+                if isinstance(k, dict) and k.get('key'):
+                    out.setdefault(f'r:{k["key"]}', nid)
+        elif nid.startswith(('r:', 'p:')):
+            out[nid] = nid
+    return out
+
+
+def _map_tab(ir: dict) -> list[str]:
+    pm = ir.get('project_map') or {}
+    try:
+        import project_map as PM
+    except Exception as exc:  # noqa: BLE001
+        return ['<section id="tab-map" hidden>', f'<p class="pm-empty">專案地圖模組載不進來：{_h(_one_line(exc))}</p>', '</section>']
+    return PM.render_tab(pm.get('map'), pm.get('error') or '', _map_rel_of(ir))
+
+
+def _map_assets() -> tuple[str, str]:
+    try:
+        import project_map as PM
+        return PM.PM_VARS_TAB + PM.PM_CORE_CSS, PM.PM_JS
+    except Exception:  # noqa: BLE001
+        return '', ''
 
 
 def validate_ir(ir) -> list[str]:
@@ -4239,6 +4336,7 @@ def validate_ir(ir) -> list[str]:
             errors.append('IR-15 stats.inbox_pending')
     errors.extend(_validate_literature(ir.get('literature')))
     errors.extend(_validate_submission(ir.get('submission')))
+    errors.extend(_validate_project_map(ir.get('project_map')))
     return errors
 
 
@@ -5004,7 +5102,7 @@ GRAPH_JS = """
     if((p.exclude_entry||[]).length)return ['exclude-entry',String(p.exclude_entry[0])];
     if((p.restore||[]).length)return ['restore',String(p.restore[0])];return ['',''];}
   // ---- 分頁 ----
-  var tabs={};['milestones','relations','literature','submission'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
+  var tabs={};['milestones','relations','literature','submission','map'].forEach(function(k){var el=document.getElementById('tab-'+k);if(el)tabs[k]=el;});
   var cur='milestones';
   function showTab(name,writeHash){
     if(!tabs[name])name='milestones';var changed=cur!==name;cur=name;
@@ -9249,6 +9347,7 @@ def ir_for_json(ir: dict) -> dict:
 
 
 def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
+    map_css, map_js = _map_assets()
     p = ir['project']
     st = ir['stats']
     by = st['by_state']
@@ -9261,7 +9360,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{_h(p["title"])} 研究問題里程圖</title>',
-        f'<style>{CSS}{FLOW_CSS}{GRAPH_CSS}{LIT_CSS}{SUB_CSS}</style>',
+        f'<style>{CSS}{FLOW_CSS}{GRAPH_CSS}{LIT_CSS}{SUB_CSS}{map_css}</style>',
         '</head>',
         '<body>',
         '<header>',
@@ -9273,7 +9372,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         f'<p class="notice">本檔由 {SCRIPT_REL} 自動產生，請勿手動編輯；要改內容請改對應的 SSOT 檔再重跑。</p>',
         '</header>',
         *_inbox_block(ir),
-        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button><button type="button" data-tab="literature">文獻</button><button type="button" data-tab="submission">投稿檔案</button></nav>',
+        '<nav class="tabs"><button type="button" data-tab="milestones" class="active">里程</button><button type="button" data-tab="relations">關聯</button><button type="button" data-tab="literature">文獻</button><button type="button" data-tab="submission">投稿檔案</button><button type="button" data-tab="map">專案地圖</button></nav>',
         '<section id="tab-milestones">',
         '<div class="controls">',
         '<span>顯示 state：</span>',
@@ -9305,6 +9404,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
     lines += _relations_tab(ir, notes)
     lines += _literature_tab(ir)
     lines += _submission_tab(ir, notes)
+    lines += _map_tab(ir)
     gs = ir['graph']['stats']
     lines += [
         '<footer>',
@@ -9324,7 +9424,7 @@ def render_html(ir: dict, root: Path, notes: list[str] | None = None) -> str:
         f'<script>{JS}</script>',
         f'<script>{GRAPH_JS}</script>',
         f'<script>{LIT_JS}</script>',
-        f'<script>{SUB_JS}</script>',
+        f'<script>{SUB_JS}{map_js}</script>',
         '</body>',
         '</html>',
     ]

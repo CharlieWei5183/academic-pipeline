@@ -18,7 +18,7 @@ clean rerun（waived）與圖表設計完成，方法路由、完整性檢查、
 - 規格 4（互動，需 headless Chrome）：預設是流程檢視；點 SQ1 正式分析開面板、有「流程檢視」段與「直接硬前置」；按「在關聯
   分頁看」→ #relations、選 r:k1、其餘結果節點打亮；按關聯面板的「看 SQ1・正式分析」→ #milestones、面板開著、流程節點被選；
   上游影響開關會加上與拿掉邊與幹線的 class；捲動後欄頭跟著固定在上方；關掉「建議順序線」後虛線消失；切到表格會記住。
-- 規格 5（登記）：CHANGELOG 開頭是 `## 0.27.0`、`plugin.json` ≥ 0.27.0、tests/README.md 與 README 都登記本檔。
+- 規格 5（登記）：CHANGELOG 有 `## 0.27.0` 那一節（0.28.0 起不再是最上面一節）、`plugin.json` ≥ 0.27.0、tests/README.md 與 README 都登記本檔。
 找不到 headless Chrome 時規格 4 印一行略過。
 """
 from __future__ import annotations
@@ -330,7 +330,7 @@ def test_headless(tmp: Path, page: Path) -> bool:
 
 def test_registration() -> None:
     cl = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert cl.startswith(f'# CHANGELOG\n\n## {V}（'), cl[:60]
+    assert f'\n## {V}（' in cl, cl[:60]   # 0.28.0 起不再是最上面一節，只要那一節仍在
     ver = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version']
     assert tuple(int(x) for x in ver.split('.')) >= (0, 27, 0), ver
     assert 'run_v0270_regressions.py' in (PLUGIN / 'tests/README.md').read_text(encoding='utf-8')

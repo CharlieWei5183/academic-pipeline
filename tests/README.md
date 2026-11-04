@@ -668,6 +668,38 @@ fixture 是 `run_v0161_regressions.py` 的示範專案（SQ1、SQ2、AQ1、AQ2�
 - 規格 4（互動，需 headless Chrome）：預設流程檢視；點 SQ1 正式分析開面板、有「流程檢視」段；「在關聯分頁看」→ `#relations`、
   選 r:k1、其餘結果節點打亮；關聯面板「看 SQ1・正式分析」→ `#milestones`、面板開著、流程節點被選；上游影響開關加上／拿掉
   邊與幹線的 class；捲動後欄頭的 transform 跟著 `scrollTop`；關掉「建議順序線」後虛線不顯示；切到表格寫進 localStorage。
-- 規格 5（登記）：CHANGELOG 開頭是 `## 0.27.0`、`plugin.json` ≥ 0.27.0、本檔與 README 都登記本測試。
+- 規格 5（登記）：CHANGELOG 有 `## 0.27.0` 那一節（0.28.0 起不再是最上面一節）、`plugin.json` ≥ 0.27.0、本檔與 README 都登記本測試。
 
 找不到 headless Chrome 時，規格 4 印一行略過，其餘照跑。同一版 `run_v0260_regressions.py` 的 CHANGELOG 斷言改成「0.26.0 那一節仍在」。
+
+## run_v0280_regressions.py
+
+0.28.0 進度頁面第五個分頁「專案地圖」（`skills/status/scripts/project_map.py`）：
+
+```bash
+python3 tests/run_v0280_regressions.py
+```
+
+fixture 在測試內動態建（虛構的材料測試題材）：三個問題 SQ1／SQ2／AQ1；SQ1-v1（RUN_0903_welch，結果全是 historical）已被
+SQ1-v2（RUN_1002_mixed，另有 robustness R1 的次要鍵 group_diff_nobatch3）取代；SQ2-v1（RUN_1005_rate）、AQ1-v1（RUN_1008_dic）；
+四張圖表、三條主張；中文稿 v1／v2／v3、英文稿 v1。中文稿 v3 故意埋四個問題：§3.1 第 8 行 group_diff 寫 0.46（現行 0.448）、§3.2
+第 19 行 rate_ci 鍵不存在、§4 第 27 行引用 historical 的 ttest_ab_p、C2 沒被引用；中文稿 v1 也引用 ttest_ab_p，但舊版不列問題。
+兩個 run 各有一支同名的 `helpers.R`。
+
+- 規格 1（地圖內容）：問題與計畫的順序與取代、每個 run 的腳本與輸入（現行 run 走 `derive()` 的 view、歷史 run 走 `scripts/`＋hash 表）、
+  圖表與主張歸屬、草稿增減、最新版四個問題的節次與行號、英文稿 v1 的標記與中文稿 v2 相同；影響範圍（唯一檔名、同名檔列候選、
+  完整路徑、作圖腳本、結果鍵、run、計畫、主張、找不到）與手算的答案相同。
+- 規格 2（renderer 整合）：一次 `build_ir` 只呼叫 `derive()` 一次且 `build_ir` 不重入；IR 只多 `project_map`，其餘各鍵與把地圖換成
+  空殼時逐鍵相同；stats；IR-20 有牙（舊版列問題、標記種類、stats、present 型別），沒有這個鍵的舊 IR 仍通過；建圖出例外時分頁
+  只顯示原因、WARNING 一行、投稿分頁不變；沒有 view 時不自己呼叫 `derive()`。
+- 規格 3（HTML 靜態）：分頁列五鈕、`tab-map` 預設隱藏、script 5 個、無外連；需要處理 3 條可點＋1 條純文字；配色只借頁面變數；
+  每個 `data-jr` 都是關聯圖的節點（次要鍵跳到 `r:SQ1-v2#R1#secondary`）、`data-js` 與投稿分頁的 `data-scard` 一一對應、歷史 run
+  不能跳；地圖不用 `class="edge"`、關聯圖的 `path.edge` 數仍＝IR 邊數、`PM_CORE_CSS` 每條規則以 `.pm-root` 開頭。
+- 規格 4（互動，需 headless Chrome）：`#map` 開到地圖分頁；清單選 `data/raw_A.csv` → 打亮的結果列＝影響範圍的 7 個結果鍵、說明文字、
+  兩個 run 框的同名檔都標出、Esc 清掉；點檔名固定、「清除」解除；滑過打亮、離開清掉；需要處理第一條 → 格子閃；group_diff 列 →
+  關聯分頁選中 `r:group_diff`；RUN_1005_rate 框 → 投稿分頁、那張分析卡 `pm-flash`；整段沒有 JS 例外。
+- 規格 5（命令列）：文字樹、`--question`、`--no-files`、`--json`、`--affected`（找到 0、找不到 1、同名檔 1）、根目錄不存在 2；
+  `--html` 與 `--graphify` 已移除；跑完專案目錄每個檔的大小與 mtime 都不變。
+- 規格 6（登記）：CHANGELOG 有 `## 0.28.0`、`plugin.json` ≥ 0.28.0、本檔與 README 都登記本測試、status SKILL.md 有「專案地圖」與 `project_map.py`。
+
+找不到 headless Chrome 時規格 4 印一行略過，其餘照跑。同一版 `run_v0270_regressions.py` 的 CHANGELOG 斷言改成「0.27.0 那一節仍在」，`run_v0230_regressions.py` 的分頁清單錨點改成前綴比對（`['milestones','relations','literature','submission',`，後面多了 `'map'`）。

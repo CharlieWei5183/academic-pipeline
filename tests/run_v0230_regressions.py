@@ -697,6 +697,14 @@ def test_existing(tmp: Path) -> None:
     print('  規格 9 既有回歸 ok')
 
 
+def _sub_end(html: str, i: int) -> int:
+    """投稿分頁在 html[i:] 的結尾：下一個分頁 section 或下一個 <script>（IR JSON），取先到的。
+    0.27.0 以前投稿分頁是最後一個分頁、後面直接接 script；0.28.0 起後面還有專案地圖分頁。"""
+    k = html.index('<script', i)
+    j = html.find('<section id="tab-', i + 1)
+    return min(j, k) if j != -1 else k
+
+
 def test_tab(tmp: Path) -> None:
     root = variant(tmp, 'tab', extra=True)
     pkg = root / 'submission/package.yaml'
@@ -843,7 +851,7 @@ def test_tab(tmp: Path) -> None:
 
     html = rp.render_html(ir, root, [])
     i = html.index('<section id="tab-submission"')
-    sec = html[i:html.index('<script', i)]      # 下一個 <script> 就是 IR JSON，投稿分頁到那裡為止
+    sec = html[i:_sub_end(html, i)]      # 到下一個分頁（0.28.0 起是專案地圖）或 IR JSON 的 <script> 為止
     assert 'data-cols=' not in html, '欄寬不再依內容變，data-cols 這個開關要拿掉'
     assert '.sub-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))' in html, \
         '五欄一律等寬，跨卡的欄線才對得齊'
@@ -854,7 +862,7 @@ def test_tab(tmp: Path) -> None:
     assert '.sub-band-head{' in html and 'font-size:1.4rem' in html, '段落標題要放大'
     assert '.sub-card-head .sub-id{font-size:1.15rem' in html, '分析卡標題要放大'
     for anchor in ('data-tab="submission"', '>投稿檔案<',
-                   "['milestones','relations','literature','submission']"):
+                   "['milestones','relations','literature','submission',"):   # 0.28.0 起後面還有 map 分頁
         assert anchor in html, anchor
     for anchor in ('id="tab-submission"', 'id="sub-list"',
                    'data-scard="RUN_A"', 'data-snode="ef:G_main"', 'data-snode="er:cur_a"',
@@ -1524,7 +1532,7 @@ def test_preview(tmp: Path) -> None:
         assert all(f['preview']['data_uri'] for f in (figs['P_raster'],)), 'ir_for_json 不得改到原 IR'
         html = rp.render_html(ir, root, [])
         i = html.index('<section id="tab-submission"')
-        sec = html[i:html.index('<script', i)]
+        sec = html[i:_sub_end(html, i)]
         assert sec.count('<div class="sub-thumb') >= 5 and 'class="sub-thumb is-table"' in sec
         assert '無預覽' in sec and 'loading="lazy"' in sec
         assert '<div id="sub-lightbox" hidden>' in html and "lbOpen(img.getAttribute('src')" in html
@@ -1609,7 +1617,7 @@ def test_dep_and_missing(tmp: Path) -> None:
     # (e) 缺檔清單：檔名＋所屬分析，相對路徑只進 tooltip
     html = rp.render_html(ir, root, [])
     i = html.index('<section id="tab-submission"')
-    sec = html[i:html.index('<script', i)]
+    sec = html[i:_sub_end(html, i)]
     lis = re.findall(r'<li title="([^"]*)"><span class="goto" data-sgoto="f:[^"]*">'
                      r'<code>([^<]*)</code></span>(?:<span class="mw">（([^）]*)）</span>)?</li>', sec)
     assert lis, sec[sec.index('sub-missing'):][:400]

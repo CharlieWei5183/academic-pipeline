@@ -5,6 +5,8 @@
 
 需要 PyYAML 與 Playwright（Chromium）。示範專案沿用 tests/run_v0161_regressions.py 的 fixture
 （兩個主問題、附錄問題、版本化 plan、敏感性子分析、驗證、圖表與決策），再補一份示範文獻引用圖；
+「專案地圖」分頁另用 tests/run_v0280_regressions.py 的 fixture（有 run 的腳本與輸入、已取代的計畫、
+中文稿三版與英文稿一版，最新版埋了四個要處理的問題），因為上面那份沒有 run 也沒有草稿。
 所有內容都是測試用假資料。輸出 docs/figures/progress-<分頁>.png。
 """
 from __future__ import annotations
@@ -31,6 +33,7 @@ TABS = {
     "relations": ("#graph-wrap svg", 0),           # 另外處理，見 shoot()
     "literature": ("#tab-literature .lit3d-wrap", 760),
     "submission": ("#tab-submission", 760),
+    "map": ("#tab-map", 1150),                      # 0.28.0；另用 v0280 的 fixture，見 shoot_map()
 }
 
 
@@ -101,7 +104,7 @@ def shoot(html: Path, width: int = 1280) -> None:
         page.goto(html.as_uri())
         page.wait_for_timeout(800)
         for key, (selector, max_h) in TABS.items():
-            if key == "relations":
+            if key in ("relations", "map"):
                 continue
             page.click(f"[data-tab=\"{key}\"]")
             page.wait_for_timeout(2500 if key == "literature" else 600)
@@ -122,6 +125,32 @@ def shoot(html: Path, width: int = 1280) -> None:
         browser.close()
 
 
+def build_map_demo(parent: Path) -> Path:
+    import run_v0280_regressions as T8
+
+    root = T8.fixture(parent)
+    subprocess.run([sys.executable, str(PLUGIN / "skills/status/scripts/render_progress.py"), str(root)],
+                   check=True, capture_output=True, text=True)
+    return root / "progress/PROGRESS.html"
+
+
+def shoot_map(html: Path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    selector, max_h = TABS["map"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        # 地圖右半是每版草稿一欄，四版草稿約 1450 px 寬；視窗開到放得下，不出水平捲軸
+        page = browser.new_page(viewport={"width": 1500, "height": 900}, device_scale_factor=2, color_scheme="light")
+        page.goto(html.as_uri() + "#map")
+        page.wait_for_timeout(800)
+        box = page.locator(selector).first.bounding_box()
+        clip = {"x": box["x"], "y": box["y"], "width": box["width"], "height": min(box["height"], max_h)}
+        page.screenshot(path=str(OUT / "progress-map.png"), clip=clip, full_page=True)
+        print("wrote docs/figures/progress-map.png")
+        browser.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--keep", type=Path, help="把示範專案留在這個資料夾（預設用暫存資料夾、跑完刪除）")
@@ -132,6 +161,7 @@ def main() -> int:
             shutil.rmtree(root)
         build(root)
         shoot(root / "progress/PROGRESS.html")
+        shoot_map(build_map_demo(root.parent / "map-demo"))
     return 0
 
 

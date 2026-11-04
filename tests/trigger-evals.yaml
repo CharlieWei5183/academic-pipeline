@@ -51,6 +51,10 @@ cases:
   expect: status
 - utterance: 幫我從數據一路做到投稿
   expect: status
+- utterance: 哪個問題連到哪些分析檔案、又被第幾版草稿引用？
+  expect: status
+- utterance: 我改了 raw_A.csv，哪些結果和草稿段落要重看？
+  expect: status
 - utterance: 幫我訂週五的會議室
   expect: none
 - utterance: 翻譯這封 email
