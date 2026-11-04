@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## 0.28.0（2026-11-04）
+
+進度頁面加第五個分頁「專案地圖」：問題 → 計畫版本 → 分析 run（腳本與輸入）→ 結果鍵與主張 → 圖表 → 各版草稿在哪一節引用。
+資料與畫法在新檔 `skills/status/scripts/project_map.py`，renderer 只呼叫它。IR 多 `project_map` 一個鍵（驗證規則 IR-20）；
+其餘 IR 鍵、`stats`、原本四個分頁的 HTML 都與 0.27.0 逐位元組相同；不新讀任何 SSOT、不寫任何檔。
+
+1. **地圖內容**：每條連結都直接取自 SSOT 的欄位或草稿標記（goals、index 與 plan 檔的版本與取代、results.json 的
+   `plan_id`／`run_id`／`status`、manifest 的 `results_keys`、claims.yaml 的 `sq` 與證據、草稿的 `<!-- results.鍵 -->`、
+   `<!-- table:鍵 -->`、`<!-- claims.C# -->`），不推論。run 的腳本與輸入沿用投稿檔案分頁同一趟 `derive()` 的 view；
+   不在投稿清單的歷史 run 列 `scripts/` 全部檔案、輸入沿用 `derive()` 的 hash 表解析。
+2. **版面**：左半是樹（已取代的計畫與歷史 run 用虛線），右半每版草稿一欄，格子是引用所在的節次，欄頭標跟上一版比的增減。
+   座標在 Python 算。
+3. **最新版需要處理**：每種語言只有最新版列問題——標記的數字與現行結果不符（沿用 `check_numbers.py` 的 lookup 與顯示精度）、
+   鍵不存在、引用 historical 或 not-permitted 的結果、整表標記指到非表格鍵、主張不存在、claims.yaml 有但這一版沒引用的主張。
+   點一條捲到那一格。完整的數字溯源仍是 check-consistency 的事。
+4. **影響範圍**：選一個檔（或點 run 框裡的檔名）打亮用到它的 run、結果鍵、圖表、主張與各版草稿的格子，並列出摘要；
+   命令列 `project_map.py <root> --affected X` 印同一份摘要（X 可以是檔案、結果鍵、run、計畫或主張；同名檔要給完整路徑）。
+5. **跳轉**：點結果列到關聯分頁的對應節點（次要鍵跳到承載它的 `r:<plan>#R<k>#secondary` 聚合節點，對應由 renderer 從
+   自己的 IR 算好傳入），點現行 run 的框到投稿檔案分頁的那張分析卡。
+6. **隔離**：配色全部借頁面變數（深色模式跟著頁面走），CSS 規則一律以 `.pm-root` 開頭，class 不跟其他分頁撞名；JS 併進
+   投稿檔案的 `<script>`，頁面仍是 5 個 script、不含任何外連。建圖出例外或投稿清單衍生失敗時分頁只顯示原因、印一行 WARNING。
+7. **命令列**：`project_map.py <root>` 印樹狀文字（`--question`、`--no-files`），`--json` 印整份地圖。先建一次 IR 再取
+   `project_map`，與分頁是同一份。開發中試過的獨立 HTML（`--html`）與 Graphify 匯出（`--graphify`）都沒有留下：前者由分頁
+   取代；後者匯出的圖 Graphify 讀得進來，但 `graphify query` 是詞面比對加兩層 BFS，對這張宣告來的圖沒有比 `--affected`
+   多的資訊，視覺化也是分頁比較好用。
+8. **開發中抓到、已修的三個問題**（都有回歸測試）：地圖自己呼叫不帶 `key_bands` 的 `derive()` 會回頭建 IR，在 `build_ir`
+   裡無限遞迴（RecursionError 被分頁的錯誤隔離接住，所以頁面看起來正常）——改為沿用投稿分頁的 view；
+   SVG 的 `xmlns` 讓頁面含 `http://`；線的 class 用了 `edge`，關聯圖的 JS 會收全頁的 `path.edge`、CSS 也會替它加箭頭——改名 `pm-edge`。
+9. **測試**：新增 `tests/run_v0280_regressions.py`（fixture 在測試內動態建：三個問題、一版已取代的計畫、四個 run、中文稿三版
+   與英文稿一版，最新版埋四個問題）——地圖內容與影響範圍對手算答案；`build_ir` 只呼叫 `derive()` 一次且不重入；IR 只多
+   `project_map`、其餘鍵逐鍵不變；IR-20 有牙；錯誤隔離；HTML 靜態結構與跳轉目標都對得到；headless Chrome 走過影響範圍、
+   滑過打亮、需要處理、兩個方向的跳轉；命令列的 exit code 與「不寫任何檔」。`docs/figures/build_progress_demo.py` 多截
+   `progress-map.png`（用 v0280 的 fixture），README 的進度頁面一節多「專案地圖」。`tests/trigger-evals.yaml` 加兩句 status。`run_v0270_regressions.py` 的 CHANGELOG 斷言改成「0.27.0 那一節仍在」，`run_v0230_regressions.py` 的分頁清單錨點改成前綴比對。
+
 ## 0.27.0（2026-11-03）
 
 進度頁面：里程分頁加「流程」檢視，關聯分頁加欄頭、上游影響與兩個分頁互跳。畫法借 archify 的 workflow 圖（泳道、階段帶、

@@ -424,7 +424,7 @@ progress/logs/hook.log                        # hook 執行紀錄
 
 ### 進度頁面
 
-`progress/PROGRESS.html` 有四個分頁。下面的截圖用測試用的示範專案產生（[`docs/figures/build_progress_demo.py`](docs/figures/build_progress_demo.py)），點圖可看原尺寸；完整規格見 [`skills/status/SKILL.md`](skills/status/SKILL.md)。
+`progress/PROGRESS.html` 有五個分頁。下面的截圖用測試用的示範專案產生（[`docs/figures/build_progress_demo.py`](docs/figures/build_progress_demo.py)），點圖可看原尺寸；完整規格見 [`skills/status/SKILL.md`](skills/status/SKILL.md)。
 
 #### 里程
 
@@ -466,6 +466,16 @@ progress/logs/hook.log                        # hook 執行紀錄
 - 從有 role 的圖表與現行結果鍵往回追，列出投稿要上傳的全部檔案。一張卡＝一個分析（run），卡內五欄：輸入資料｜分析腳本｜輸出結果｜作圖／表腳本｜圖／表。
 - 每個檔整頁只出現一次；多個分析共用的檔列在頁首的共用檔案區。
 - 按「打包」代跑 `build_submission_package.py`，輸出到 `submission/package_<日期>/`，附逐檔 sha256 的 `MANIFEST.tsv`；有缺檔一律拒絕打包。逐項增刪代跑 `package_edit.py`，差量記在 `submission/package.yaml`。
+
+#### 專案地圖
+
+<img alt="專案地圖分頁：左邊是問題、計畫版本、分析 run 與結果鍵的樹，右邊每版草稿一欄，格子是引用所在的節次，最新版有問題的格子標橘色" src="docs/figures/progress-map.png" width="100%">
+
+- 左半是樹：問題 → 計畫版本（已取代的虛線）→ 分析 run（框內列腳本與輸入）→ 結果鍵與主張 → 圖表。右半每版草稿一欄，格子是那一列在那一版的引用節次，欄頭寫跟上一版比增減了幾個引用。
+- 上方「最新版需要處理」列出每種語言最新版的問題：標記的數字與現行結果不符、引用不存在的鍵、引用已取代計畫的結果、主張沒被引用；點一條捲到那一格。數字比對沿用 `check_numbers.py` 的規則，只看有標記的數字，完整查核仍是 check-consistency。
+- 影響範圍：從清單選一個檔，或點 run 框裡的檔名，會亮出用到它的 run、結果鍵、圖表、主張與各版草稿的段落，並列出文字摘要；Esc 或「清除」取消。
+- 點結果列跳到關聯分頁的對應節點，點現行 run 的框跳到投稿檔案分頁的那張分析卡。
+- 全部由 [`project_map.py`](skills/status/scripts/project_map.py) 從 SSOT 與草稿標記算出，不推論；run 的檔案沿用投稿檔案分頁同一趟 `derive()`。同一份地圖在命令列印成文字：`python3 skills/status/scripts/project_map.py <root>`，`--affected <檔名、結果鍵、run、計畫或主張>` 印影響範圍。
 
 ### 自動重算（hook）
 
@@ -593,6 +603,7 @@ python3 tests/run_v0250_regressions.py
 python3 tests/run_v0252_regressions.py
 python3 tests/run_v0260_regressions.py
 python3 tests/run_v0270_regressions.py
+python3 tests/run_v0280_regressions.py
 python3 tests/run_literature3d_regressions.py
 ```
 
