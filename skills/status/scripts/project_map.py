@@ -139,12 +139,34 @@ def load_run_files(root: Path, results: dict[str, dict], view: dict) -> tuple[di
     groups = view.get('groups') or {}
     out: dict[str, dict] = {}
 
-    def files_of(nid: str) -> list[str]:
+    def rel(p: Path) -> str:
+        """專案根內的檔給相對路徑，根外的給絕對路徑；兩種都不丟例外。"""
+        try:
+            return p.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return str(p)
+
+    def dir_of(nid: str) -> Path | None:
+        """is_dir 節點實際指到的資料夾（derive() 的絕對路徑優先）；不是資料夾就回 None。"""
         n = nodes.get(nid) or {}
-        if n.get('is_dir'):
-            d = root / _t(n.get('path'))
-            return sorted(p.relative_to(root).as_posix() for p in d.rglob('*') if p.is_file()) if d.is_dir() else [nid]
-        return [nid]
+        if not n.get('is_dir'):
+            return None
+        d = Path(_t(n.get('abs'))) if n.get('abs') else root / _t(n.get('path'))
+        return d if d.is_dir() else None
+
+    def files_of(nid: str) -> list[str]:
+        """腳本節點：資料夾逐檔展開，根外的檔用絕對路徑。"""
+        d = dir_of(nid)
+        return sorted(rel(p) for p in d.rglob('*') if p.is_file()) if d else [nid]
+
+    def n_files_of(nid: str) -> int:
+        """收合的輸入資料夾底下有幾個檔：derive() 數過就沿用，否則自己數（規則同 dir_stat，跳過 symlink）。"""
+        n = nodes.get(nid) or {}
+        cnt = n.get('n_files')
+        if isinstance(cnt, int) and cnt > 0:
+            return cnt
+        d = dir_of(nid)
+        return sum(1 for p in d.rglob('*') if p.is_file() and not p.is_symlink()) if d else 0
 
     for c in (view.get('analyses') or {}).get('cards') or []:
         rid = _t(c.get('run_id'))
@@ -152,18 +174,16 @@ def load_run_files(root: Path, results: dict[str, dict], view: dict) -> tuple[di
             continue
         cols, shared = _d(c.get('cols')), _d(c.get('shared'))
         scripts = [f for nid in _l(cols.get('script')) + _l(shared.get('script')) for f in files_of(nid)]
-        inputs = [f for nid in _l(cols.get('input')) + _l(shared.get('input')) for f in files_of(nid)]
+        # 輸入宣告到資料夾，地圖就列資料夾（檔案粒度＝宣告粒度）：不逐檔展開，值沿用投稿分頁的 nid
+        in_nids = _l(cols.get('input')) + _l(shared.get('input'))
+        inputs = list(in_nids)
+        input_dirs = {nid: n_files_of(nid) for nid in in_nids if (nodes.get(nid) or {}).get('is_dir')}
         for gid in _l(c.get('groups')):
             inputs += [m for m in _l(_d(groups.get(gid)).get('members')) if '/input_snapshot/source_hashes' not in m]
         out[rid] = {'scripts': sorted(dict.fromkeys(scripts)), 'inputs': sorted(dict.fromkeys(inputs)),
+                    'input_dirs': input_dirs,
                     'figscripts': sorted(dict.fromkeys(_l(cols.get('figscript')))), 'origin': 'derive', 'exists': bool(c.get('exists'))}
     res = S.Resolver(root)
-
-    def rel(p: Path) -> str:
-        try:
-            return p.resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            return str(p)
 
     for r in results.values():
         rid = r['run_id']
@@ -187,7 +207,7 @@ def load_run_files(root: Path, results: dict[str, dict], view: dict) -> tuple[di
                 else:
                     inputs.append(rel(child))
         out[rid] = {'scripts': scripts, 'inputs': sorted(dict.fromkeys(inputs)), 'missing_inputs': sorted(dict.fromkeys(missing)),
-                    'figscripts': [], 'origin': 'history', 'exists': d.is_dir()}
+                    'input_dirs': {}, 'figscripts': [], 'origin': 'history', 'exists': d.is_dir()}
     return out, list(view.get('warnings') or [])
 
 
@@ -380,9 +400,11 @@ def build_map(root: Path, src, view: dict) -> dict:
 
 def _index(mp: dict) -> dict:
     runs, file_runs, fig_files, key_figs, key_claims = {}, {}, {}, {}, {}
+    input_dirs: dict[str, int] = {}
     for q in mp['questions']:
         for p in q['plans']:
             for r in p['runs']:
+                input_dirs.update(r.get('input_dirs') or {})
                 rt = f'{p["plan_id"]}|{r["run_id"]}'
                 runs[rt] = {'run_id': r['run_id'], 'plan_id': p['plan_id'], 'q': q['id'],
                             'superseded': p['status'] == 'superseded', 'keys': list(r['keys'])}
@@ -398,16 +420,30 @@ def _index(mp: dict) -> dict:
         for c in q['claims']:
             for k in c['keys']:
                 key_claims.setdefault(k, {})[c['id']] = c
-    return {'runs': runs, 'file_runs': file_runs, 'fig_files': fig_files, 'key_figs': key_figs, 'key_claims': key_claims}
+    return {'runs': runs, 'file_runs': file_runs, 'fig_files': fig_files, 'key_figs': key_figs, 'key_claims': key_claims,
+            'input_dirs': input_dirs}
 
 
-def affected(mp: dict, seed: str) -> dict:
+def _dir_row(mp: dict, ix: dict, seed: str) -> str:
+    """seed 落在某個收合的輸入資料夾底下時，回那一列的值；否則空字串。
+    只做字面比對（相對／絕對兩種寫法都認），不碰磁碟；對到多層時取最深的那一列。"""
+    root = _t(mp.get('root')).rstrip('/')
+
+    def forms(p: str) -> set[str]:
+        return {p} | ({root + '/' + p} if root and not p.startswith('/') else set())
+
+    hits = [d for d in ix['input_dirs']
+            if any(s == t or s.startswith(t.rstrip('/') + '/') for s in forms(seed) for t in forms(d))]
+    return max(hits, key=len) if hits else ''
+
+
+def affected(mp: dict, seed: str, ix: dict | None = None) -> dict:
     """seed 可以是檔案（相對專案根的路徑，或唯一的檔名）、結果鍵、run_id、plan_id 或主張 id。
+    收合的輸入資料夾底下的某個檔，解析到那個資料夾列（kind 仍是 file）；只給檔名不行，要給路徑。
     往下游一路追到底（這張圖沒有環）：檔案 → 用它的 run／畫圖用它的圖表 → run 的結果鍵 → 呈現它的圖表、
-    以它為證據的主張 → 引用這些鍵或主張的各版草稿（節次與行號）。"""
-    ix = _index(mp)
-    all_files = sorted(set(ix['file_runs']) | set(ix['fig_files']))
-    all_keys = {k for r in ix['runs'].values() for k in r['keys']}
+    以它為證據的主張 → 引用這些鍵或主張的各版草稿（節次與行號）。
+    ix：先算好的 _index(mp)；同一份地圖要問很多次時傳進來，省掉每次重建索引。"""
+    ix = _index(mp) if ix is None else ix
     plans = {p['plan_id']: p for q in mp['questions'] for p in q['plans']}
     claims = {c['id']: c for q in mp['questions'] for c in q['claims']}
     out = {'seed': seed, 'kind': '', 'candidates': [], 'runs': [], 'keys': [], 'figures': [], 'claims': [], 'drafts': []}
@@ -418,19 +454,25 @@ def affected(mp: dict, seed: str) -> dict:
     if seed in ix['file_runs'] or seed in ix['fig_files']:
         out['kind'] = 'file'
     else:
+        # 路徑形式的 seed 先問收合的輸入資料夾（不然底下的檔名可能誤中別處的同名檔）；只給檔名不查資料夾
+        row = _dir_row(mp, ix, seed) if '/' in seed else ''
+        all_files = set(ix['file_runs']) | set(ix['fig_files'])
         base = [f for f in all_files if f.rsplit('/', 1)[-1] == seed]
-        if len(base) == 1:
+        if row:
+            seed = out['seed'] = row
+            out['kind'] = 'file'
+        elif len(base) == 1:
             seed = out['seed'] = base[0]
             out['kind'] = 'file'
         elif len(base) > 1:
-            out['candidates'] = base
+            out['candidates'] = sorted(base)
             return out
     if out['kind'] == 'file':
         for rt, role in ix['file_runs'].get(seed, []):
             run_hit[rt] = f'{role} {seed}'
         for fid in ix['fig_files'].get(seed, {}):
             fig_hit[fid] = f'作圖腳本 {seed}'
-    elif seed in all_keys:
+    elif any(seed in r['keys'] for r in ix['runs'].values()):
         out['kind'] = 'key'
         key_hit[seed] = '起點'
     elif any(r['run_id'] == seed for r in ix['runs'].values()):
@@ -517,6 +559,11 @@ def _join(xs, sep='、') -> str:
     return sep.join(xs)
 
 
+def _fdisp(f: str, dirs: dict) -> str:
+    """收合的輸入資料夾列顯示成「路徑（N 個檔）」，一般檔案照原樣。"""
+    return f'{f}（{dirs[f]} 個檔）' if f in dirs else f
+
+
 def _short(paths: list[str], common: str = '') -> str:
     if not paths:
         return '無'
@@ -548,7 +595,8 @@ def render_tree(mp: dict, only: str = '', files: bool = True) -> str:
                     if r.get('scripts'):
                         lines.append(f'腳本：{_short(r["scripts"], base)}（{base}）')
                     if r.get('inputs'):
-                        lines.append(f'輸入：{_short(r["inputs"])}')
+                        idirs = r.get('input_dirs') or {}
+                        lines.append(f'輸入：{_short([_fdisp(f, idirs) for f in r["inputs"]])}')
                     if not r.get('exists', True):
                         lines.append('run 資料夾不存在')
                 keys = [k + (f'（{p["robustness"][k]}）' if k in p['robustness'] else '') for k in r['keys']]
@@ -869,8 +917,9 @@ def layout_map(mp: dict, files: bool = True) -> dict:
                     lines.append(('腳本', [d for d, _ in disp]))
                     flist.append(('腳本', disp))
                 if files and rr.get('inputs'):
-                    lines.append(('輸入', rr['inputs']))
-                    flist.append(('輸入', [(f, f) for f in rr['inputs']]))
+                    idirs = rr.get('input_dirs') or {}
+                    lines.append(('輸入', [_fdisp(f, idirs) for f in rr['inputs']]))
+                    flist.append(('輸入', [(_fdisp(f, idirs), f) for f in rr['inputs']]))
                 n = max(len(rr['keys']), 1 + len(lines), 1)
                 for j in range(n):
                     if j < len(rr['keys']):
@@ -1062,7 +1111,8 @@ def render_parts(mp: dict, files: bool = True, rel_of: dict[str, str] | None = N
         if r['figs']:
             fx, fw = COLS['f']
             names = [f['number'] or f['id'] for f in r['figs']]
-            S.append(f'<g data-t="row{r["i"]}" data-x="{_esc(rx)}"><title>{_esc("、".join(f"{n}（{f["id"]}）" for n, f in zip(names, r["figs"])))}</title>'
+            chip_title = '、'.join(f'{n}（{f["id"]}）' for n, f in zip(names, r['figs']))
+            S.append(f'<g data-t="row{r["i"]}" data-x="{_esc(rx)}"><title>{_esc(chip_title)}</title>'
                      f'<rect class="fchip" x="{fx}" y="{r["y"] + 5}" width="{fw}" height="{ROW_H - 10}" rx="8"/>'
                      f'<text x="{fx + fw / 2}" y="{yc + 4}" font-size="11" text-anchor="middle">{_fitx("、".join(names), fw - 10, 11)}</text></g>')
         # 矩陣格子
@@ -1127,6 +1177,7 @@ def render_parts(mp: dict, files: bool = True, rel_of: dict[str, str] | None = N
     seen_f: set[str] = set()
     for g in groups:
         groups[g] = [f for f in dict.fromkeys(sorted(groups[g])) if not (f in seen_f or seen_f.add(f))]
+    ix = _index(mp)  # 整份清單共用一份索引：affected() 不必每個檔重建一次
     rows_of: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         if r['kind'] in ('key', 'claim'):
@@ -1137,7 +1188,7 @@ def render_parts(mp: dict, files: bool = True, rel_of: dict[str, str] | None = N
             continue
         items = []
         for f in fl:
-            a_ = affected(mp, f)
+            a_ = affected(mp, f, ix)
             toks: set[str] = set()
             for k in a_['keys']:
                 for r in rows_of.get(('key', k['key']), []):
@@ -1148,7 +1199,7 @@ def render_parts(mp: dict, files: bool = True, rel_of: dict[str, str] | None = N
             for r in a_['runs']:
                 toks.add(_tk(f'run:{r["token"]}'))
             items.append(f'<option value="{_esc(f)}" data-x="{_esc(" ".join(sorted(toks)))}" '
-                         f'data-text="{_esc(render_affected(a_))}">{_esc(f)}</option>')
+                         f'data-text="{_esc(render_affected(a_))}">{_esc(_fdisp(f, ix["input_dirs"]))}</option>')
         opts.append(f'<optgroup label="{_esc(g)}">{"".join(items)}</optgroup>')
     aff_html = ('<section class="pm-aff"><label>影響範圍 <select id="pm-aff-sel"><option value="">— 選一個檔案，或點 run 框裡的檔名 —</option>'
                 f'{"".join(opts)}</select></label><button type="button" id="pm-aff-clear">清除</button>'

@@ -703,3 +703,27 @@ SQ1-v2（RUN_1002_mixed，另有 robustness R1 的次要鍵 group_diff_nobatch3�
 - 規格 6（登記）：CHANGELOG 有 `## 0.28.0`、`plugin.json` ≥ 0.28.0、本檔與 README 都登記本測試、status SKILL.md 有「專案地圖」與 `project_map.py`。
 
 找不到 headless Chrome 時規格 4 印一行略過，其餘照跑。同一版 `run_v0270_regressions.py` 的 CHANGELOG 斷言改成「0.27.0 那一節仍在」，`run_v0230_regressions.py` 的分頁清單錨點改成前綴比對（`['milestones','relations','literature','submission',`，後面多了 `'map'`）。
+
+## `run_v0281_regressions.py`（0.28.1）
+
+專案地圖的三個 bug：3.10 載不進來（同引號巢狀 f-string，PEP 701 才合法）、輸入資料夾在專案根外會讓整張地圖 ValueError、
+輸入資料夾逐檔展開導致影響範圍清單耗時與 HTML 都過大。
+
+- 規格 1（3.10 語法）：repo 內每支 `.py` 用執行中的直譯器 `ast.parse(src, feature_version=(3, 10))` 都過。
+- 規格 2（純文字掃描）：不依賴直譯器版本的 `scan_pep701()` 抓三種 PEP 701 才合法的寫法：替換欄位內出現與外層相同的引號
+  （含巢狀 f-string）、表達式部分有反斜線、替換欄位內有 `#` 註解。39 筆內嵌 fixture 驗牙（0.28.0 第 1065 行原文必須抓到，
+  `f'{a["b"]}'`、`f"{{x}}"`、`f'{x!r:>{w}}'`、`f"""{a['b']}"""`、`f"{255:#x}"`、一般字串與註解裡的引號都不得誤報），
+  在 3.12 以前的直譯器上再用 `ast.parse` 逐筆交叉驗證 fixture 的預期答案；全 repo 必須 0 筆。
+- 規格 3（輸出不變）：一列掛兩張圖表時，chip 的 `<title>` 與手寫字串逐字相同。
+- 規格 4（資料夾收合）：手寫一份 `view`（這正是 `derive()` 與 project_map 之間的介面），擺出根內輸入資料夾、根外輸入資料夾
+  與根外腳本資料夾。兩個輸入資料夾都不丟例外、各只占一列、檔案數與手算相同（一個沿用 `n_files`、一個自己數）、底下的個別
+  檔名不出現在分頁 HTML 與樹狀文字；腳本資料夾仍逐檔列出。
+- 規格 5（索引只建一次）：spy `_index`，一次 `render_tab()` 只呼叫一次（與檔案數無關，不拿執行時間當斷言）；
+  `affected()` 傳索引與不傳的輸出相同；seed 是已知檔案時不走訪索引裡的全部檔案與全部 run。
+- 規格 6（收合後的 `--affected`）：資料夾底下某個檔的相對與絕對路徑、資料夾本身的路徑與資料夾名，都解析到那一列且下游相同；
+  只給檔名仍然回「找不到」（已知限制，CHANGELOG 有寫）。
+- 規格 7（登記）：CHANGELOG 有 `## 0.28.1`、`plugin.json` ≥ 0.28.1、本檔與 README 都登記本測試。
+
+**這份回歸要用 Python 3.10 跑**，語法相容的問題才看得出來：3.12 起 f-string 由 tokenizer 先處理，規格 1 的 `feature_version`
+管不到它（規格 2 就是為此存在，任何版本都有牙）。規格 4／5／6 不經過 `derive()` 的宣告管道，直接餵 `build_map()` 一份手寫 view；
+命令列那一段由 `run_v0280_regressions.py` 的規格 5 負責。
