@@ -605,6 +605,7 @@ python3 tests/run_v0260_regressions.py
 python3 tests/run_v0270_regressions.py
 python3 tests/run_v0280_regressions.py
 python3 tests/run_v0281_regressions.py
+python3 tests/run_v0282_regressions.py
 python3 tests/run_literature3d_regressions.py
 ```
 

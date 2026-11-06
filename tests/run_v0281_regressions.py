@@ -27,7 +27,8 @@
   seed 是已知檔案時 `affected()` 不走訪索引裡的全部檔案與全部 run（索引換成一走訪就 raise 的 dict 子類，必須不 raise）。
 - 規格 6（收合後的 --affected）：資料夾底下某個檔的絕對與相對路徑都解析到那一列，下游與直接問資料夾相同；
   資料夾本身的完整路徑與資料夾名也可以。只給檔名（不帶路徑）落在收合資料夾內的情況不支援，CHANGELOG 已寫明。
-- 規格 7（登記）：CHANGELOG 有 `## 0.28.1`、plugin.json ≥ 0.28.1、tests README 與 README 登記本檔。
+- 規格 7（登記）：CHANGELOG 有 `## 0.28.1` 那一節（0.28.2 起不再是最上面一節）、plugin.json ≥ 0.28.1、
+  tests README 與 README 登記本檔。當期精確版號由最新一支回歸測試 pin，本檔只留單調斷言。
 
 掃描函式刻意不用 `tokenize`：3.12 起 f-string 會被拆成 FSTRING_START／MIDDLE／END，用它就又變成跟直譯器版本綁在一起。
 """
@@ -469,9 +470,9 @@ def test_affected_inside_dir(ctx: dict) -> None:
 
 def test_registration() -> None:
     cl = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert f'\n## {V}（' in cl, cl[:80]
+    assert f'\n## {V}（' in cl, cl[:80]   # 0.28.2 起不再是最上面一節，只要那一節仍在
     ver = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version']
-    assert tuple(int(x) for x in ver.split('.')) >= (0, 28, 1), ver
+    assert tuple(int(x) for x in ver.split('.')) >= (0, 28, 1), ver   # 精確版號改由 run_v0282 pin
     assert 'run_v0281_regressions.py' in (PLUGIN / 'tests/README.md').read_text(encoding='utf-8')
     assert 'run_v0281_regressions.py' in (PLUGIN / 'README.md').read_text(encoding='utf-8')
     print('[regression] 規格 7：CHANGELOG／plugin.json／tests README／README 登記: pass')
