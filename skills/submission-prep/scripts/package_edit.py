@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'status' / 'scripts'))
 import submission_package_common as S  # noqa: E402
 import ssot_actions_common as C  # noqa: E402
+import ssot_text_format as TF  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
 VERSION = '0.23.1'
@@ -121,14 +122,17 @@ def read_lists(root: Path) -> dict[str, list[dict]]:
     return delta
 
 
-def item_line(item: dict, name: str) -> str:
+def item_line(item: dict, name: str, pre: str = '  - ') -> str:
     fields = [f for f in ITEM_FIELDS[name] if item.get(f)]
     body = ', '.join(f'{f}: {json.dumps(item[f], ensure_ascii=False)}' for f in fields)
-    return '  - {' + body + '}'
+    return pre + '{' + body + '}'
 
 
 def apply_list_text(text: str, name: str, items: list[dict]) -> str:
-    """把 `name:` 這個清單整段換成 items（一項一行的 flow mapping）；其餘行位元組不動。空清單寫回 `[]`。"""
+    """把 `name:` 這個清單整段換成 items（一項一行的 flow mapping）；其餘行位元組不動。空清單寫回 `[]`。
+
+    項目的 dash 前綴照該清單既有項目量（不縮排的序列也跟著不縮排），空清單用預設 2 空白。
+    """
     lines = text.split('\n')
     if lines and lines[-1] == '':
         lines.pop()
@@ -139,22 +143,28 @@ def apply_list_text(text: str, name: str, items: list[dict]) -> str:
     rest = KEY_RE.match(lines[ki]).group(2)
     m_inline = re.match(r'^\s*\[.*?\](\s*)(#.*)?$', rest)
     m_block = re.match(r'^(\s*)(#.*)?$', rest)
+    pre = '  - '
     if m_inline:
         comment, sep, end = (m_inline.group(2) or '').strip(), m_inline.group(1), ki + 1
     elif m_block:
         comment, sep, end = (m_block.group(2) or '').strip(), m_block.group(1), ki + 1
+        dash = -1
         while end < len(lines):
             ln = lines[end]
-            if re.match(r'^\s+-\s', ln) or (ln.strip().startswith('#') and end + 1 < len(lines)
-                                            and re.match(r'^\s+-\s', lines[end + 1])) \
-                    or (re.match(r'^\s{4,}\S', ln) and end > ki + 1):
+            if TF.is_dash(ln) and (dash < 0 or TF.indent_of(ln) == dash):
+                if dash < 0:
+                    dash, pre = TF.indent_of(ln), TF.dash_write_prefix(ln)
                 end += 1
+            elif ln.lstrip().startswith('#') and end + 1 < len(lines) and TF.is_dash(lines[end + 1]):
+                end += 1
+            elif dash >= 0 and ln.strip() and TF.indent_of(ln) > dash:
+                end += 1          # 多行項目的續行
             else:
                 break
     else:
         raise ChainError(f'{PKG_REL} 的 {name} 不是清單，無法改：{lines[ki]!r}')
     tail = ((sep or '      ') + comment) if comment else ''
-    block = [f'{name}: []' + tail] if not items else [f'{name}:' + tail] + [item_line(it, name) for it in items]
+    block = [f'{name}: []' + tail] if not items else [f'{name}:' + tail] + [item_line(it, name, pre) for it in items]
     lines[ki:end] = block
     return '\n'.join(lines) + '\n'
 
@@ -412,14 +422,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         log.file_before(e, d_path)
         entry = build_decision(root, args, ctx, did, date, log_rel,
                                f'備份 {bk.name}' if bk else ('檔案原本不存在，用模板新建、無備份' if created else '無備份'), after)
+        cd_base = C.decisions_baseline(root)   # append 之前取：舊條目本來就有的問題不該擋這次動作
         C.append_decision(root, entry, backups)
         log.file_after(e, d_path)
-        rc, out = C.run_script('check_decisions', d_path, root / 'project.yaml', '--results', root / 'analysis/results.json')
-        if rc != 0:
-            raise ChainError(f'check_decisions.py 失敗: {out[-500:]}')
-        bad = [ln for ln in out.splitlines() if ln.startswith('WARNING') and did in ln]
-        if bad:
-            raise ChainError(f'check_decisions.py 對 {did} 有 WARNING: {bad}')
+        C.check_decisions_gate(root, did, cd_base)
         summary['decision_bytes'] = len(C.format_decision(entry).encode('utf-8'))
         e['notes'].append(f'{did} append（{summary["decision_bytes"]} bytes）；check_decisions 對 {did} 0 warning')
         log.finish(e)
@@ -496,7 +502,7 @@ def token_of(root: Path, ctx: dict[str, Any], inbox: str) -> str:
     """stale guard 的 token：SSOT token（不含 package.yaml）＋ package.yaml 內容 ＋ 本次動作內容。
 
     extra 的字串形狀照 ssot_actions_common 各動作 `extra` lambda 的慣例（`<kind>:<欄位>…:<收件匣 id>`）；
-    這裡自己組，不改 ACTIONS——把 package_edit 登記成 server 動作是第三棒的事。
+    這裡自己組，不改 ACTIONS；把 package_edit 登記成 server 動作另案處理。
     """
     op = ctx['op']
     extra = f'package_edit:{op["op"]}:{op["target"]}:{inbox}\0{S.package_yaml_hash(root)}'
@@ -538,12 +544,13 @@ def main(argv: list[str] | None = None) -> int:
         for note in C.PL.ensure_progress_layout(root):
             print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
+        C.check_ssot_parseable(root)   # 壞掉的 SSOT 檔先擋在這裡，不要讓關卡子程序的 traceback 外漏
         ctx = check_preconditions(root, args)
+        did = C.next_decision_id(root)    # 讀 decisions.yaml；壞檔也要走 BLOCKER，不能漏成 traceback
+        token0 = token_of(root, ctx, args.inbox)
     except ChainError as exc:
         print(f'BLOCKER {exc}')
         return 2
-    did = C.next_decision_id(root)
-    token0 = token_of(root, ctx, args.inbox)
     if args.expect_token and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT 或打包清單）：請重跑 --dry-run')
         return 2
@@ -557,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     C.remove_workspace(ws)
     if args.dry_run:
         print_summary(summary, True, token0)
+        C.print_warnings(summary)
         return 0
     if token_of(root, ctx, args.inbox) != token0:
         print('BLOCKER dry-run 期間 SSOT 已被改動，未 apply；請重跑')
@@ -567,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER apply 失敗：{exc}')
         return 1
     print_summary(summary, False, token_of(root, ctx, args.inbox))
+    C.print_warnings(summary)
     print(f'結果: 完成；決策 {did}；run log {summary["log"]}')
     return 0
 

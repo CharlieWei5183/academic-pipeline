@@ -52,6 +52,26 @@ def content_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()[:20]
 
 
+def plan_integrity(plan: dict[str, Any], entry: dict[str, Any] | None, pid: str) -> list[str]:
+    """一份 plan 的封版完整性：回 blocker 文字清單（空＝乾淨）。
+
+    四種不乾淨：尚未 confirmed、缺 content_hash、content_hash 與內容不符、index 記的 hash 與 plan 不一致。
+    check_plan 的全專案關卡與動作鏈的前置條件共用這一支：一邊據此報 blocker、一邊據此拒絕從它封出新版，
+    判準不得各寫一份而漂開。
+    """
+    out: list[str] = []
+    if plan.get("status") != "confirmed":
+        out.append(f"{pid}: 尚未 confirmed")
+    digest = str(plan.get("content_hash") or "")
+    if not digest:
+        out.append(f"{pid}: 缺 content_hash")
+    elif digest != content_hash(plan):
+        out.append(f"{pid}: content_hash 不符——不得原地修改 confirmed plan")
+    if entry and entry.get("content_hash") != digest:
+        out.append(f"{pid}: index content_hash 與 plan 不一致")
+    return out
+
+
 # goals 的兩個清單：主問題（SQ#）與附錄問題（AQ#，v0.7.3 起）。機械關卡（plan／results／
 # validation／claims）對兩者一視同仁，所以 goal_map 預設兩者都收；只有「主問題清單本身」
 # 的消費者（init_protocol 寫 protocol.sub_questions）才關掉 include_appendix。

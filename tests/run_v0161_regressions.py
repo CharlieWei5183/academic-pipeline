@@ -95,14 +95,7 @@ def build_fixture(root: Path) -> None:
     results = json.loads(r_path.read_text(encoding='utf-8'))
     results['r2'] = {**results['r1'], 'description': 'r2 第二敏感度', 'value': 1.4}
     r_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    res_fp = T0.results_fingerprint(r_path)
-    src = json.loads(run('skills/validate-results/scripts/check_validation.py', root, '--source-fingerprint-only'))
-    for rel in ('analysis/validation.yaml', 'project.yaml'):
-        p = root / rel
-        t = p.read_text(encoding='utf-8')
-        old_res = re.search(r'results_fingerprint: (\S+)', t).group(1)
-        old_src = re.search(r'source_fingerprint: (\S+)', t).group(1)
-        p.write_text(t.replace(old_res, res_fp).replace(old_src, src['source_fingerprint']), encoding='utf-8')
+    refix(root)
     run('skills/status/scripts/render_progress.py', root)
     run('skills/study-design/scripts/check_plan.py', root, '--require-confirmed', '--results', 'analysis/results.json')
     run('skills/validate-results/scripts/check_validation.py', root)
@@ -110,6 +103,23 @@ def build_fixture(root: Path) -> None:
     run('skills/evaluate/scripts/check_coverage.py', root / 'project.yaml', root / 'analysis/results.json', root / 'empty.bib', '--snapshot',
         root / 'evaluations/goals-snapshot.json')
     run('skills/status/scripts/check_inbox.py', root)
+
+
+def refix(root: Path) -> None:
+    """改過 results.json／plans 之後把兩個 fingerprint 接回現值。
+
+    不接回去，專案就處在「記錄值與現值不符」的狀態；動作鏈在那種狀態下刻意不把指紋帶到新值
+    （既有的過期不是本次造成的，帶了等於替使用者宣稱已重新驗過），於是 check_validation 照舊報過期。
+    測試要驗的是動作本身，不是這個干擾項。
+    """
+    res_fp = T0.results_fingerprint(root / 'analysis/results.json')
+    src = json.loads(run('skills/validate-results/scripts/check_validation.py', root, '--source-fingerprint-only'))
+    for rel in ('analysis/validation.yaml', 'project.yaml'):
+        p = root / rel
+        t = p.read_text(encoding='utf-8')
+        old_res = re.search(r'results_fingerprint: (\S+)', t).group(1)
+        old_src = re.search(r'source_fingerprint: (\S+)', t).group(1)
+        p.write_text(t.replace(old_res, res_fp).replace(old_src, src['source_fingerprint']), encoding='utf-8')
 
 
 _FIXTURE: Path | None = None

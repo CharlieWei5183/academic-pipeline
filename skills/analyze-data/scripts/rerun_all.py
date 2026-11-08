@@ -101,6 +101,35 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+# 動作鏈的 dry-run 工作區（`ssot_actions_common.make_workspace`）把不需要改的檔做成指向原根的絕對
+# symlink，並在工作區根留一個標記檔。指紋計算一律跳過 symlink（專案自己擺的連結不該算成輸入），
+# 但工作區那些連結其實就是原檔；跳過會讓工作區的指紋與原根不同，整條 dry-run 的比對基準就錯了。
+WORKSPACE_MARKER = ".ssot-workspace-origin"
+
+
+def workspace_link(root: Path, path: Path) -> bool:
+    """這個 symlink 是工作區替原檔擺的連結嗎（＝可以視同原檔）。
+
+    條件：root 有工作區標記檔、連結目標是絕對路徑、目標的尾段剛好等於 path 相對 root 的路徑。
+    專案自己的 symlink（相對路徑，或指到別處）不符合這些條件，兩邊都照舊跳過。
+    """
+    if not path.is_symlink() or not (root / WORKSPACE_MARKER).exists():
+        return False
+    try:
+        rel = path.relative_to(root).parts
+        target = Path(os.readlink(path))
+    except (OSError, ValueError):
+        return False
+    if not rel or not target.is_absolute():
+        return False
+    return target.parts[-len(rel):] == rel   # 比 parts 不比字串尾，避免 `xfoo/bar` 誤中 `foo/bar`
+
+
+def real_file(root: Path, path: Path) -> bool:
+    """算進指紋的檔：真的檔案，或工作區替原檔擺的連結。"""
+    return path.is_file() and (not path.is_symlink() or workspace_link(root, path))
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -254,12 +283,12 @@ def declared_input_files(root: Path, value: str) -> tuple[list[Path], str]:
     if forbidden_input(value):
         return [], f"inputs 不得指向既有 output: {value}"
     path = root / value
-    if path.is_symlink():
+    if path.is_symlink() and not workspace_link(root, path):
         return [], f"inputs 不接受 symlink: {value}"
     if path.is_file():
         return [path], ""
     if path.is_dir():
-        files = [child for child in sorted(path.rglob("*")) if child.is_file() and not child.is_symlink()]
+        files = [child for child in sorted(path.rglob("*")) if real_file(root, child)]
         return files, "" if files else f"inputs 目錄為空: {value}"
     return [], f"inputs 不存在: {value}"
 
@@ -283,7 +312,7 @@ def collect_input_components(root: Path, order: list[RunEntry]) -> list[dict[str
     seen_labels: set[str] = set()
 
     def add_file(path: Path, label: str | None = None) -> None:
-        if not path.is_file() or path.is_symlink():
+        if not real_file(root, path):
             return
         key = label or path.relative_to(root).as_posix()
         if key in seen_labels:
@@ -294,14 +323,14 @@ def collect_input_components(root: Path, order: list[RunEntry]) -> list[dict[str
     # Raw data content is the primary input identity.
     data_dir = root / "data"
     if data_dir.is_dir():
-        for path in sorted(p for p in data_dir.rglob("*") if p.is_file() and not p.is_symlink()):
+        for path in sorted(p for p in data_dir.rglob("*") if real_file(root, p)):
             add_file(path)
 
     # Hash the complete executable surface, not only run-order entries: listed scripts may
     # import helper modules that otherwise would escape stale-state detection.
     scripts_dir = root / "analysis" / "scripts"
     if scripts_dir.is_dir():
-        for path in sorted(p for p in scripts_dir.rglob("*") if p.is_file() and not p.is_symlink()):
+        for path in sorted(p for p in scripts_dir.rglob("*") if real_file(root, p)):
             if "__pycache__" in path.parts or path.suffix.lower() in {".pyc", ".pyo"}:
                 continue
             add_file(path)

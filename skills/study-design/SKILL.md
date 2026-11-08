@@ -17,6 +17,11 @@ metadata:
 1. methodology-router 已確認，`methodology/route.yaml` 通過 `check_route.py`。
 2. integrity-check（prestudy）至少已列出適用性；涉及人類、動物、敏感資料或註冊而仍 pending 時，不得把 protocol 封存為可執行。
 3. 讀取 project.yaml goals、data/design、adapter 與既有 data profile（若已有）。
+4. 讀 `GLOSSARY.md`：計畫裡的變數、方法與縮寫沿用表內既有的名稱，不另起別名。專案還沒有這個檔時先建一份：
+
+   ```bash
+   python3 <plugin>/skills/status/scripts/init_glossary.py <專案根> --apply
+   ```
 
 ## 步驟
 
@@ -26,7 +31,7 @@ metadata:
    python3 <skill路徑>/scripts/init_protocol.py <專案根> --timing prospective|retrospective
    ```
 
-2. **委派 research-designer**：完成 protocol；逐個 route 所需 SQ 建立分析計畫。一般包含 analysis／both／qualitative／proof；systematic-review-meta-analysis 的 literature 型 SQ 也必須有計畫。首次可用：
+2. **委派 research-designer**：完成 protocol；逐個 route 所需 SQ 建立分析計畫。一般包含 analysis／both／qualitative／proof；systematic-review-meta-analysis 的 literature 型 SQ 也必須有計畫。材料含 `GLOSSARY.md`；它回報的新名稱由本 skill 寫進該檔對應的段落（變數、方法或縮寫），agent 自己不改那份檔。首次可用：
 
    ```bash
    python3 <skill路徑>/scripts/init_plan.py <專案根> --sq SQ1 \
@@ -42,7 +47,7 @@ metadata:
      --timing post-hoc-amendment --supersedes SQ1-v1
    ```
 
-3. **計畫內容最低要求**：所有 adapter 都要明列 analysis unit、納排、預宣告 outputs、validation.required 與時序；其餘依 route adapter 的 `plan_requirements`。定量推論使用 estimand／缺失值／主模型／多重比較；預測模型使用 split、tuning、metrics、calibration 與外部驗證；質性使用 sampling、reflexivity、coding/codebook、negative cases 與 information power；混合方法使用 sequence／priority／integration／discordance；systematic/meta 使用完整搜尋、篩選、risk of bias、synthesis；模擬使用 verification/validation/convergence/UQ；理論研究使用 assumptions／proof dependency／counterexample checks。承重的定量、ML、模擬 plan 缺 robustness 是 blocker。
+3. **計畫內容最低要求**：變數名、方法名與縮寫一律照 `GLOSSARY.md` 的寫法，表裡沒有的在這一步補一列（單位或取值範圍、出處一起填，定義還不確定就寫「待確認」）。所有 adapter 都要明列 analysis unit、納排、預宣告 outputs、validation.required 與時序；其餘依 route adapter 的 `plan_requirements`。定量推論使用 estimand／缺失值／主模型／多重比較；預測模型使用 split、tuning、metrics、calibration 與外部驗證；質性使用 sampling、reflexivity、coding/codebook、negative cases 與 information power；混合方法使用 sequence／priority／integration／discordance；systematic/meta 使用完整搜尋、篩選、risk of bias、synthesis；模擬使用 verification/validation/convergence/UQ；理論研究使用 assumptions／proof dependency／counterexample checks。承重的定量、ML、模擬 plan 缺 robustness 是 blocker。
 4. **獨立設計審**：委派 reviewer-methods `mode: design-review`，材料是 plan 檔、protocol、data-audit／profile 與 adapter；不提供 research-designer 的辯解對話。blocker 必須修改草案後重審。
 5. **人工確認點與封存**：使用者逐項確認 protocol 與 plan；確認後執行：
 

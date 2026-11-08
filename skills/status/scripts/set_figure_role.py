@@ -6,7 +6,7 @@
       [--daily-log <path>] [--expect-token <token>] (--dry-run | --apply)
 
 四步（每步先備份、寫進 reviews/set-figure-role-<date>.json）:
-  1 analysis/figures/manifest.json  只改指定圖表的 `role` 一行（逐行文字替換，鍵序與縮排不動；沒有 role 鍵就在 id 之後補一行）；
+  1 analysis/figures/manifest.json  只改指定圖表的 `role` 那一段（結構掃描定位、只替換該值，鍵序與排版不動；沒有 role 鍵就在 id 之後補一個成員）；
                                     寫入前後以 JSON 比對，除這些 role 外任何差異都算失敗
   2 decisions.yaml                  append 一筆模板 D#（stage: figure-design；append-only）；check_decisions.py 要過
   3 收件匣                          check_inbox.py --resolve IN-xxx --by D#
@@ -27,6 +27,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssot_actions_common as C  # noqa: E402
+import ssot_text_format as TF  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
 VERSION = '0.16.1'
@@ -92,49 +93,32 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def set_roles(text: str, changes: dict[str, str]) -> tuple[str, dict[str, Any]]:
-    """逐行替換：在 figures 陣列裡找 `"id": "<fid>"` 那行，往下找同縮排的 `"role":` 行改值；沒有就在 id 行之後補一行。"""
-    lines = text.split('\n')
+    """只改 figures 陣列裡那幾個圖表的 role：結構掃描定位該成員的值，只替換那一段。
+
+    縮排 1／2／4、TAB、整份寫成一行都定位得到；role 不存在時照該物件既有的分隔與縮排補一個成員。
+    """
     doc = json.loads(text)
-    id_re = re.compile(r'^(\s+)"id":\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$')
+    jt = TF.JsonText(text, MANIFEST_REL)
+    n_fig = jt.length(('figures',))
+    edits: list[tuple[int, int, str]] = []
     edited = 0
     inserted: list[str] = []
-    i = 0
-    while i < len(lines):
-        m = id_re.match(lines[i])
-        if not m:
-            i += 1
+    for fid, role in changes.items():
+        idx = jt.index_of(('figures',), 'id', fid)
+        if idx < 0:
             continue
-        fid = json.loads('"' + m.group(2) + '"')
-        indent = m.group(1)
-        if fid not in changes:
-            i += 1
-            continue
-        # 物件範圍：到下一個同縮排的 `"id":` 或縮排更淺的 `}` 為止
-        j = i + 1
-        role_line = -1
-        while j < len(lines):
-            ln = lines[j]
-            if id_re.match(ln) and id_re.match(ln).group(1) == indent:
-                break
-            if ln.strip() in ('}', '},') and len(ln) - len(ln.lstrip(' ')) < len(indent):
-                break
-            if re.match(rf'^{indent}"role":\s*', ln):
-                role_line = j
-                break
-            j += 1
-        if role_line >= 0:
-            mm = re.match(rf'^({indent}"role":\s*)("(?:[^"\\]|\\.)*"|null)(\s*,?)\s*$', lines[role_line])
-            if not mm:
-                raise ChainError(f'{fid} 的 role 行不是單行字串，無法逐行替換：{lines[role_line]!r}')
-            lines[role_line] = f'{mm.group(1)}{json.dumps(changes[fid])}{mm.group(3)}'
+        if jt.has(('figures', idx, 'role')):
+            old = json.loads(jt.raw(('figures', idx, 'role')))
+            if old is not None and not isinstance(old, str):
+                raise ChainError(f'{fid} 的 role 不是字串或 null，無法只換該值：{jt.raw(("figures", idx, "role"))!r}')
+            edits.append(jt.set_value(('figures', idx, 'role'), json.dumps(role)))
         else:
-            lines.insert(i + 1, f'{indent}"role": {json.dumps(changes[fid])},')
+            edits.append(jt.insert_member(('figures', idx), 'id', 'role', json.dumps(role)))
             inserted.append(fid)
         edited += 1
-        i += 1
     if edited != len(changes):
-        raise ChainError(f'manifest 文字層只找到 {edited}/{len(changes)} 個要改的圖表 id 行')
-    new_text = '\n'.join(lines)
+        raise ChainError(f'{MANIFEST_REL} 文字層只找到 {edited}/{len(changes)} 個要改的圖表（共 {n_fig} 張）')
+    new_text = jt.apply(edits)
     try:
         new_doc = json.loads(new_text)
     except Exception as exc:
@@ -251,14 +235,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         d_path = root / 'decisions.yaml'
         log.file_before(e, d_path)
         entry = build_decision(root, args, ctx, did, date, log_rel, bk.name if bk else 'backup')
+        cd_base = C.decisions_baseline(root)   # append 之前取：舊條目本來就有的問題不該擋這次動作
         C.append_decision(root, entry, backups)
         log.file_after(e, d_path)
-        rc, out = C.run_script('check_decisions', d_path, root / 'project.yaml', '--results', root / 'analysis/results.json')
-        if rc != 0:
-            raise ChainError(f'check_decisions.py 失敗: {out[-500:]}')
-        bad = [ln for ln in out.splitlines() if ln.startswith('WARNING') and did in ln]
-        if bad:
-            raise ChainError(f'check_decisions.py 對 {did} 有 WARNING: {bad}')
+        C.check_decisions_gate(root, did, cd_base)
         summary['decision_bytes'] = len(C.format_decision(entry).encode('utf-8'))
         e['notes'].append(f'{did} append（{summary["decision_bytes"]} bytes）；check_decisions 對 {did} 0 warning')
         log.finish(e)
@@ -346,13 +326,14 @@ def main(argv: list[str] | None = None) -> int:
         for note in C.PL.ensure_progress_layout(root):
             print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
+        C.check_ssot_parseable(root)   # 壞掉的 SSOT 檔先擋在這裡，不要讓關卡子程序的 traceback 外漏
         ctx = check_preconditions(root, args)
+        did = C.next_decision_id(root)    # 讀 decisions.yaml；壞檔也要走 BLOCKER，不能漏成 traceback
+        extra = C.action_token_extra('set_role', {'figures': ctx['changes']}, args.inbox)
+        token0 = C.ssot_token(root, extra)
     except ChainError as exc:
         print(f'BLOCKER {exc}')
         return 2
-    did = C.next_decision_id(root)
-    extra = C.action_token_extra('set_role', {'figures': ctx['changes']}, args.inbox)
-    token0 = C.ssot_token(root, extra)
     if args.expect_token and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
         return 2
@@ -366,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
     C.remove_workspace(ws)
     if args.dry_run:
         print_summary(summary, True, token0)
+        C.print_warnings(summary)
         return 0
     if C.ssot_token(root, extra) != token0:
         print('BLOCKER dry-run 期間 SSOT 已被改動，未 apply；請重跑')
@@ -376,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER apply 失敗：{exc}')
         return 1
     print_summary(summary, False, C.ssot_token(root))
+    C.print_warnings(summary)
     print(f'結果: 完成；決策 {did}；run log {summary["log"]}')
     return 0
 

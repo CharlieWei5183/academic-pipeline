@@ -122,6 +122,9 @@ ITEM_FIELDS = ('id', 'at', 'kind', 'target', 'title', 'body', 'author', 'payload
 ACTIONS_LOG_NAME = PL.NEW['actions_log']   # progress/PROGRESS.actions.log
 DRYRUN_TIMEOUT, APPLY_TIMEOUT = 600, 1800
 ID_RE = re.compile(r'IN-(\d{3,})$')
+# 決策編號不得寫死三位數（編號會長過三位，寫死會把長編號切成前三位或整個認不出來）。
+DONE_DECISION_RE = re.compile(r'^結果: 完成；決策 (D-\d{3,}(?:–D-\d{3,})?)', re.M)
+DECISION_LINE_RE = re.compile(r'決策 (D-\d{3,})')
 
 
 # ---------- 收件匣讀寫（唯一會寫的檔） ----------
@@ -396,7 +399,7 @@ def run_action(root: Path, item: dict, mode: str, daily_log: str = '', token: st
     if m:
         result['token'] = m.group(1)
     # 先認結尾那行「結果: 完成；決策 D-xxx」（batch 印 D# 範圍「D-001–D-005」；各步摘要裡的「預定決策 D-xxx」不算），沒有才退回第一個「決策 D-xxx」
-    m = re.search(r'^結果: 完成；決策 (D-\d{3}(?:–D-\d{3})?)', out, re.M) or re.search(r'決策 (D-\d{3})', out)
+    m = DONE_DECISION_RE.search(out) or DECISION_LINE_RE.search(out)
     if m:
         result['decision'] = m.group(1)
     m = re.search(r'run log (\S+)', out)

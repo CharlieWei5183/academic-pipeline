@@ -245,9 +245,9 @@ def _section_key(name: str):
     """section 排序: main → SQ#（整數）→ AQ#（整數）→ 其他自由文字（字串序）→ unknown。"""
     if name == 'main':
         return (0, 0, '')
-    m = re.fullmatch(r'(SQ|AQ)(\d+)', name)
+    m = re.fullmatch(r'(SQ|AQ)(\d+)([a-z]*)', name)   # 後綴字母（SQ6b）排在同號的無後綴之後
     if m:
-        return (1 if m.group(1) == 'SQ' else 2, int(m.group(2)), '')
+        return (1 if m.group(1) == 'SQ' else 2, int(m.group(2)), m.group(3))
     if name == UNKNOWN:
         return (4, 0, '')
     return (3, 0, name)

@@ -20,6 +20,9 @@ import os
 import re
 import sys
 
+# 決策編號不得寫死三位數（編號會長過三位，寫死會把長編號切成前三位或整個認不出來）。
+DECISION_ID_RE = re.compile(r'D-\d{3,}')
+
 try:
     import yaml
 except ImportError:
@@ -92,7 +95,7 @@ def main():
                 blockers.append(f'{pid}: {f} 檔案不存在 "{v}"')
         reason = str(st.get('reason') or '').strip()
         if reason:
-            if not re.fullmatch(r'D-\d{3}', reason):
+            if not DECISION_ID_RE.fullmatch(reason):
                 warnings.append(f'{pid}: reason 應為 D# 格式（現值 "{reason}"）')
             elif d_ids is not None and reason not in d_ids:
                 blockers.append(f'{pid}: reason 指向不存在的 {reason}')

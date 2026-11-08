@@ -56,6 +56,7 @@ metadata:
 - claims、validation、evidence 或 results 變更後，既有稿件 consistency 立即失效。
 - **文風**：學術但流暢的繁體中文；避免翻譯腔（「被進行」、「作為一個」）與冗贅套語；句長有變化。
 - 專有名詞首次出現附英文原文，並同步登錄 `project.yaml` 的 glossary。
+- 縮寫、變數與方法的寫法與定義以 `GLOSSARY.md` 為準；稿件用到表裡沒有的名稱時在同一步補一列，不要兩處各寫一種說法。譯名照舊登 `project.yaml` 的 glossary；那裡只管中英對照，定義只寫在 `GLOSSARY.md`。專案還沒有這個檔時先跑 `python3 <plugin>/skills/status/scripts/init_glossary.py <專案根> --apply`。
 
 ## 收尾
 

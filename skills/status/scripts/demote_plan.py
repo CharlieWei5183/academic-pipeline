@@ -67,6 +67,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         rid = str((results.get(k) or {}).get('run_id') or '') if isinstance(results, dict) else ''
         if rid and rid not in run_ids:
             run_ids.append(rid)
+    C.require_clean_plans(root, [('來源', args.plan), ('目標', args.to_plan)])
     return {'src_q': src_q, 'dst_q': dst_q, 'src_pid': args.plan, 'dst_pid': args.to_plan, 'src_plan': src_plan, 'dst_plan': dst_plan,
             'src_kind': kinds.get(src_q, 'aq'), 'dst_kind': kinds.get(dst_q, 'sq'), 'out_keys': out_keys, 'src_keys': src_keys, 'run_ids': run_ids,
             'executed': bool(out_keys) and all(k in src_keys for k in out_keys), 'dst_new': C.next_plan_id(root, dst_q),
@@ -80,7 +81,8 @@ def source_gist(plan: dict) -> str:
     return txt[:CHANGE_MAX] + ('…' if len(txt) > CHANGE_MAX else '')
 
 
-def build_dst_plan(ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace) -> tuple[dict, str, list[str]]:
+def build_dst_plan(ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace,
+                   no_results: bool = False) -> tuple[dict, str, list[str]]:
     src_pid, dst_pid, dst_new, src_q = ctx['src_pid'], ctx['dst_pid'], ctx['dst_new'], ctx['src_q']
     src, dst = ctx['src_plan'], ctx['dst_plan']
     inbox_txt = f'收件匣 {args.inbox} ' if args.inbox else '使用者裁定'
@@ -95,8 +97,10 @@ def build_dst_plan(ctx: dict[str, Any], did: str, date: str, args: argparse.Name
         'change': f'由 {src_pid}（{src_q}）降為本 plan 的敏感性子分析：{source_gist(src)}',
         'expected_keys': list(ctx['out_keys']),
         'executed': bool(ctx['executed']),
-        'execution_note': (f'rows 逐位沿用來源 run（{"、".join(ctx["run_ids"]) or "results.json 無 run_id"}）；本項為歸屬容器，不代表另做了敏感度分析；'
-                           f'原 plan 檔 analysis/plans/{src_pid}.yaml 保留供追溯（{date} {did}）'),
+        'execution_note': (C.results_or(no_results, f'rows 逐位沿用來源 run（{"、".join(ctx["run_ids"]) or "results.json 無 run_id"}）',
+                                       C.NO_RESULTS_BRIEF + '：還沒有 rows 可沿用')
+                           + '；本項為歸屬容器，不代表另做了敏感度分析；'
+                           + f'原 plan 檔 analysis/plans/{src_pid}.yaml 保留供追溯（{date} {did}）'),
     }
     moved: list[dict] = []
     moved_ids: list[str] = []
@@ -121,7 +125,9 @@ def build_dst_plan(ctx: dict[str, Any], did: str, date: str, args: argparse.Name
                C.unchanged_keys_sentence(dst, set(C.PLAN_HEAD_KEYS) | {'robustness'}, dst_pid)]
     amend = (f'本版把 {src_pid}（原 {src_q} 的 active plan）整份降為本 plan 的敏感性子分析 {container_id}（{inbox_txt}；decisions.yaml {did}），以 {dst_pid} 為底建立 '
              f'{dst_new} 並 supersedes {dst_pid}；estimand、primary_model、outputs、既有 robustness、validation、scripts、notes 逐字同 {dst_pid}，數字一律不動。'
-             f'{src_pid} 的結果鍵改掛本 plan（robustness expected_keys），rows 逐位不變；{src_q} 自此沒有 active plan（goals 改 blocked）。'
+             + C.results_or(no_results, f'{src_pid} 的結果鍵改掛本 plan（robustness expected_keys），rows 逐位不變',
+                            C.NO_RESULTS_BRIEF + f'：{src_pid} 還沒有結果鍵可改掛，expected_keys 照它宣告的 outputs 鍵列')
+             + f'；{src_q} 自此沒有 active plan（goals 改 blocked）。'
              f'來源分析換了問題脈絡、由主要結果降為敏感性子分析，屬設計變更：reviewer-methods 設計審、code-review 重審、validate 重判、evaluate result-fit 列為 open item。')
     tj = (f'本版寫於 {dst_pid} 封版之後（{date}）：依{inbox_txt}與 decisions.yaml {did}，只把 {src_pid} 整份降為本 plan 的敏感性子分析（{container_id}'
           + (f'、{"／".join(moved_ids)}' if moved_ids else '') + '）；不改任何方法規格與數字，不改變任何結果的事前性質。')
@@ -201,7 +207,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
     def body(ch: C.Chain) -> None:
         ch.step(1, f'目標 plan 出新版 {dst_new}（追加歸屬容器與來源子分析）、index 標來源 superseded')
-        new_dst, container_id, moved_ids = build_dst_plan(ctx, did, date, args)
+        new_dst, container_id, moved_ids = build_dst_plan(ctx, did, date, args, ch.no_results)
         sealed, diff = C.step_seal_plan(ch, new_dst, dst_pid, None, dst_q)
         ch.summary.update({'dst_hash': sealed.get('content_hash'), 'leaf_diff': diff, 'container_id': container_id, 'moved_ids': moved_ids})
         index_path = root / 'analysis/plans/index.yaml'
@@ -220,28 +226,33 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         if active.get(src_q) == src_pid:
             active.pop(src_q)
         plan_common.save_index(root, index)
+        ch.id_map[src_pid] = dst_new   # 來源 plan 整份併進 dst_new；既有訊息裡的舊 id 要跟著對照
         rc, out = C.run_script('check_plan', root)
-        if rc != 0:
-            raise ChainError(f'check_plan.py（來源 {src_q} 移除 active 後）未通過: {out[-600:]}')
+        ch.gate_check('plan', rc, out)
         ch.after(index_path)
         ch.note(f'index：{src_pid} 標 superseded／replaced_by {dst_new}；active 移除 {src_q}（附錄問題無 active plan 只 WARNING）；{dst_pid} 標 superseded／replaced_by {dst_new}')
-        ch.step(2, 'results.json plan_id retag')
+        ch.step(2, C.retag_step_name(ch.no_results))
         key_map = {k: dst_new for k in ctx['src_keys']}
         key_map.update({k: dst_new for k in C.results_keys_of_plan(root, dst_pid)})
         C.step_retag_results(ch, key_map)
         ch.summary['result_keys'] = list(key_map)
-        ch.step(3, 'validation.yaml 改掛與 fingerprint 重接')
+        carry = ch.policy.carry
+        ch.step(3, f'validation.yaml 改掛與 fingerprint {C.carry_word(carry)}')
         item_map: dict[str, tuple[str | None, str | None]] = {vid: (dst_q, dst_new) for vid in src_vitems}
         item_map.update({vid: (None, dst_new) for vid in dst_vitems})
         v_text = C.read_text(root / 'analysis/validation.yaml') if (root / 'analysis/validation.yaml').is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
-        note = (f'第{nth}次重接（{inbox_txt}／{did}：{src_pid} 整份降為 {dst_new} 的敏感性子分析 {container_id}、{len(key_map)} 鍵 retag、waiver 重登）；'
+        note = (f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：{src_pid} 整份降為 {dst_new} 的敏感性子分析 {container_id}、'
+                + C.results_or(ch.no_results, f'{len(key_map)} 鍵 retag', C.NO_RESULTS_BRIEF)
+                + f'、{C.waiver_clause(ch.waiver_state)}）；'
                 + (f'{"／".join(src_vitems)} 改掛 {dst_q}／{dst_new}，其 primary_results 隨 {did} 由主要結果降為敏感性子分析——鍵仍存在、plan_id 與 item 一致，'
                    f'check_validation 不要求 primary_results 在 outputs，故不改列；' if src_vitems else '')
                 + '本項內容一字未改')
-        header = [f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：{src_pid} 整份降為 {dst_new} 的敏感性子分析 {container_id}）：由 demote_plan.py {VERSION} 執行，',
-                  f'#   本次只重接 fingerprint，沒有任何數值改變（{len(key_map)} 鍵只改 plan_id 字串）；{"／".join(src_vitems) or "（來源無 item）"} 的 sq 改 {dst_q}、plan_id 改 {dst_new}'
-                  f'（primary_results 不改列，理由見各 item 的 reaffirmed note）；{"／".join(dst_vitems) or "（目標無 item）"} 改掛 {dst_new}。',
+        header = [f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：{src_pid} 整份降為 {dst_new} 的敏感性子分析 {container_id}）：由 demote_plan.py {VERSION} 執行，',
+                  '#   ' + C.only_retag_sentence(carry, f'{len(key_map)} 鍵只改 plan_id 字串') + '；'
+                  + C.rehang_clause(ch.policy, src_vitems, f'的 sq 改 {dst_q}、plan_id 改 {dst_new}', f'只改 sq 為 {dst_q}', scope='來源')
+                  + '（primary_results 不改列，理由見各 item 的 reaffirmed note）；'
+                  + C.rehang_clause(ch.policy, dst_vitems, f'改掛 {dst_new}', '不改掛（plan_id 不動）', scope='目標') + '。',
                   f'#   來源分析換了問題脈絡、由主要結果降為敏感性子分析，屬設計變更；設計審、code-review 重審、validate 重判、evaluate result-fit 列為 open item。']
         fps, vinfo = C.step_validation(ch, item_map, note, header)
         ch.summary['fingerprint_old'], ch.summary['fingerprint_new'], ch.summary['validation_items'] = vinfo.get('old') or {}, fps, vinfo['items']
@@ -254,27 +265,32 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         ch.write(p_path, p_new)
         ch.note(f'{src_q}：status 改 blocked、{len(linfo["moved_links"])} 個 links 搬到 {dst_q}；{dst_q}：status_reason 前綴；state 加一行')
         ch.summary['moved_links'] = linfo['moved_links']
-        ch.step(5, 'rerun waiver 重登')
+        # 搬走的 link 動作前就壞掉時，check_coverage 動作後把同一筆改報在目的問題下；登記才認得是既有
+        ch.register_moved_links(linfo['moved_links'], src_q, dst_q)
+        ch.step(5, C.waiver_step_name(ch.waiver_state))
         waiver_rel = C.step_waiver(ch, ctx['waiver'], f'{src_pid} 整份降為 {dst_new} 的敏感性子分析 {container_id}（{inbox_txt}／{did}）：{dst_new} 封版 supersedes {dst_pid}、'
                                    f'{len(key_map)} 鍵 plan_id retag 使 source／results fingerprint 改變；waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         ch.summary['waiver'] = waiver_rel
         ch.step(6, 'check_coverage 快照')
         C.step_coverage(ch, set())
         ch.step(7, f'decisions.yaml append {did}')
+        # 尚無正式結果時這兩行各自是「一行」：理由只由行內第一個子句說出（依序組句，不事後刪改）
+        l3, lk3 = C.SameLine(ch.no_results), C.SameLine(ch.no_results)
         decision = (f'(1) analysis/plans/{dst_new}.yaml 以 {dst_pid} 為底封版、robustness 追加 {container_id}（歸屬容器：expected_keys＝{src_pid} 的 outputs '
                     f'{"／".join(ctx["out_keys"])}、executed {str(ctx["executed"]).lower()}）'
                     + (f'與 {"／".join(moved_ids)}（原 {src_pid} 的 robustness 項逐字複製）' if moved_ids else '')
                     + f'（content_hash {sealed.get("content_hash")}；leaf 差異 {diff["same"]} 同、{len(diff["changed"])} 改、{len(diff["added"])} 增、{len(diff["removed"])} 刪）；'
                     f'index：{dst_pid} 標 superseded／replaced_by {dst_new}、{src_pid} 標 superseded／replaced_by {dst_new}、{src_q} 的 active 移除；'
                     f'analysis/plans/{src_pid}.yaml 不動、保留供追溯\n'
-                    f'(2) analysis/results.json：{len(key_map)} 鍵 plan_id retag 為 {dst_new}（{"／".join(key_map) or "無"}）；rows 逐位元不變\n'
-                    f'(3) analysis/validation.yaml：{"／".join(vinfo["items"]) or "無 item"} 改掛（來源 item → {dst_q}／{dst_new}，primary_results 不改列）；各 item 加 '
-                    f'{vinfo.get("reaffirm_key") or "—"}；fingerprint results {(vinfo.get("old") or {}).get("results", "—")} → {fps["results"]}、'
-                    f'source {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}\n'
+                    '(2) ' + C.results_or(ch.no_results, f'analysis/results.json：{len(key_map)} 鍵 plan_id retag 為 {dst_new}（{"／".join(key_map) or "無"}）；rows 逐位元不變') + '\n'
+                    '(3) ' + C.absent_or(vinfo, f'analysis/validation.yaml：{C.rehang_clause(ch.policy, vinfo["items"], f"改掛（來源 item → {dst_q}／{dst_new}，primary_results 不改列）", f"只改 sq 為 {dst_q}")}；'
+                                         + C.mark_clause(ch.policy, vinfo.get('reaffirm_key') or '—', l3)
+                                         + '；' + C.results_or(ch.no_results, 'fingerprint ' + C.fp_move_text(vinfo.get('old') or {}, fps, carry),
+                                                              C.no_results_fp_text(l3))) + '\n'
                     f'(4) project.yaml：{src_q} status 改 blocked、{len(linfo["moved_links"])} 個 links（{"／".join(linfo["moved_links"]) or "無"}）搬到 {dst_q} links 尾端；'
                     f'{dst_q} status_reason 前綴；其餘欄位逐字不動；state 加一行註解\n'
-                    f'(5) rerun waiver：{waiver_rel or "未重登"}{"，仍是 waived、不是 pass" if waiver_rel else ""}\n'
-                    f'(6) check_coverage：goals id 集合不變、0 tamper\n'
+                    f'(5) rerun waiver：{C.waiver_decision_line(ch.waiver_state, waiver_rel)}\n'
+                    f'(6) check_coverage：{C.coverage_text(ch.summary.get("coverage"), "goals id 集合不變、0 tamper")}\n'
                     f'(7)(8) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；進度圖重畫')
         body_txt = str((ctx['inbox'] or {}).get('body') or '').strip()
         reason_parts = ([f'{inbox_txt.strip()} 原文：「{body_txt}」'] if body_txt else []) + ([args.reason.strip()] if args.reason else [])
@@ -284,8 +300,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         known = (f'(1) {src_pid} 的分析內容換了問題脈絡（{src_q} → {dst_q}）、由主要結果降為敏感性子分析，屬設計變更；{container_id} 只是歸屬容器，不代表另做了敏感度分析\n'
                  f'(2) {src_q} 目前沒有 active plan（goals 改 blocked）；check_plan 對附錄問題只 WARNING、evaluate 對附錄問題不要求覆蓋，不擋關；'
                  f'它若是要保留的問題，須另立 plan，否則裁定 dropped 或註明已併入 {dst_q}\n'
-                 f'(3) validation 重接：results {fps["results"]}／source {fps["source"]}；來源 item 的 primary_results 不改列（check_validation 不要求在 outputs）；'
-                 f'rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
+                 '(3) ' + C.known_fp_text(carry, vinfo.get('old') or {}, fps, lk3) + '；'
+                 + C.results_or(ch.no_results, '來源 item 的 primary_results 不改列（check_validation 不要求在 outputs）；',
+                                '來源 item 的 primary_results 不改列；')
+                 + C.waiver_known_line(ch.waiver_state, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass', lk3) + '\n'
                  f'(4) open item：' + '；'.join(x.format(plan=dst_new, q=dst_q) for x in C.OPEN_ITEMS))
         links = [dst_q, src_q] + [f'results.{k}' for k in ctx['src_keys']] + [f'analysis/plans/{dst_new}.yaml', f'analysis/plans/{src_pid}.yaml',
                  f'analysis/plans/{dst_pid}.yaml'] + ([waiver_rel] if waiver_rel else []) + [log_rel]
@@ -304,17 +322,21 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
     ld = summary.get('leaf_diff') or {}
+    fp_line = C.SameLine(summary.get('no_results'))    # retag 與 fingerprint 同一行：理由只說一次
     lines = [f'=== demote_plan {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
              f'{summary["plan"]}（{summary["src_q"]}）→ {summary["to_plan"]} 的敏感性子分析 {summary.get("container_id")}'
              + (f'（來源自己的子分析接為 {"／".join(summary.get("moved_ids") or [])}）' if summary.get('moved_ids') else '') + f'；目標新版 {summary["dst_new"]}（{summary.get("dst_hash")}）',
              f'預定決策 {summary["decision_id"]}（約 {summary.get("decision_bytes", 0)} bytes）；步驟紀錄 {summary["log"]}',
              f'目標 plan leaf 差異：{ld.get("same")} 同、{len(ld.get("changed") or [])} 改、{len(ld.get("added") or [])} 增、{len(ld.get("removed") or [])} 刪；'
-             f'來源 outputs 鍵：{"、".join(summary.get("out_keys") or [])}；來源 run：{"、".join(summary.get("run_ids") or []) or "無 run_id"}',
-             f'results.json retag {len(summary.get("result_keys") or [])} 鍵；validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛；'
-             f'fingerprint results {fo.get("results", "—")} → {fn.get("results")}、source {fo.get("source", "—")} → {fn.get("source")}',
-             f'搬走 links {len(summary.get("moved_links") or [])} 項；{summary["src_q"]} 改 blocked（無 active plan）；rerun waiver：{summary.get("waiver") or "未重登"}']
+             f'來源 outputs 鍵：{"、".join(summary.get("out_keys") or [])}；'
+             + C.results_or(summary.get('no_results'), f'來源 run：{"、".join(summary.get("run_ids") or []) or "無 run_id"}',
+                            C.NO_RESULTS_BRIEF),
+             C.results_or(summary.get('no_results'), f'results.json retag {len(summary.get("result_keys") or [])} 鍵',
+                          C.no_results_text(fp_line))
+             + f'；validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛；'
+             + C.results_or(summary.get('no_results'), 'fingerprint ' + C.summary_fp_text(summary), C.no_results_fp_text(fp_line)),
+             f'搬走 links {len(summary.get("moved_links") or [])} 項；{summary["src_q"]} 改 blocked（無 active plan）；rerun waiver：' + C.waiver_summary_text(summary)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 

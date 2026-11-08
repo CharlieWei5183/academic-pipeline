@@ -57,6 +57,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     cur = C.plan_supports_of(plan, key)
     op = 'remove' if not under else ('change' if cur else 'add')
     new_pid = C.next_plan_id(root, q)
+    C.require_clean_plans(root, [('來源', pid)])
     return {'key': key, 'under': under, 'cur': cur, 'op': op, 'q': q, 'pid': pid, 'plan': plan, 'new_pid': new_pid,
             'all_keys': C.results_keys_of_plan(root, pid),
             'inbox': C.check_inbox_pending(root, args.inbox), 'waiver': C.waiver_of(root, args.waiver_decision)}
@@ -180,18 +181,20 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         key_map = {k: new_pid for k in ctx['all_keys']}
         C.step_retag_results(ch, key_map)
         ch.summary['result_keys'] = list(key_map)
-        ch.step(4, 'validation.yaml 改掛新版與 fingerprint 重接')
+        carry = ch.policy.carry
+        ch.step(4, f'validation.yaml 改掛新版與 fingerprint {C.carry_word(carry)}')
         v_path = root / 'analysis/validation.yaml'
         item_map = {vid: (None, new_pid) for vid in C.validation_items_by(root, plan_id=pid)}
         v_text = C.read_text(v_path) if v_path.is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
-        note = f'第{nth}次重接（{inbox_txt}／{did}：{what}，{pid} → {new_pid}；{len(key_map)} 鍵 retag、waiver 重登）；本項內容一字未改'
-        header = [f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：{what}，新版 {new_pid}）：由 nest_result.py {VERSION} 執行，',
-                  f'#   本次只重接 fingerprint，沒有任何數值改變（{len(key_map)} 鍵只改 plan_id 字串）。',
-                  f'#   本次改動：{"／".join(item_map) or "無 item"} 改掛新版；各 item 加 reaffirmed 標記；其餘欄位一字未改。supports 只改呈現層級，不是設計變更。']
+        note = f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：{what}，{pid} → {new_pid}；{len(key_map)} 鍵 retag、{C.waiver_clause(ch.waiver_state)}）；本項內容一字未改'
+        header = [f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：{what}，新版 {new_pid}）：由 nest_result.py {VERSION} 執行，',
+                  '#   ' + C.only_retag_sentence(carry, f'{len(key_map)} 鍵只改 plan_id 字串') + '。',
+                  '#   本次改動：' + C.rehang_clause(ch.policy, list(item_map), '改掛新版', '不改掛（只改 sq）', '無 item')
+                  + f'；{C.mark_clause(ch.policy, "reaffirmed 標記")}；其餘欄位一字未改。supports 只改呈現層級，不是設計變更。']
         fps, vinfo = C.step_validation(ch, item_map, note, header)
         ch.summary['fingerprint_old'], ch.summary['fingerprint_new'], ch.summary['validation_items'] = vinfo.get('old') or {}, fps, vinfo['items']
-        ch.step(5, 'rerun waiver 重登')
+        ch.step(5, C.waiver_step_name(ch.waiver_state))
         waiver_rel = C.step_waiver(ch, ctx['waiver'], f'{what}（{inbox_txt}／{did}）：{new_pid} 封版、{len(key_map)} 鍵 plan_id retag 使 source／results fingerprint 改變；'
                                    f'waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         ch.summary['waiver'] = waiver_rel
@@ -203,10 +206,11 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                     f'（content_hash {sealed.get("content_hash")}；leaf 差異 {diff["same"]} 同、{len(diff["changed"])} 改、{len(diff["added"])} 增、{len(diff["removed"])} 刪）；'
                     f'index active 更新、舊版標 superseded／replaced_by\n'
                     f'(3) analysis/results.json：{len(key_map)} 鍵 plan_id retag（{pid} → {new_pid}）；rows 逐位元不變\n'
-                    f'(4) analysis/validation.yaml：{"／".join(vinfo["items"]) or "無 item"} 改掛新版；各 item 加 {vinfo.get("reaffirm_key") or "—"}；'
-                    f'fingerprint results {(vinfo.get("old") or {}).get("results", "—")} → {fps["results"]}、source {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}\n'
-                    f'(5) rerun waiver：{waiver_rel or "未重登"}{"，仍是 waived、不是 pass" if waiver_rel else ""}\n'
-                    f'(6) check_coverage：goals id 集合不變、0 tamper\n'
+                    '(4) ' + C.absent_or(vinfo, f'analysis/validation.yaml：{C.rehang_clause(ch.policy, vinfo["items"], "改掛新版", "不改掛（只改 sq）")}；'
+                                         + f'{C.mark_clause(ch.policy, vinfo.get("reaffirm_key") or "—")}；'
+                                         + 'fingerprint ' + C.fp_move_text(vinfo.get('old') or {}, fps, carry)) + '\n'
+                    f'(5) rerun waiver：{C.waiver_decision_line(ch.waiver_state, waiver_rel)}\n'
+                    f'(6) check_coverage：{C.coverage_text(ch.summary.get("coverage"), "goals id 集合不變、0 tamper")}\n'
                     f'(7)(8) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；進度圖重畫（支撐結果縮排在主結果之下、同一區帶）')
         body_txt = str((ctx['inbox'] or {}).get('body') or '').strip()
         reason_parts = ([f'{inbox_txt.strip()} 原文：「{body_txt}」'] if body_txt else []) + ([args.reason.strip()] if args.reason else [])
@@ -216,8 +220,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         known = (f'(1) {CONSEQUENCE_NOTE}；' + (f'關聯圖把 {key} 縮排在 {under} 之下、同一區帶（{under} 加徽章「支撐 n」），稿件主表只列頂層結果、{key} 歸支撐表'
                                               if under else f'關聯圖把 {key} 回到頂層列、稿件主表重新列入') + '\n'
                  f'(2) 不是設計變更：不換 plan、不換問題脈絡，不觸發 code-review／validate-results／evaluate 重審；'
-                 f'{"／".join(vinfo["items"]) or "無 item"} 改掛新版、判定沿用\n'
-                 f'(3) validation 重接：results {fps["results"]}／source {fps["source"]}；rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
+                 + C.absent_or(vinfo, f'{"／".join(vinfo["items"]) or "無 item"} 改掛新版、判定沿用',
+                               '無 analysis/validation.yaml，沒有 item 要改掛') + '\n'
+                 '(3) ' + C.absent_or(vinfo, C.known_fp_text(carry, vinfo.get('old') or {}, fps), C.VALIDATION_ABSENT_FP)
+                 + '；' + C.waiver_known_line(ch.waiver_state, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass') + '\n'
                  f'(4) open item：' + C.OPEN_ITEMS[0].format(plan=new_pid, q=ctx['q']) + f'（{key} 作為{"支撐" if under else "頂層"}結果是否恰當）')
         links = [ctx['q'], f'results.{key}'] + ([f'results.{under}'] if under else []) + [f'analysis/plans/{new_pid}.yaml', f'analysis/plans/{pid}.yaml'] \
             + ([waiver_rel] if waiver_rel else []) + [log_rel]
@@ -238,7 +244,6 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
     d = summary.get('diff') or {}
     op_zh = {'add': '新增 supports', 'change': '改 supports', 'remove': '移除 supports、拉回頂層'}[summary['op']]
     lines = [f'=== nest_result {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
@@ -247,7 +252,7 @@ def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
              f'新版 {summary["new_pid"]}（{summary.get("hash")}）；{summary.get("how")}；leaf 差異 {d.get("same")} 同、{len(d.get("changed") or [])} 改、{len(d.get("added") or [])} 增、{len(d.get("removed") or [])} 刪',
              f'預定決策 {summary["decision_id"]}（約 {summary.get("decision_bytes", 0)} bytes）；步驟紀錄 {summary["log"]}',
              f'results.json retag {len(summary.get("result_keys") or [])} 鍵；validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛新版',
-             f'fingerprint results {fo.get("results", "—")} → {fn.get("results")}、source {fo.get("source", "—")} → {fn.get("source")}；rerun waiver：{summary.get("waiver") or "未重登"}']
+             'fingerprint ' + C.summary_fp_text(summary) + '；rerun waiver：' + C.waiver_summary_text(summary)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 

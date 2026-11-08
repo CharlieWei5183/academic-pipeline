@@ -219,7 +219,7 @@ def caption_first_sentence(caption: str) -> str:
 def bands_from_ir_nodes(nodes: Iterable[dict]) -> dict[str, str]:
     """關聯圖節點 → {結果鍵: tier}。次要結果不逐鍵建節點，改由聚合節點 meta.keys 展開（跟子分析走）。
 
-    第二棒的 render_progress 已經建好 IR，直接把 `ir['graph']['nodes']` 餵進來即可，不必重建。
+    render_progress 已經建好 IR，直接把 `ir['graph']['nodes']` 餵進來即可，不必重建。
     """
     out: dict[str, str] = {}
     for n in nodes:

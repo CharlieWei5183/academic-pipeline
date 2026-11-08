@@ -350,14 +350,10 @@ def run_apply(root: Path, args: argparse.Namespace, view: dict, rows: list[dict]
         d_path = root / 'decisions.yaml'
         log.file_before(e, d_path)
         entry = build_decision(root, args, view, wrote, out_rel, did, date, log_rel, '改前已備份')
+        cd_base = C.decisions_baseline(root)   # append 之前取：舊條目本來就有的問題不該擋這次動作
         C.append_decision(root, entry, backups)
         log.file_after(e, d_path)
-        rc, cout = C.run_script('check_decisions', d_path, root / 'project.yaml', '--results', root / 'analysis/results.json')
-        if rc != 0:
-            raise ChainError(f'check_decisions.py 失敗: {cout[-500:]}')
-        bad = [ln for ln in cout.splitlines() if ln.startswith('WARNING') and did in ln]
-        if bad:
-            raise ChainError(f'check_decisions.py 對 {did} 有 WARNING: {bad}')
+        C.check_decisions_gate(root, did, cd_base)
         summary['decision_bytes'] = len(C.format_decision(entry).encode('utf-8'))
         e['notes'].append(f'{did} append（{summary["decision_bytes"]} bytes）')
         log.finish(e)
@@ -480,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
     if summary['wrote'].get('zip'):
         print(f'壓縮檔：{Path(summary["wrote"]["zip"]).relative_to(root).as_posix()}')
     print('備份：' + ('、'.join(summary['backups']) or '（無）'))
+    C.print_warnings(summary)   # 既有項目（動作前就有的關卡發現）要看得見；沒有的時候一行都不印
     print(f'結果: 完成；決策 {did}；run log {summary["log"]}')
     return 0
 

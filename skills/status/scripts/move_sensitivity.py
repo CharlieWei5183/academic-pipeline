@@ -58,6 +58,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     stay_keys = [str(k) for k in (item.get('expected_keys') or []) if str(k) not in moved_keys]
     if len(src_plan['robustness']) <= 1 and str(src_plan.get('role')) == 'primary':
         raise ChainError(f'{args.plan} 只有一個 robustness 項目，搬走後 primary plan 會違反「至少一項 robustness」的 plan 契約')
+    C.require_clean_plans(root, [('來源', args.plan), ('目標', args.to_plan)])
     return {'src_q': src_q, 'dst_q': dst_q, 'src_pid': args.plan, 'dst_pid': args.to_plan, 'src_plan': src_plan, 'dst_plan': dst_plan,
             'item': item, 'moved_keys': moved_keys, 'stay_keys': stay_keys, 'src_new': C.next_plan_id(root, src_q),
             'dst_new': C.next_plan_id(root, dst_q), 'inbox': C.check_inbox_pending(root, args.inbox), 'waiver': C.waiver_of(root, args.waiver_decision)}
@@ -137,7 +138,8 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         key_map.update({k: dst_new for k in dst_keys})
         rinfo = C.step_retag_results(ch, key_map)
         ch.summary['result_keys'] = list(key_map)
-        ch.step(3, 'validation.yaml 改掛與 fingerprint 重接')
+        carry = ch.policy.carry
+        ch.step(3, f'validation.yaml 改掛與 fingerprint {C.carry_word(carry)}')
         doc = C.load_yaml(root / 'analysis/validation.yaml') or {}
         item_map: dict[str, tuple[str | None, str | None]] = {}
         for it in (doc.get('items') or []) if isinstance(doc, dict) else []:
@@ -154,13 +156,14 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                 item_map[str(it.get('id'))] = (None, dst_new)
         v_text = C.read_text(root / 'analysis/validation.yaml') if (root / 'analysis/validation.yaml').is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
-        note = (f'第{nth}次重接（{inbox_txt}／{did}：{src_pid} 的 {rid} 搬到 {dst_pid}，兩邊出新版 {src_new}／{dst_new}、{len(key_map)} 鍵 retag、waiver 重登）；本項內容一字未改')
-        header = [f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：{src_pid} 的敏感性子分析 {rid} 搬到 {dst_pid}（新版 {src_new}／{dst_new}，{new_rid}））：由 move_sensitivity.py {VERSION} 執行，',
-                  f'#   本次只重接 fingerprint，沒有任何數值改變（{len(key_map)} 鍵只改 plan_id 字串；跟著搬走的鍵：{"／".join(ctx["moved_keys"]) or "無"}）。',
-                  f'#   本次改動：{"／".join(item_map) or "（無 item）"} 的 plan_id 改掛新版；各 item 加 reaffirmed 標記；其餘欄位一字未改。設計審與四項關卡列為 open item。']
+        note = (f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：{src_pid} 的 {rid} 搬到 {dst_pid}，兩邊出新版 {src_new}／{dst_new}、{len(key_map)} 鍵 retag、{C.waiver_clause(ch.waiver_state)}）；本項內容一字未改')
+        header = [f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：{src_pid} 的敏感性子分析 {rid} 搬到 {dst_pid}（新版 {src_new}／{dst_new}，{new_rid}））：由 move_sensitivity.py {VERSION} 執行，',
+                  '#   ' + C.only_retag_sentence(carry, f'{len(key_map)} 鍵只改 plan_id 字串；跟著搬走的鍵：{"／".join(ctx["moved_keys"]) or "無"}') + '。',
+                  '#   本次改動：' + C.rehang_clause(ch.policy, list(item_map), '的 plan_id 改掛新版', '的 sq 照改、plan_id 不改掛')
+                  + f'；{C.mark_clause(ch.policy, "reaffirmed 標記")}；其餘欄位一字未改。設計審與四項關卡列為 open item。']
         fps, vinfo = C.step_validation(ch, item_map, note, header)
         ch.summary['fingerprint_old'], ch.summary['fingerprint_new'], ch.summary['validation_items'] = vinfo.get('old') or {}, fps, vinfo['items']
-        ch.step(4, 'rerun waiver 重登')
+        ch.step(4, C.waiver_step_name(ch.waiver_state))
         waiver_rel = C.step_waiver(ch, ctx['waiver'], f'{src_pid} 的 {rid} 搬到 {dst_pid}（{inbox_txt}／{did}）：{src_new}／{dst_new} 封版、{len(key_map)} 鍵 plan_id retag 使 '
                                    f'source／results fingerprint 改變；waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         ch.summary['waiver'] = waiver_rel
@@ -172,10 +175,11 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                     f'{sealed_dst.get("content_hash")}；{diff_dst["same"]} 同、{len(diff_dst["changed"])} 改、{len(diff_dst["added"])} 增、{len(diff_dst["removed"])} 刪）；兩邊 outputs 不動；'
                     f'index 兩邊 active 更新、舊版標 superseded／replaced_by\n'
                     f'(2) analysis/results.json：{len(key_map)} 鍵 plan_id retag（{src_pid} → {src_new}、{dst_pid} → {dst_new}；跟著搬走 → {dst_new}：{"／".join(ctx["moved_keys"]) or "無"}）；rows 逐位元不變\n'
-                    f'(3) analysis/validation.yaml：{"／".join(vinfo["items"]) or "無 item"} 改掛新版；各 item 加 {vinfo.get("reaffirm_key") or "—"}；'
-                    f'fingerprint results {(vinfo.get("old") or {}).get("results", "—")} → {fps["results"]}、source {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}\n'
-                    f'(4) rerun waiver：{waiver_rel or "未重登"}{"，仍是 waived、不是 pass" if waiver_rel else ""}\n'
-                    f'(5) check_coverage：goals 不變、0 tamper\n'
+                    '(3) ' + C.absent_or(vinfo, f'analysis/validation.yaml：{C.rehang_clause(ch.policy, vinfo["items"], "改掛新版", "不改掛（只改 sq）")}；'
+                                         + f'{C.mark_clause(ch.policy, vinfo.get("reaffirm_key") or "—")}；'
+                                         + 'fingerprint ' + C.fp_move_text(vinfo.get('old') or {}, fps, carry)) + '\n'
+                    f'(4) rerun waiver：{C.waiver_decision_line(ch.waiver_state, waiver_rel)}\n'
+                    f'(5) check_coverage：{C.coverage_text(ch.summary.get("coverage"), "goals 不變、0 tamper")}\n'
                     f'(6)(7) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；進度圖重畫')
         body_txt = str((ctx['inbox'] or {}).get('body') or '').strip()
         reason_parts = ([f'{inbox_txt.strip()} 原文：「{body_txt}」'] if body_txt else []) + ([args.reason.strip()] if args.reason else [])
@@ -184,7 +188,8 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         reason_parts.append(f'只改歸屬與 metadata，數字一位元未動；由 move_sensitivity.py {VERSION} 確定性執行')
         known = (f'(1) 該子分析換了所屬 plan 的問題脈絡，是否適合由 reviewer-methods 設計審判定\n'
                  + (f'(2) 留在 {src_new} 的鍵 {"／".join(ctx["stay_keys"])} 仍是該 plan 的 outputs；{dst_new} 的 {new_rid} 以 evidence_owned_by／evidence_keys 指回，不重複登錄\n' if ctx['stay_keys'] else '(2) 沒有結果鍵留在來源\n')
-                 + f'(3) validation 重接：results {fps["results"]}／source {fps["source"]}；rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
+                 + '(3) ' + C.absent_or(vinfo, C.known_fp_text(carry, vinfo.get('old') or {}, fps), C.VALIDATION_ABSENT_FP)
+                 + '；' + C.waiver_known_line(ch.waiver_state, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass') + '\n'
                  f'(4) open item：' + '；'.join(x.format(plan=dst_new, q=ctx['dst_q']) for x in C.OPEN_ITEMS))
         links = [ctx['dst_q'], ctx['src_q']] + [f'results.{k}' for k in ctx['moved_keys']] + [f'analysis/plans/{src_new}.yaml', f'analysis/plans/{dst_new}.yaml',
                  f'analysis/plans/{src_pid}.yaml', f'analysis/plans/{dst_pid}.yaml'] + ([waiver_rel] if waiver_rel else []) + [log_rel]
@@ -202,14 +207,13 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
     lines = [f'=== move_sensitivity {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
              f'{summary["plan"]} {summary["item"]} → {summary["to_plan"]}（{summary.get("new_rid")}）；新版 {summary["src_new"]}（{summary.get("src_hash")}）／{summary["dst_new"]}（{summary.get("dst_hash")}）',
              f'預定決策 {summary["decision_id"]}（約 {summary.get("decision_bytes", 0)} bytes）；步驟紀錄 {summary["log"]}',
              f'跟著搬走的鍵：{"、".join(summary.get("moved_keys") or []) or "無"}；留在來源的鍵：{"、".join(summary.get("stay_keys") or []) or "無"}',
              f'results.json retag {len(summary.get("result_keys") or [])} 鍵；validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛；'
-             f'fingerprint results {fo.get("results", "—")} → {fn.get("results")}、source {fo.get("source", "—")} → {fn.get("source")}',
-             f'rerun waiver：{summary.get("waiver") or "未重登"}']
+             'fingerprint ' + C.summary_fp_text(summary),
+             'rerun waiver：' + C.waiver_summary_text(summary)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 

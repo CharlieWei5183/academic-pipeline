@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shlex
 import sys
 from pathlib import Path
@@ -40,6 +39,7 @@ except ImportError:
     sys.exit(2)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ssot_text_format as TF  # noqa: E402  收件匣的序列項定位（0.29.0：縮排從檔案量）
 from progress_paths import ensure_progress_layout  # noqa: E402  進度頁面檔案的落點（0.24.0）
 from progress_server import (  # noqa: E402  同目錄的收件匣讀寫函式
     ACTION_KINDS, ID_RE, INBOX_NAME, KINDS, STATUSES, RootLock, action_command, inbox_items, ir_node_ids, load_inbox, now_iso,
@@ -98,26 +98,21 @@ def list_items(items: list[dict], root: Path | None = None) -> None:
     print(f'pending {counts["pending"]}／done {counts["done"]}／dismissed {counts["dismissed"]}')
 
 
-def _set_field(block_lines: list[str], field: str, value: str) -> bool:
-    """在該筆的行裡把 `    <field>: …` 換成新值；找不到該行回 False。"""
-    pat = re.compile(rf'^(\s{{4}}{re.escape(field)}:\s*).*$')
-    for i, line in enumerate(block_lines):
-        m = pat.match(line)
-        if m:
-            block_lines[i] = f'{m.group(1)}{yaml_scalar(value)}'
-            return True
-    return False
+def _set_raw_field(block_lines: list[str], field: str, raw: str, field_ind: int) -> bool:
+    """把該筆的 `<縮排><field>: …` 換成 raw（照給的原文，payload 那行是 JSON 物件，不能包成字串）；找不到該行回 False。
+
+    欄位縮排由呼叫端從檔案量，不寫死；欄位寫在 dash 行上（`- id: …` 的第一欄）也認得。
+    """
+    i = TF.item_field(block_lines, 0, len(block_lines), field, field_ind)
+    if i < 0:
+        return False
+    block_lines[i] = TF.replace_value(block_lines[i], raw)
+    return True
 
 
-def _set_raw_field(block_lines: list[str], field: str, raw: str) -> bool:
-    """同 _set_field，但值照給（payload 那行是 JSON 物件，不能包成字串）。"""
-    pat = re.compile(rf'^(\s{{4}}{re.escape(field)}:\s*).*$')
-    for i, line in enumerate(block_lines):
-        m = pat.match(line)
-        if m:
-            block_lines[i] = f'{m.group(1)}{raw}'
-            return True
-    return False
+def _set_field(block_lines: list[str], field: str, value: str, field_ind: int) -> bool:
+    """同 _set_raw_field，但值先包成 YAML 純量。"""
+    return _set_raw_field(block_lines, field, yaml_scalar(value), field_ind)
 
 
 def _rewrite_item(root: Path, item_id: str, fields: dict, raw: dict | None = None) -> tuple[bool, str]:
@@ -134,28 +129,30 @@ def _rewrite_item(root: Path, item_id: str, fields: dict, raw: dict | None = Non
         if not any(str(it.get('id') or '') == item_id for it in items):
             return False, f'找不到 {item_id}'
         lines = text.split('\n')
-        # 找該筆的 block：從 `  - id: "<id>"`（或未加引號）到下一個 `  - id:` 之前
+        # 找該筆的 block：`items:` 底下的序列項，dash 縮排與欄位縮排都從檔案量（不縮排的序列也認、`id` 不必是第一欄）
+        items_at = TF.top_key(lines, 'items')
+        if items_at < 0:
+            return False, f'{INBOX_NAME} 找不到 items: 清單'
+        hi = TF.key_block_end(lines, items_at, 0)
+        starts, _dash = TF.seq_starts(lines, items_at, 0, hi)
         start = end = -1
-        head = re.compile(r'^\s{2}-\s+id:\s*(.*?)\s*$')
-        for i, line in enumerate(lines):
-            m = head.match(line)
-            if m:
-                if start >= 0 and end < 0:
-                    end = i
-                if m.group(1).strip('"\'') == item_id and start < 0:
-                    start = i
+        for k, st in enumerate(starts):
+            stop = starts[k + 1] if k + 1 < len(starts) else hi
+            if TF.item_id(lines, st, stop) == item_id:
+                start, end = st, stop
+                break
         if start < 0:
-            return False, f'找不到 {item_id} 的文字區塊（檔案可能不是 progress_server.py 寫的格式）'
-        if end < 0:
-            end = len(lines)
+            return False, f'找不到 {item_id} 的文字區塊（items: 的項目可能寫成流式集合）'
+        field_ind = TF.item_field_indent(lines, start, end)
         block = lines[start:end]
         for fld, val in fields.items():
-            ok = _set_raw_field(block, fld, raw[fld]) if fld in raw else _set_field(block, fld, val)
+            ok = (_set_raw_field(block, fld, raw[fld], field_ind) if fld in raw
+                  else _set_field(block, fld, val, field_ind))
             if not ok:
-                # 該筆缺這一行 → 在 block 末（去掉尾端空行）補一行
+                # 該筆缺這一行 → 在 block 末（去掉尾端空行）補一行，縮排跟著該筆既有欄位
                 while block and not block[-1].strip():
                     block.pop()
-                block.append(f'    {fld}: {raw[fld] if fld in raw else yaml_scalar(val)}')
+                block.append(f'{" " * field_ind}{fld}: {raw[fld] if fld in raw else yaml_scalar(val)}')
         new_text = '\n'.join(lines[:start] + block + lines[end:])
         # 驗證：只有該筆的這幾個欄位改變
         try:

@@ -29,6 +29,7 @@ metadata:
    <root>/
    ├── project.yaml
    ├── decisions.yaml
+   ├── GLOSSARY.md             # 術語表：縮寫、變數、方法、編號對照表（status/scripts/init_glossary.py 依範本建立）
    ├── progress/               # 進度頁面的現用檔（0.24.0 起集中在這裡；落點見 status/scripts/progress_paths.py）
    │   ├── DECISIONS-TIMELINE.md   # 自動產生（status/scripts/render_decisions_timeline.py），不要手動編輯
    │   ├── PROGRESS.ir.json        # 自動產生（status/scripts/render_progress.py 的 IR），不要手動編輯
@@ -78,7 +79,14 @@ metadata:
    decisions: []
    ```
 6. **生成 project.yaml**：以 `references/project-template.yaml` 為模板，保留 `pipeline.version: 0.7.3`。建立 goals 快照與 glossary。
-7. **收尾與路由**：摘要 SQ 與拆解審結果；下一站固定為 **methodology-router**，其後才依 route 走 `integrity-check (prestudy) → study-design → data-audit`。不得在 v0.7 新專案中直接跳到正式 analyze-data。
+7. **建立術語表**：`GLOSSARY.md` 是縮寫、變數、方法與問題編號「是什麼意思」的唯一落點；中英譯名另登在 `project.yaml` 的 `glossary`，兩邊不重複寫。依範本建立：
+
+   ```bash
+   python3 <plugin>/skills/status/scripts/init_glossary.py <root> --apply --reason "project-init 建立專案時一併建立"
+   ```
+
+   建出來的縮寫、變數、方法三段只有表頭，往後由 study-design、interpret-results 與 write-manuscript 用到新名稱時逐列補上；編號對照表則依 goals 先把編號填好。已經有編號列、或已經有「編號對照表」一節的專案這支不會動它，重跑是安全的。
+8. **收尾與路由**：摘要 SQ 與拆解審結果；下一站固定為 **methodology-router**，其後才依 route 走 `integrity-check (prestudy) → study-design → data-audit`。不得在 v0.7 新專案中直接跳到正式 analyze-data。
 
 ## 規則
 
