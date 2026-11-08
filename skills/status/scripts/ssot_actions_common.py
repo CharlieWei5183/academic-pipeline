@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import atexit
+import collections
 import copy
 import datetime as dt
 import hashlib
@@ -17,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 try:
     import yaml
@@ -29,6 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import progress_paths as PL  # noqa: E402  進度頁面與備份的落點（0.24.0）
+import ssot_text_format as TF  # noqa: E402  SSOT 檔的文字層定位（0.29.0：縮排與排版都從檔案本身量）
 
 PLUGIN_ROOT = SCRIPT_DIR.parents[2]
 LAYOUT_VERSION = PL.VERSION   # 0.24.0：progress/ 與 backups/ 版面
@@ -59,8 +62,400 @@ def batch_step() -> bool:
     return os.environ.get(BATCH_STEP_ENV, '') == '1'
 
 
-class ChainError(Exception):
-    """任一步失敗：訊息即印給使用者的原因。"""
+# 任一步失敗：訊息即印給使用者的原因。類別本體定義在 ssot_text_format（文字層 helper 也要丟它，避免雙向 import）
+ChainError = TF.ChainError
+
+# 本次動作鏈收集到的 WARNING。`Chain` 開場清空、收場放進 summary['warnings']，再由各動作的摘要印到 stdout；
+# 只埋在 reviews/*.json 的步驟紀錄裡的話，使用者在畫面上看不到。
+_WARN_SINK: list[str] = []
+
+
+def warn(msg: str) -> None:
+    """記一筆 WARNING；拿不到 Chain 的純文字 helper 也能用。"""
+    line = msg if msg.startswith('WARNING') else f'WARNING {msg}'
+    if line not in _WARN_SINK:
+        _WARN_SINK.append(line)
+
+
+def print_warnings(summary: dict[str, Any]) -> None:
+    """把這條鏈的 WARNING 印在摘要最後（不受摘要行數截斷影響）。
+
+    不走 `Chain` 的動作（set_tier／set_figure_role／package_edit 等）沒有 summary['warnings']，
+    從 `_WARN_SINK` 補上；兩邊都空的時候一行都不印，輸出與沒有這段邏輯時相同。
+    """
+    lines = list(summary.get('warnings') or [])
+    lines += [line for line in _WARN_SINK if line not in lines]
+    for line in lines:
+        print(line)
+
+
+# 動作前就已經存在的關卡發現（blocker、TAMPER、關卡本身當掉）。動作鏈只擋這次新增的，既有的照實呈現：
+# 這裡收一份，由摘要印到 stdout（dry-run 的步驟紀錄會跟工作區一起刪掉，只靠 reviews/*.json 看不到）、
+# 由 append_decision 補進決策的 known_consequences。乾淨專案這份是空的 → 輸出與沒有這段邏輯時逐位元相同。
+_EXISTING_SINK: list[tuple[str, bool, str]] = []        # (關卡標籤, gone, 原文)
+_EXISTING_SEEN: dict[tuple[str, bool, str], int] = {}   # (腳本, gone, 正規化後) → 已記筆數
+_EXISTING_KIND = {False: '既有', True: '動作前有、動作後沒有'}
+# 兩類既有項目在決策 known_consequences 裡的開頭。gone 那類不能寫成「與本次動作無關」——它的意思正好
+# 相反：動作後關卡不再回報這一筆，有可能就是這次動作改掉的，要請使用者確認。
+_EXISTING_HEAD = {
+    False: ('(既有項目) 本動作前全專案關卡就已回報、與本次動作無關而仍在的項目共 {n} 筆；'
+            '動作鏈只擋本次新增的，既有項目不擋、照實列出（逐筆原文見本動作的步驟紀錄）：'),
+    True: ('(既有項目) 動作前全專案關卡有回報、動作後沒有回報的項目共 {n} 筆；'
+           '本次動作後這些項目不再回報，請確認是不是這次動作改掉的：'),
+}
+
+
+def gate_script(label: str) -> str:
+    """關卡標籤 → 腳本名。同一支腳本的不同參數算同一支（check_plan.py 的三種參數都是它）。"""
+    return label.split()[0]
+
+
+def note_existing(label: str, texts: list[str], gone: bool = False) -> int:
+    """記既有項目（gone=True：動作前有、動作後沒有），回這次真的新記了幾筆。
+
+    同一支腳本的同一筆只記一次：一條鏈裡同一支關卡會被不同參數、或因為封兩次版而各跑一遍，報的是
+    同一筆，三處呈現（stdout、known_consequences、步驟紀錄）都只該出現一次。真正重複的訊息
+    （同一次呼叫裡兩行相同）仍按 multiset 保留筆數，所以比的是「本次筆數」與「已記筆數」。
+    呈現用原文（`Finding.raw`）而不是正規化後的字串：讀的人要看得到是哪個指紋、哪個日期。
+    WARNING 行帶序號：`_WARN_SINK` 會去重，同一筆既有項目出現兩次（multiset）時沒有序號會被吃掉一筆。
+    """
+    counts = collections.Counter(str(t) for t in texts)
+    added = 0
+    for text in texts:
+        key = (gate_script(label), gone, str(text))
+        seen = _EXISTING_SEEN.get(key, 0)
+        if seen >= counts[str(text)]:
+            continue
+        _EXISTING_SEEN[key] = seen + 1
+        raw = getattr(text, 'raw', '') or str(text)
+        _EXISTING_SINK.append((label, gone, raw))
+        warn(f'既有項目 #{len(_EXISTING_SINK)}：{label}（{_EXISTING_KIND[gone]}）{raw}')
+        added += 1
+    return added
+
+
+def existing_consequences() -> str:
+    """既有項目寫進決策 known_consequences 的那一段；沒有既有項目就回空字串。
+
+    分兩段：既有且仍在的（與本次動作無關），與動作前有、動作後沒有的（要使用者確認）。
+    """
+    blocks: list[str] = []
+    for gone in (False, True):
+        rows = [f'{label}（{_EXISTING_KIND[gone]}）{text}' for label, g, text in _EXISTING_SINK if g == gone]
+        if rows:
+            blocks.append(_EXISTING_HEAD[gone].format(n=len(rows)) + '\n'
+                          + '\n'.join(f'    {i}. {t}' for i, t in enumerate(rows, 1)))
+    return '\n'.join(blocks)
+
+
+# ---------- 全專案關卡：動作前後各查一次，只擋這次新增的 ----------
+
+_GATE_FP_RE = re.compile(r'\b[0-9a-f]{12,64}\b')
+_GATE_DATE_RE = re.compile(r'\b\d{4}-\d{2}-\d{2}\b')
+
+
+_GATE_TRACEBACK = 'Traceback (most recent call last)'
+
+
+def normalize_finding(line: str) -> str:
+    """關卡訊息正規化：指紋與日期每次動作都會變，不遮掉就無法判斷「是不是同一筆」。"""
+    return _GATE_DATE_RE.sub('<DATE>', _GATE_FP_RE.sub('<FP>', line.rstrip()))
+
+
+class Finding(str):
+    """關卡的一筆發現。字串本體是正規化後的形式（比對用），`raw` 留當次輸出的原行（呈現用）。
+
+    是 `str` 的子類而不是另一個型別：`in`／`remove`／`Counter`／`join`／JSON 序列化全部照舊可用，
+    比對一律落在正規化形式上，只有要印給人看的時候才取 `raw`。
+    """
+
+    raw: str
+
+    def __new__(cls, norm: str, raw: str | None = None) -> 'Finding':
+        obj = super().__new__(cls, norm)
+        obj.raw = norm if raw is None else raw
+        return obj
+
+
+def gate_findings(rc: int, out: str) -> list[Finding]:
+    """關卡輸出 → 發現清單（multiset，重複的筆數要留著）。
+
+    關卡本身當掉記成一筆 `CRASH rc=<n>: <末行>`——baseline 有同一筆才不算新增，不能當沒事。
+    兩種當掉都算：一行 BLOCKER 都沒有而 rc != 0，以及輸出裡有 traceback（`run_cmd` 把 stderr 併進
+    輸出，所以印了幾行 BLOCKER 才丟 traceback 時那幾行還在；那不代表關卡跑完了）。
+    """
+    rows = [Finding(normalize_finding(ln), ln.rstrip()) for ln in out.splitlines() if ln.startswith('BLOCKER')]
+    if _GATE_TRACEBACK in out or (not rows and rc != 0):
+        tail = next((ln.strip() for ln in reversed(out.splitlines()) if ln.strip()), '')
+        crash = f'CRASH rc={rc}: {tail}'
+        rows.append(Finding(normalize_finding(crash), crash))
+    return rows
+
+
+def findings_text(rows: list[str]) -> str:
+    """中止訊息裡的發現清單：給人讀的一律原文，不印正規化後的 `<FP>`／`<DATE>`。
+
+    `rows` 可能混進沒有 `raw` 的純 `str`（別處的呼叫端），所以取 `raw` 要兜底。
+    """
+    return ' ｜ '.join(getattr(x, 'raw', '') or str(x) for x in rows)[:800]
+
+
+def map_ids(text: str, id_map: dict[str, str]) -> str:
+    """把訊息裡的舊 id 換成本次動作後的新 id：同一個既有問題不會因為 id 變了就被當成新增。
+
+    完整 token 比對（`SQ2` 不得改到 `SQ2-v1`、`SQ2_foo`，但 `SQ2.question` 要改到），長的 key 先比。
+    前後用 lookaround 而不是 `\\b`——`-` 與 `.` 在 `\\b` 底下都是邊界，會把 `SQ2-v1` 改成 `AQ7-v1`。
+    """
+    keys = sorted((k for k in id_map if k), key=len, reverse=True)
+    if not keys:
+        return text
+    pat = re.compile(r'(?<![0-9A-Za-z_-])(' + '|'.join(re.escape(k) for k in keys) + r')(?![0-9A-Za-z_-])')
+    return pat.sub(lambda m: id_map[m.group(1)], text)
+
+
+RESULTS_LINK = 'results:'        # goals links 指向結果鍵的前綴；check_coverage 只對這種 link 比鍵
+
+
+class MovedLink(NamedTuple):
+    """本動作把某個結果鍵的 link 由來源問題搬到目的問題（`move_plan`／`demote_plan` 搬 links 那一步）。
+
+    那條 link 動作前就壞掉時（結果檔沒有那個鍵，或連結果檔都還沒有），check_coverage 動作前把它報在
+    來源問題下、動作後報在目的問題下。沒有這份登記就對不到同一筆，會被當成本次新增而中止——同
+    `reassign_question`／`promote_question` 用 `id_map` 認既有問題的道理。
+    """
+
+    key: str
+    src_q: str
+    dst_q: str
+
+
+_FINDING_QID = re.compile(r'^[A-Z]+ (?P<qid>[^\s:]+): ')
+
+
+def moved_link_forms(item: str, moved: list[MovedLink]) -> list[str]:
+    """動作前掛在來源問題下、又提到隨本動作搬走的那個結果鍵的發現，換成掛在目的問題下的同一句。
+
+    判準刻意窄，只認本動作真的搬走的那一筆：發現開頭掛的問題 id 要**恰好等於**來源問題，句子要帶那個
+    鍵的引號形式（check_coverage 的 `無鍵 "<鍵>"` 與 `對不到 "<鍵>"` 都這樣寫）。所以沒搬走的 link、
+    別的問題、以及開頭掛 plan id／item id 的別的關卡訊息，一律換不到。
+    """
+    out: list[str] = []
+    m = _FINDING_QID.match(item)
+    if not m:
+        return out
+    for mv in moved:
+        if m.group('qid') != mv.src_q or f'"{mv.key}"' not in item:
+            continue
+        form = item[:m.start('qid')] + mv.dst_q + item[m.end('qid'):]
+        if form != item and form not in out:
+            out.append(form)
+    return out
+
+
+def diff_findings(base: list[str], now: list[str], id_map: dict[str, str],
+                  moved: list[MovedLink] | None = None) -> tuple[list[str], list[str], list[str]]:
+    """比 multiset，回 (新增, 既有且仍在, 動作前有動作後沒有)。
+
+    baseline 每筆保留三種形式（套 id_map 後、原文、再把隨本動作搬走的 link 換到目的問題），動作後
+    任一形式對得上就消耗掉這筆（舊版 plan 仍在報的訊息用原文形式對得上）。動作後剩下的就是新增。
+    kept 取動作後那一筆、gone 取 baseline 那一筆：呈現時兩邊的原文各自對得上自己的時點。
+    """
+    pool, kept, gone = list(now), [], []
+    for item in base:
+        mapped = map_ids(item, id_map)
+        for form in (mapped, item, *moved_link_forms(mapped, moved or [])):
+            if form in pool:
+                kept.append(pool.pop(pool.index(form)))
+                break
+        else:
+            gone.append(item)
+    return pool, kept, gone
+
+
+def coverage_argv(root: Path) -> list[Any]:
+    """check_coverage 的參數只在這裡組：baseline 與動作後必須用完全一樣的參數，否則比對沒有意義。
+
+    results.json 是**位置參數**，不能照 `decisions_argv` 的「檔案存在才傳」辦——少傳一個，bib 就被
+    當成 results，check_coverage 直接 usage exit 2。所以一律傳專案裡那個路徑，檔案不存在也照傳：
+    `check_coverage.py` 自己認得「結果檔不存在」這件事，不丟 traceback，link 訊息也照實說檔案不在
+    （不會寫成「無鍵」）。前後都是同一個路徑，比對仍成立。
+    """
+    argv: list[Any] = [root / 'project.yaml', root / RESULTS_REL, empty_bib(root),
+                       '--snapshot', root / 'evaluations/goals-snapshot.json']
+    if (root / 'evaluations').is_dir():
+        argv += ['--history', root / 'evaluations']
+    return argv
+
+
+def decisions_argv(root: Path) -> list[Any]:
+    argv: list[Any] = [root / 'decisions.yaml', root / 'project.yaml']
+    if (root / 'analysis/results.json').is_file():
+        argv += ['--results', root / 'analysis/results.json']
+    return argv
+
+
+# 關卡 key → 腳本與參數。`plan_sq`（`check_plan --sq <目標問題> --require-confirmed`）不另跑 baseline：
+# 目標問題在動作前可能還不存在，直接沿用 `plan` 那一份。它也不記既有項目——`--sq` 只查那一題，別題的
+# 既有發現在它的輸出裡本來就不會出現，記下來會變成不實的「動作前有、動作後沒有」。
+GATE_LABEL = {'plan': 'check_plan.py', 'plan_sq': 'check_plan.py --sq --require-confirmed',
+              'plan_results': 'check_plan.py --require-confirmed --results', 'validation': 'check_validation.py',
+              'coverage': 'check_coverage.py', 'decisions': 'check_decisions.py'}
+
+
+def gate_cmd(root: Path, key: str) -> list[Any]:
+    if key == 'plan':
+        return ['check_plan', root]
+    if key == 'plan_results':
+        # `--results` 指到不存在的檔會變成一筆 `BLOCKER 找不到 results`，動作前後都有、等於這個關卡
+        # 沒在看。檔案存在才傳（同 `decisions_argv`）；沒有結果可比時就只驗 plan 本身。
+        if (root / RESULTS_REL).is_file():
+            return ['check_plan', root, '--require-confirmed', '--results', RESULTS_REL]
+        return ['check_plan', root, '--require-confirmed']
+    if key == 'validation':
+        return ['check_validation', root]
+    if key == 'coverage':
+        return ['check_coverage', *coverage_argv(root)]
+    if key == 'decisions':
+        return ['check_decisions', *decisions_argv(root)]
+    raise ChainError(f'未知的全專案關卡 {key}')
+
+
+def run_gate(root: Path, key: str) -> tuple[list[str], str]:
+    """跑一個全專案關卡（唯讀），回 (正規化後的發現清單, 原始輸出)。"""
+    cmd = gate_cmd(root, key)
+    rc, out = run_script(str(cmd[0]), *cmd[1:])
+    return gate_findings(rc, out), out
+
+
+def decisions_baseline(root: Path) -> list[str]:
+    """append 之前的 check_decisions 基準：舊條目本來就有的問題不該擋這次動作。
+
+    `step_decision` 與 set_tier／set_figure_role／package_edit／build_submission_package 共用這一支。
+    """
+    return run_gate(root, 'decisions')[0]
+
+
+def check_decisions_gate(root: Path, did: str, base: list[str]) -> None:
+    """append 之後的判準：只有本次新增的才擋；「WARNING 含本次 D#」照舊一律擋。"""
+    findings, out = run_gate(root, 'decisions')
+    new, kept, gone = diff_findings(base, findings, {})
+    note_existing(GATE_LABEL['decisions'], kept)
+    note_existing(GATE_LABEL['decisions'], gone, gone=True)
+    if new:
+        raise ChainError(f'check_decisions.py 本次新增 {len(new)} 筆（append 前沒有）：' + findings_text(new))
+    bad = [ln for ln in out.splitlines() if ln.startswith('WARNING') and did in ln]
+    if bad:
+        raise ChainError(f'check_decisions.py 對 {did} 有 WARNING: {bad}')
+
+
+def multiset_minus(items: list[str], remove: list[str]) -> list[str]:
+    """multiset 相減：既有 1 筆、動作後 2 筆，多的那筆才算新增。"""
+    pool = list(items)
+    for one in remove:
+        if one in pool:
+            pool.remove(one)
+    return pool
+
+
+# 每支動作鏈實際走到的全專案關卡。baseline 只跑這些；`reorder_questions` 不出新 plan、不碰 results.json，
+# 所以沒有 check_plan 那兩關。表漏列會讓 `Chain.gate_check` 直接中止（寧可吵，不要靜默變回嚴格）。
+DEFAULT_CHAIN_GATES = ('plan', 'plan_results', 'validation', 'coverage')
+CHAIN_GATES: dict[str, tuple[str, ...]] = {'reorder_questions': ('validation', 'coverage')}
+# 只有 check_coverage 的發現掛在問題 id 下、而且會引用 goals link 的結果鍵，所以只有它吃
+# `MovedLink` 對照。check_plan 掛的是 plan id、check_validation 掛的是 item id、check_decisions 掛
+# 的是 D#，給它們「換問題」的對照等於放寬到看不懂的地方，一律不給。
+MOVED_LINK_GATES = ('coverage',)
+
+
+def moved_for_gate(key: str, moved: list[MovedLink]) -> list[MovedLink]:
+    """這個關卡要不要吃「隨本動作搬走的 link」對照：只有 `MOVED_LINK_GATES` 列的才吃。"""
+    return list(moved) if key in MOVED_LINK_GATES else []
+
+
+# ---------- TAMPER ----------
+
+# check_coverage 比對的欄位（來源 check_coverage.py，兩邊不要各寫一份）
+COVERAGE_FIELDS = ('question', 'success_criteria', 'evidence', 'why')
+_TAMPER_RE = re.compile(r'^TAMPER (?P<id>[^\s:.]+)(?:\.(?P<field>[^\s:]+)(?=:)|: (?P<kind>新增|被移除))')
+
+
+def tamper_keys(out: str) -> list[str]:
+    """TAMPER 行 → 鍵（`<id>.<field>`、`<id>: 新增`、`<id>: 被移除`）。
+
+    用鍵不用全文：欄位改動的全文帶著新舊值，動作一旦改了別的東西，同一筆既有 TAMPER 的全文就不一樣了。
+    鍵用 regex 取，不用「切掉第一個全形括號之後」——問題敘述本身就可能含全形括號。
+    """
+    keys: list[str] = []
+    for line in out.splitlines():
+        m = _TAMPER_RE.match(line)
+        if not m:
+            continue
+        keys.append(f'{m.group("id")}.{m.group("field")}' if m.group('field') else f'{m.group("id")}: {m.group("kind")}')
+    return keys
+
+
+def snapshot_items(path: Path) -> tuple[list[dict], list[dict]]:
+    """goals 快照 → (sub_questions, appendix_questions)。舊的裸 list 快照當成只有 sub_questions。"""
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return [], []
+    if isinstance(raw, dict):
+        lists = (raw.get('sub_questions') or [], raw.get('appendix_questions') or [])
+    elif isinstance(raw, list):
+        lists = (raw, [])
+    else:
+        return [], []
+    return ([x for x in lists[0] if isinstance(x, dict)], [x for x in lists[1] if isinstance(x, dict)])
+
+
+def merge_snapshot(s0: tuple[list[dict], list[dict]], g0: tuple[list[dict], list[dict]],
+                   g1: tuple[list[dict], list[dict]], id_map: dict[str, str]) -> dict[str, list[dict]]:
+    """快照三方合併：只把本次動作的效果套進快照，既有的未確認改動（TAMPER）留在快照裡。
+
+    `--update-snapshot` 會把整份 goals 寫進快照，等於替使用者確認了動作前就已經存在、還沒確認的改動。
+    S0＝動作前快照，G0＝動作前 goals，G1＝動作後 goals。
+    """
+    by_id = {str(x.get('id')): x for lst in g0 for x in lst}
+    g1_by = [{str(x.get('id')): x for x in lst} for lst in g1]
+    s0_by = {str(x.get('id')): x for lst in s0 for x in lst}
+    rev = {v: k for k, v in id_map.items()}
+    fwd = {id_map.get(sid, sid): sid for sid in s0_by}        # 快照 id → 動作後該長成的 id
+    out: list[list[dict]] = [[], []]
+    for i, lst in enumerate(g1):
+        for item in lst:
+            nid = str(item.get('id'))
+            sid = fwd.get(nid)
+            if sid is None:
+                # 快照裡沒有對應項目：來源 id 在 G0 裡＝既有的「新增」（不放進快照，TAMPER 留著）；
+                # 不在 G0 裡＝本次動作新增的，放進快照。
+                if rev.get(nid, nid) not in by_id:
+                    out[i].append(dict(item))
+                continue
+            merged, old, snap = dict(item), by_id.get(sid), s0_by[sid]
+            for f in COVERAGE_FIELDS:
+                if old is not None and item.get(f) != old.get(f):
+                    continue          # 本次動作改的欄位：採動作後的值
+                if f in snap:
+                    merged[f] = snap[f]
+                else:
+                    merged.pop(f, None)
+            merged['id'] = nid
+            out[i].append(merged)
+    done = {str(x.get('id')) for lst in out for x in lst}
+    for i, lst in enumerate(s0):      # 既有的「被移除」（S0 有、G0 也沒有）原樣保留
+        for item in lst:
+            sid = str(item.get('id'))
+            if id_map.get(sid, sid) in done or sid in by_id:
+                continue
+            out[i].append(dict(item))
+    return {'sub_questions': out[0], 'appendix_questions': out[1]}
+
+
+def write_snapshot(path: Path, doc: dict[str, list[dict]]) -> None:
+    """寫出格式與 check_coverage 的 --update-snapshot 相同。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
 
 
 def today() -> str:
@@ -119,17 +514,61 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding='utf-8')
 
 
+def file_newline(path: Path) -> str:
+    """既有檔案用的換行：整份都是 CRLF 回 CRLF，其餘（含不存在、沒有換行）回 LF。"""
+    if not path.is_file():
+        return '\n'
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return '\n'
+    crlf = raw.count(b'\r\n')
+    return '\r\n' if crlf and crlf == raw.count(b'\n') else '\n'
+
+
 def write_text(path: Path, text: str) -> None:
+    """沿用該檔原本的換行：`read_text` 讀進來時 CRLF 已被轉成 LF，寫回時換回去，
+    CRLF 的檔不會只因為被動作改過一行就整份變成 LF。"""
+    nl = file_newline(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding='utf-8', newline='\n')
+    path.write_text(text, encoding='utf-8', newline=nl)
+
+
+def parse_fail(path: Path, exc: Exception) -> ChainError:
+    """SSOT 檔不是合法 YAML／JSON：給使用者看得懂的一行，而不是 parser 的 traceback。
+
+    呼叫端一律 `raise parse_fail(...) from None`——動作入口接 `ChainError` 印 `BLOCKER …` 並回非 0，
+    鏈上任何一處讀壞檔都走同一條路。
+    """
+    return ChainError(f'{path.name} 無法解析：{" ".join(str(exc).split())}')
 
 
 def load_yaml(path: Path) -> Any:
-    return yaml.safe_load(read_text(path)) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return yaml.safe_load(read_text(path))
+    except Exception as exc:
+        raise parse_fail(path, exc) from None
 
 
 def load_json(path: Path) -> Any:
-    return json.loads(read_text(path)) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(read_text(path))
+    except Exception as exc:
+        raise parse_fail(path, exc) from None
+
+
+def check_ssot_parseable(root: Path) -> None:
+    """動作開跑前先確認每個 SSOT 檔都還解析得出來；壞檔丟 ChainError，由動作入口印成 `BLOCKER … 無法解析：…`。
+
+    不先擋的話，用不到該檔的動作會一路跑進鏈裡的關卡子程序，使用者看到的是那支子程序的 traceback 尾段，
+    看不出是哪個檔壞掉。缺檔不算壞（缺檔由各動作自己判）。
+    """
+    for rel in TOKEN_FILES:
+        (load_json if rel.endswith('.json') else load_yaml)(root / rel)
 
 
 def yaml_dq(value: str) -> str:
@@ -287,7 +726,7 @@ def decisions_list(root: Path) -> list[dict[str, Any]]:
 def next_decision_id(root: Path) -> str:
     n = 0
     for d in decisions_list(root):
-        m = re.fullmatch(r'D-(\d{3})', str(d.get('id') or ''))
+        m = re.fullmatch(r'D-(\d{3,})', str(d.get('id') or ''))
         if m:
             n = max(n, int(m.group(1)))
     return f'D-{n + 1:03d}'
@@ -297,31 +736,83 @@ DECISION_FIELDS = ('id', 'date', 'stage', 'checkpoint', 'question', 'method', 'd
                    'known_consequences', 'evidence', 'links', 'supersedes')
 
 
-def format_decision(entry: dict[str, Any]) -> str:
-    """一筆決策的 YAML 文字（縮排 2 的清單項目）：單行字串用雙引號、多行字串用 `|-`、清單逐項雙引號。"""
-    out = [f'  - id: {entry["id"]}']
+DECISION_STYLE = (2, 4, 6)   # (dash 縮排, 欄位縮排, 欄位內清單項縮排)：空檔或量不到時的預設
+
+
+def decisions_style(text: str) -> tuple[int, int, int]:
+    """從既有的 decisions.yaml 量出 (dash 縮排, 欄位縮排, 欄位內清單項縮排)；量不到回預設 (2, 4, 6)。
+
+    不縮排的序列（`decisions:` 底下直接 `- id:`）量出來就是 (0, 2, 2)，append 的新條目因此接得上。
+    """
+    lines = text.split('\n')
+    key_i = TF.top_key(lines, 'decisions')
+    if key_i < 0:
+        return DECISION_STYLE
+    end = TF.key_block_end(lines, key_i, 0)
+    starts, dash = TF.seq_starts(lines, key_i, 0, end)
+    if not starts or dash < 0:
+        return DECISION_STYLE
+    bounds = list(zip(starts, list(starts[1:]) + [end]))
+    f_ind = TF.item_field_indent(lines, *bounds[0])
+    sub = f_ind + dash        # 欄位內清單項：照「序列相對父鍵縮排多少」推（不縮排的檔就不縮排）
+    for s, e in bounds:       # 既有條目裡若真有欄位內清單（links／evidence），直接用它量到的縮排
+        after_empty_field = False
+        for ln in TF.norm_item(lines, s, e):
+            if TF.is_blank(ln) or TF.is_comment(ln):
+                continue
+            if after_empty_field and TF.is_dash(ln) and TF.indent_of(ln) > f_ind:
+                return dash, f_ind, TF.indent_of(ln)
+            # 只有「欄位縮排、值留空」的鍵行底下那些 dash 才是欄位內清單；區塊純量（`… : |-`）的
+            # 內容裡若剛好有 `- …` 開頭的行，縮排再深也只是字串內容，不能拿來當清單縮排。
+            after_empty_field = (TF.indent_of(ln) == f_ind and not TF.is_dash(ln)
+                                 and ':' in ln and TF.inline_rest(ln) == '')
+    return dash, f_ind, sub
+
+
+def format_decision(entry: dict[str, Any], style: tuple[int, int, int] = DECISION_STYLE) -> str:
+    """一筆決策的 YAML 文字：單行字串用雙引號、多行字串用 `|-`、清單逐項雙引號。
+
+    縮排由 style 給（`decisions_style` 自既有檔量出來），不寫死 2／4／6。
+    """
+    dash, f_ind, sub = style
+    f_pad, s_pad = ' ' * f_ind, ' ' * sub
+    d_pad = ' ' * dash + '-' + ' ' * max(1, f_ind - dash - 1)   # 第一欄要落在 f_ind，dash 之後的空白跟著算
+    out = [f'{d_pad}id: {entry["id"]}']
     for key in DECISION_FIELDS[1:]:
         if key not in entry:
             continue
         val = entry[key]
         if isinstance(val, list):
             if not val:
-                out.append(f'    {key}: []')
+                out.append(f'{f_pad}{key}: []')
             else:
-                out.append(f'    {key}:')
-                out.extend(f'      - {yaml_dq(x)}' for x in val)
+                out.append(f'{f_pad}{key}:')
+                out.extend(f'{s_pad}- {yaml_dq(x)}' for x in val)
         elif isinstance(val, str) and '\n' in val:
-            out.append(f'    {key}: {yaml_block(val, 6)}')
-        elif key in ('date', 'stage') or key == 'question' and re.fullmatch(r'(main|SQ\d+|AQ\d+)', str(val)):
-            out.append(f'    {key}: {val}')
+            out.append(f'{f_pad}{key}: {yaml_block(val, f_ind + 2)}')
+        elif key in ('date', 'stage') or key == 'question' and Q_PLAIN_RE.fullmatch(str(val)):
+            out.append(f'{f_pad}{key}: {val}')
         else:
-            out.append(f'    {key}: {yaml_dq(val)}')
+            out.append(f'{f_pad}{key}: {yaml_dq(val)}')
     return '\n'.join(out) + '\n'
+
+
+def decision_author(entry: dict[str, Any]) -> str:
+    """首次建檔的檔頭要說是哪支動作建的：取 `method` 開頭的腳本名（各動作的 method 都是「<腳本>.py <版本> …」）。
+
+    取不到就用通稱——寫死某兩支的名字會讓別的動作建出來的檔頭說謊。
+    """
+    head = str(entry.get('method') or '').strip().split(' ')[0]
+    return head if head.endswith('.py') else 'academic-pipeline 的動作腳本'
 
 
 def append_decision(root: Path, entry: dict[str, Any], backups: Backups | None = None) -> None:
     """只在 decisions.yaml 檔尾加一筆；寫入前後以 yaml 解析比對：舊條目逐筆相等、新條目等於 entry。"""
     path = root / 'decisions.yaml'
+    extra = existing_consequences()
+    if extra:   # 既有項目要列進決策紀錄（就地改 entry，後面算 bytes 的呼叫端才量得到）
+        head = str(entry.get('known_consequences') or '').rstrip()
+        entry['known_consequences'] = (head + '\n' if head else '') + extra
     old_text = read_text(path) if path.is_file() else ''
     old = decisions_list(root)
     if any(str(d.get('id')) == entry['id'] for d in old):
@@ -329,19 +820,30 @@ def append_decision(root: Path, entry: dict[str, Any], backups: Backups | None =
     if backups is not None:
         backups.backup(path)
     if not old_text.strip():
-        new_text = ('# 決策日誌——append-only；由 reassign_question.py／set_figure_role.py 首次建檔。\n'
+        new_text = (f'# 決策日誌——append-only；由 {decision_author(entry)} 首次建檔。\n'
                     'decisions:\n' + format_decision(entry))
     else:
         if 'decisions:' not in old_text:
             raise ChainError('decisions.yaml 沒有 decisions: 清單，無法 append')
         data = yaml.safe_load(old_text)
+        style = decisions_style(old_text)
         if data.get('decisions') in (None, []):
-            new_text = re.sub(r'^decisions:[ \t]*(\[\]|null|~)?[ \t]*$', 'decisions:', old_text, count=1, flags=re.M)
-            if not new_text.endswith('\n'):
-                new_text += '\n'
-            new_text += format_decision(entry)
+            old_text = re.sub(r'^decisions:[ \t]*(\[\]|null|~)?[ \t]*$', 'decisions:', old_text, count=1, flags=re.M)
+            if not old_text.endswith('\n'):
+                old_text += '\n'
+            style = DECISION_STYLE
+        lines = old_text.split('\n')
+        key_i = TF.top_key(lines, 'decisions')
+        end = TF.key_block_end(lines, key_i, 0) if key_i >= 0 else len(lines)
+        if any(not TF.is_blank(ln) and not TF.is_comment(ln) for ln in lines[end:]):
+            # 清單後面還有別的頂層鍵（例如整檔被 `sort_keys=True` 排過，`version:` 排在 `decisions:` 之後）：
+            # 新條目要插在 decisions 區塊尾端。接到檔尾會變成「頂層鍵底下再出現序列項」，整檔解析不出來。
+            ins = trim_trailing_blank(lines, key_i, end)
+            lines[ins:ins] = format_decision(entry, style).rstrip('\n').split('\n')
+            new_text = '\n'.join(lines)
         else:
-            new_text = old_text + ('' if old_text.endswith('\n') else '\n') + format_decision(entry)
+            # 區塊後面只剩空行或註解：沿用原本「接在檔尾」的寫法，輸出逐位元不變。
+            new_text = old_text + ('' if old_text.endswith('\n') else '\n') + format_decision(entry, style)
     try:
         new = yaml.safe_load(new_text)
     except Exception as exc:
@@ -439,8 +941,9 @@ def append_daily_log(path: Path, block: str) -> None:
 
 # ---------- dry-run 稀疏工作區 ----------
 
-# 這些相對路徑會被鏈改到或被 checker 寫到 → 實體複製；其餘頂層項目一律 symlink 回原根（fingerprint 只跳過
-# 檔案層級的 symlink，目錄 symlink 會被 rglob 走進去，因此雜湊值與原根相同；dry-run 結束整個工作區刪除）。
+# 這些相對路徑會被鏈改到或被 checker 寫到 → 實體複製；其餘頂層項目一律 symlink 回原根（目錄 symlink 會被
+# rglob 走進去；檔案層級的 symlink 本來會被 fingerprint 跳過，使工作區的雜湊值與原根不同——`rerun_all.py`
+# 的 `workspace_link` 認出工作區擺的連結後視同原檔，兩邊的雜湊值才真的相同；dry-run 結束整個工作區刪除）。
 COPY_FILES = (('project.yaml', 'decisions.yaml', 'GLOSSARY.md', 'analysis/results.json', 'analysis/validation.yaml',
                'analysis/figures/manifest.json', 'analysis/figures/figure-story.md', 'analysis/extended-data.yaml',   # 0.20.0：set_tier 改的檔，dry-run 不得寫穿 symlink
                'submission/package.yaml')   # 0.22.0：package_edit 改的檔，同理不得寫穿 symlink
@@ -549,14 +1052,34 @@ def source_fingerprint(root: Path) -> dict[str, str]:
     return {'source': data['source_fingerprint'], 'input': data['input_fingerprint'], 'results': data['results_fingerprint']}
 
 
+_EMPTY_BIB: list[Path] = []   # 最多一個元素：整個 process 共用的那個暫存空檔（見 empty_bib）
+
+
+def _drop_empty_bib() -> None:
+    if not _EMPTY_BIB:
+        return
+    try:
+        _EMPTY_BIB[0].unlink()
+    except OSError:
+        pass
+    _EMPTY_BIB.clear()
+
+
 def empty_bib(root: Path) -> Path:
-    """check_coverage 需要一個 bib 路徑；專案沒有就用暫存空檔。"""
+    """check_coverage 需要一個 bib 路徑；專案沒有就用暫存空檔。
+
+    一個 process 只建一個、`atexit` 刪掉。每次呼叫各建一個就會在 `tempfile.gettempdir()` 留一地
+    `empty-*.bib`——一條鏈要跑好幾次 check_coverage，誰都不會回頭清。
+    """
     for rel in ('literature/references.bib',):
         if (root / rel).is_file():
             return root / rel
-    fd, tmp = tempfile.mkstemp(prefix='empty-', suffix='.bib')
-    os.close(fd)
-    return Path(tmp)
+    if not _EMPTY_BIB:
+        fd, tmp = tempfile.mkstemp(prefix='empty-', suffix='.bib')
+        os.close(fd)
+        _EMPTY_BIB.append(Path(tmp))
+        atexit.register(_drop_empty_bib)
+    return _EMPTY_BIB[0]
 
 
 def unique_report_path(root: Path, prefix: str, date: str, suffix: str) -> str:
@@ -579,7 +1102,11 @@ def unique_report_path(root: Path, prefix: str, date: str, suffix: str) -> str:
 sys.path.insert(0, str(PLUGIN_ROOT / 'skills/study-design/scripts'))
 import plan_common  # noqa: E402
 
-Q_ID_RE = re.compile(r'(SQ|AQ)\d+$')
+Q_SUFFIX = r'[a-z]*'                    # 問題 id 的後綴字母（SQ6b／AQ7b 這種分支編號）
+Q_ID_RE = re.compile(r'(SQ|AQ)\d+' + Q_SUFFIX + r'$')
+SQ_RE = re.compile(r'SQ\d+' + Q_SUFFIX)
+AQ_RE = re.compile(r'AQ\d+' + Q_SUFFIX)
+Q_PLAIN_RE = re.compile(r'main|(?:SQ|AQ)\d+' + Q_SUFFIX)   # decisions.yaml 的 question 欄位可不加引號的值
 ROLES = ('main', 'extended', 'supplementary')
 OPEN_ITEMS = ('reviewer-methods 對 {plan} 的設計審', 'code-review 重審', 'validate-results 重判（現有判定沿用）',
               'evaluate 對 {q} 的 result-fit')
@@ -634,10 +1161,17 @@ def goals_ids(root: Path) -> tuple[list[str], list[str]]:
     return [str(x.get('id')) for x in sq if x.get('id')], [str(x.get('id')) for x in aq if x.get('id')]
 
 
+def snapshot_ids(root: Path) -> set[str]:
+    """goals 快照裡的問題 id。快照會留下「已從 goals 移除、使用者還沒確認」的號——自動配號撞上去
+    就會把那個號配給新問題，使用者確認的時候看到的是同一個號兩種內容。"""
+    sq, aq = snapshot_items(root / 'evaluations/goals-snapshot.json')
+    return {str(x.get('id')) for x in sq + aq if x.get('id')}
+
+
 def used_question_ids(root: Path) -> set[str]:
-    """goals 兩清單 ＋ index 的 sq ＋ plan 檔名前綴；編號不重用靠這個集合擋。"""
+    """goals 兩清單 ＋ index 的 sq ＋ plan 檔名前綴 ＋ 快照裡的號；編號不重用靠這個集合擋。"""
     sq, aq = goals_ids(root)
-    used = set(sq) | set(aq)
+    used = set(sq) | set(aq) | snapshot_ids(root)
     index = load_yaml(root / 'analysis/plans/index.yaml')
     if isinstance(index, dict):
         used |= {str((e or {}).get('sq') or '') for e in (index.get('plans') or []) if isinstance(e, dict)}
@@ -649,21 +1183,35 @@ def used_question_ids(root: Path) -> set[str]:
     return used
 
 
-def question_id_occupied(root: Path, qid: str) -> bool:
-    """這個號現在有沒有人在用：在 goals 兩清單、或 index.active 之一。只有舊版 plan 檔（前一次搬移留下）的編號不算占用——
-    升回／搬回原號時新版接續該號既有版本（next_plan_id），編號不重用仍成立（自動配號一律取最大號 +1，見 next_question_id）。"""
+QID_CLASSIC = 'goals 或 index.active'
+
+
+def question_id_occupied_why(root: Path, qid: str) -> str:
+    """這個號現在有沒有人在用；回占用的理由（''＝沒占用）。在 goals 兩清單、index.active，或 goals 快照裡。
+
+    只有舊版 plan 檔（前一次搬移留下）的編號不算占用——升回／搬回原號時新版接續該號既有版本
+    （next_plan_id），編號不重用仍成立（自動配號一律取最大號 +1，見 next_question_id）。
+    快照裡的號算占用：那是已從 goals 移除、使用者還沒確認的號，重用會讓同一個號對應兩種內容；
+    這一種另給說明，goals／index.active 那兩種沿用原本的措辭。
+    """
     sq, aq = goals_ids(root)
-    if qid in sq or qid in aq:
-        return True
     index = load_yaml(root / 'analysis/plans/index.yaml')
     active = (index.get('active') or {}) if isinstance(index, dict) else {}
-    return qid in active
+    if qid in sq or qid in aq or qid in active:
+        return QID_CLASSIC
+    if qid in snapshot_ids(root):
+        return 'goals 快照還留著這個號（已從 goals 移除、使用者尚未確認；確認後才可重用）'
+    return ''
+
+
+def question_id_occupied(root: Path, qid: str) -> bool:
+    return bool(question_id_occupied_why(root, qid))
 
 
 def next_question_id(root: Path, kind: str) -> str:
     n = 0
     for qid in used_question_ids(root):
-        m = re.fullmatch(kind + r'(\d+)', qid)
+        m = re.fullmatch(kind + r'(\d+)' + Q_SUFFIX, qid)   # SQ6b 也要讓計數往上，否則自動配號會撞號
         if m:
             n = max(n, int(m.group(1)))
     return f'{kind}{n + 1}'
@@ -774,148 +1322,229 @@ def _validate_set_tier(root: Path, payload) -> tuple[dict | None, str]:
     return {'node': node, 'tier': tier}, ''
 
 
-def question_block(lines: list[str], list_name: str, qid: str) -> tuple[int, int]:
-    """goals.<list_name> 裡 `    - id: <qid>` 區塊的 [start, end)（end 不含尾端空行）；找不到丟 ChainError。"""
-    g = find_line(lines, r'^goals:')
-    if g < 0:
-        raise ChainError('project.yaml 找不到頂層 goals:')
-    g_end = region_end(lines, g, 1)
-    s = find_line(lines, rf'^  {list_name}:', g, g_end)
-    if s < 0:
+def goals_list_line(lines: list[str], list_name: str) -> tuple[int, int, int]:
+    """goals.<list_name> 的 (鍵行號, 鍵縮排, 區塊結束)；縮排從檔案量，找不到丟 ChainError。"""
+    i, ind, end = TF.map_path(lines, ('goals', list_name), 'project.yaml')
+    if i < 0:
+        g, _gind, _gend = TF.map_path(lines, ('goals',), 'project.yaml')
+        if g < 0:
+            raise ChainError('project.yaml 找不到頂層 goals:')
         raise ChainError(f'project.yaml 找不到 goals.{list_name}:')
-    s_end = region_end(lines, s, 3)
-    start = find_line(lines, rf'^    - id:\s*{re.escape(qid)}\s*(#.*)?$', s, s_end)
-    if start < 0:
-        raise ChainError(f'project.yaml 找不到 goals.{list_name} 的 `    - id: {qid}` 這一行（文字層搬移需要 4 空白縮排的清單項目）')
-    end = start + 1
-    while end < s_end:
-        ln = lines[end]
-        if ln.strip() and (indent_of(ln) < 4 or ln.startswith('    - ')):
-            break
-        end += 1
-    return start, trim_trailing_blank(lines, start, end)
+    return i, ind, end
+
+
+def goals_items(lines: list[str], list_name: str) -> tuple[list[tuple[int, int, str]], int, int, int]:
+    """goals.<list_name> 的項目 [(start, end, id)] ＋ (鍵行號, dash 縮排, 清單區塊結束)。
+
+    dash 縮排與欄位縮排都從檔案量；`id` 不必是項目的第一欄。
+    """
+    key_i, key_ind, end = goals_list_line(lines, list_name)
+    starts, dash = TF.seq_starts(lines, key_i, key_ind, end)
+    if not starts:
+        return [], key_i, (dash if dash >= 0 else key_ind + 2), end
+    out = []
+    for k, st in enumerate(starts):
+        stop = starts[k + 1] if k + 1 < len(starts) else end
+        out.append((st, stop, TF.item_id(lines, st, stop)))
+    return out, key_i, dash, end
+
+
+def question_block(lines: list[str], list_name: str, qid: str) -> tuple[int, int]:
+    """goals.<list_name> 裡 id 為 qid 的項目 [start, end)（end 不含尾端空行）；找不到丟 ChainError。"""
+    items, _key_i, _dash, _end = goals_items(lines, list_name)
+    for start, end, vid in items:
+        if vid == qid:
+            return start, trim_trailing_blank(lines, start, end)
+    raise ChainError(f'project.yaml 的 goals.{list_name} 找不到 id 為 {qid} 的清單項目'
+                     f'（讀到的 id：{"、".join(v for _s, _e, v in items) or "（無項目）"}）')
 
 
 def list_items_regions(lines: list[str], list_name: str) -> list[tuple[int, int, str]]:
-    """goals.<list_name> 的每個項目 [start, end, id)；緊接在項目之前、縮排 ≥ 4 的註解行歸到該項目。"""
-    g = find_line(lines, r'^goals:')
-    if g < 0:
-        raise ChainError('project.yaml 找不到頂層 goals:')
-    g_end = region_end(lines, g, 1)
-    s = find_line(lines, rf'^  {list_name}:', g, g_end)
-    if s < 0:
-        raise ChainError(f'project.yaml 找不到 goals.{list_name}:')
-    s_end = region_end(lines, s, 3)
-    starts = [i for i in range(s + 1, s_end) if re.match(r'^    - id:', lines[i])]
+    """goals.<list_name> 的每個項目 [start, end, id)；緊接在項目之前、縮排 ≥ dash 縮排的註解行歸到該項目。"""
+    items, key_i, dash, end = goals_items(lines, list_name)
     out = []
-    for k, st in enumerate(starts):
-        end = starts[k + 1] if k + 1 < len(starts) else s_end
-        # 下一個項目前的註解行（縮排 ≥ 4、以 # 開頭）屬於下一個項目
-        if k + 1 < len(starts):
-            j = end
-            while j - 1 > st and lines[j - 1].strip().startswith('#') and indent_of(lines[j - 1]) >= 4:
+    for k, (st, stop, qid) in enumerate(items):
+        if k + 1 < len(items):
+            j = stop
+            while j - 1 > st and lines[j - 1].strip().startswith('#') and indent_of(lines[j - 1]) >= dash:
                 j -= 1
-            end = j
-        st0 = st
-        m = re.match(r'^    - id:\s*(\S+)', lines[st])
-        out.append((st0, end, m.group(1).strip('"\'') if m else ''))
-    # 第一個項目之前的註解也算第一個項目的（只在其後緊接）
+            stop = j
+        out.append((st, stop, qid))
     fixed = []
-    prev_end = s + 1
-    for st, end, qid in out:
+    prev_end = key_i + 1
+    for st, stop, qid in out:
         j = st
-        while j - 1 >= prev_end and lines[j - 1].strip().startswith('#') and indent_of(lines[j - 1]) >= 4:
+        while j - 1 >= prev_end and lines[j - 1].strip().startswith('#') and indent_of(lines[j - 1]) >= dash:
             j -= 1
-        fixed.append((j, end, qid))
-        prev_end = end
+        fixed.append((j, stop, qid))
+        prev_end = stop
     return fixed
 
 
 def insert_question_block(lines: list[str], list_name: str, block: list[str]) -> None:
-    """把區塊接到 goals.<list_name> 尾端；清單不存在就建、`[]` 就改成空清單頭。"""
-    g = find_line(lines, r'^goals:')
-    g_end = region_end(lines, g, 1)
-    a = find_line(lines, rf'^  {list_name}:', g, g_end)
+    """把區塊接到 goals.<list_name> 尾端；清單不存在就建、`[]` 就改成空清單頭。
+
+    新清單的鍵縮排取 goals 既有子鍵的縮排；區塊若與目標清單既有項目的 dash 縮排不同，整塊平移對齊。
+    """
+    g, g_ind, g_end = TF.map_path(lines, ('goals',), 'project.yaml')
+    if g < 0:
+        raise ChainError('project.yaml 找不到頂層 goals:')
+    TF.need_block(lines, g, 'goals', 'project.yaml')
+    child = TF.child_map_indent(lines, g, g_ind, g_end)
+    a = TF.find_key(lines, list_name, g + 1, g_end, child) if child >= 0 else -1
     if a < 0:
-        # 接在 goals 區塊尾端
         ins = trim_trailing_blank(lines, g, g_end)
-        lines[ins:ins] = [f'  {list_name}:'] + block
+        lines[ins:ins] = [' ' * (child if child >= 0 else g_ind + 2) + f'{list_name}:'] + block
         return
-    if re.match(rf'^  {list_name}:\s*\[\s*\]\s*(#.*)?$', lines[a]):
-        lines[a] = re.sub(r'\[\s*\]', '', lines[a], count=1).rstrip()
-    a_end = region_end(lines, a, 3)
+    head, val, cmt = TF.split_field_line(lines[a])
+    if re.fullmatch(r'\s*\[\s*\]\s*', val):
+        lines[a] = (head + cmt).rstrip() if cmt else head
+    a_end = TF.key_block_end(lines, a, child)
+    starts, dash = TF.seq_starts(lines, a, child, a_end)
+    src_dash = next((indent_of(ln) for ln in block if TF.is_dash(ln)), -1)
+    if starts and src_dash >= 0 and dash >= 0 and dash != src_dash:
+        block = TF.shift_block(block, dash - src_dash)
     ins = trim_trailing_blank(lines, a, a_end)
     lines[ins:ins] = block
 
 
+def block_item(block: list[str]) -> tuple[int, int]:
+    """問題區塊裡 dash 行的索引與該項目的欄位縮排（兩者都從區塊本身量）。"""
+    for i, ln in enumerate(block):
+        if TF.is_dash(ln):
+            return i, TF.item_field_indent(block, i, len(block))
+    raise ChainError('project.yaml 的問題區塊裡找不到清單項目的 `- ` 行')
+
+
+def _field_line(block: list[str], di: int, fi: int, field: str, value_text: str, comment: str) -> str:
+    """寫一行欄位；若寫在 dash 行上（di >= 0）就保留 `- ` 前綴，否則用欄位縮排。"""
+    pre = TF.dash_prefix(block[di]) if di >= 0 else ' ' * fi
+    return f'{pre}{field}: {value_text}{comment}'
+
+
 def set_block_field(block: list[str], field: str, value: str, after: tuple[str, ...] = ('status',)) -> None:
-    """改區塊內 `      <field>: …` 一行（值以雙引號 JSON 寫）；沒有就接在 after 列出的欄位之後（或區塊尾）。"""
-    i = find_line(block, rf'^      {field}:')
+    """改區塊內 `<field>: …`（值以雙引號 JSON 寫）；沒有就接在 after 列出的欄位之後（或區塊尾）。
+
+    欄位縮排從該項目本身量；行尾註解保留（與 `set_block_status` 一致）；原值是區塊純量時整段換掉。
+    """
+    di, fi = block_item(block)
+    i = TF.item_field(block, di, len(block), field, fi)
     if i >= 0:
-        m = re.match(r'^(\s{6}' + field + r':\s*)(.*?)(\s+#.*)?$', block[i])
-        block[i] = f'      {field}: {yaml_dq(value)}'
+        end = TF.key_block_end(block, i, fi)
+        cmt = TF.split_field_line(TF.norm_item(block, di, len(block))[i - di])[2]
+        block[i:end] = [_field_line(block, di if i == di else -1, fi, field, yaml_dq(value), cmt)]
         return
     for f in after:
-        j = find_line(block, rf'^      {f}:')
+        j = TF.item_field(block, di, len(block), f, fi)
         if j >= 0:
-            block.insert(j + 1, f'      {field}: {yaml_dq(value)}')
+            ins = TF.key_block_end(block, j, fi)
+            block[ins:ins] = [_field_line(block, -1, fi, field, yaml_dq(value), '')]
             return
-    block.append(f'      {field}: {yaml_dq(value)}')
+    block.append(_field_line(block, -1, fi, field, yaml_dq(value), ''))
 
 
 def prefix_status_reason(block: list[str], prefix: str) -> None:
-    sr = find_line(block, r'^      status_reason:')
+    """在 status_reason 前面接一段字；原值是 `|-`／`>-` 區塊純量時整段讀出來再接，不會只留前綴。"""
+    di, fi = block_item(block)
+    norm = TF.norm_item(block, di, len(block))
+    sr = TF.item_field(block, di, len(block), 'status_reason', fi)
     if sr >= 0:
-        old_val = scalar_line_value(block[sr])
-        block[sr] = '      status_reason: ' + yaml_dq(prefix + old_val)
-    else:
-        st = find_line(block, r'^      status:')
-        block.insert(st + 1 if st >= 0 else len(block), '      status_reason: ' + yaml_dq(prefix))
+        old_val, end = TF.field_value(norm, sr - di, fi, len(norm))
+        cmt = TF.split_field_line(norm[sr - di])[2] if end == sr - di + 1 else ''
+        block[sr:di + end] = [_field_line(block, di if sr == di else -1, fi, 'status_reason',
+                                          yaml_dq(prefix + old_val), cmt)]
+        return
+    st = TF.item_field(block, di, len(block), 'status', fi)
+    ins = TF.key_block_end(block, st, fi) if st >= 0 else len(block)
+    block[ins:ins] = [_field_line(block, -1, fi, 'status_reason', yaml_dq(prefix), '')]
+
+
+def set_block_id(block: list[str], new_id: str, comment: str) -> None:
+    """改問題區塊的 id 並換上行尾註解；dash 前綴與欄位縮排照該區塊量（`id` 不必是第一欄）。"""
+    di, fi = block_item(block)
+    i = TF.item_field(block, di, len(block), 'id', fi)
+    if i < 0:
+        raise ChainError('project.yaml 的問題區塊裡找不到 id 欄位')
+    pre = TF.dash_prefix(block[i]) if i == di else ' ' * fi
+    block[i] = f'{pre}id: {new_id}          {comment}'
 
 
 def set_block_status(block: list[str], status: str) -> None:
-    st = find_line(block, r'^      status:')
+    di, fi = block_item(block)
+    st = TF.item_field(block, di, len(block), 'status', fi)
     if st >= 0:
-        m = re.match(r'^(\s{6}status:\s*)(.*?)(\s+#.*)?$', block[st])
-        block[st] = f'{m.group(1)}{status}{m.group(3) or ""}'
-    else:
-        block.append(f'      status: {status}')
+        block[st] = TF.replace_value(block[st], status)
+        return
+    block.append(_field_line(block, -1, fi, 'status', status, ''))
 
 
 def block_links(block: list[str]) -> tuple[int, list[str], str]:
-    """回 (links 行號, 清單, 行尾註解)；沒有 links 行回 (-1, [], '')。只支援單行流式清單。"""
-    i = find_line(block, r'^      links:')
+    """回 (links 行號, 清單, 行尾註解)；沒有 links 行回 (-1, [], '')。流式與區塊序列都讀得到。"""
+    di, fi = block_item(block)
+    i = TF.item_field(block, di, len(block), 'links', fi)
     if i < 0:
         return -1, [], ''
-    line = block[i]
-    m = re.match(r'^      links:\s*(\[.*\])\s*(#.*)?$', line)
-    if not m:
-        val = scalar_line_value(line)
-        return i, ([] if not val else [val]), ''
-    return i, [str(x) for x in (yaml.safe_load(m.group(1)) or [])], (m.group(2) or '')
+    norm = TF.norm_item(block, di, len(block))
+    _head, val, cmt = TF.split_field_line(norm[i - di])
+    if val.strip():
+        if not val.strip().startswith('['):
+            got = yaml.safe_load(val)
+            return i, ([] if got in (None, '') else [str(got)]), ''
+        return i, [str(x) for x in (yaml.safe_load(val) or [])], cmt.lstrip()
+    end = TF.key_block_end(norm, i - di, fi)
+    doc = yaml.safe_load('\n'.join(ln[fi:] if len(ln) >= fi else ln.lstrip(' ') for ln in norm[i - di:end]))
+    items = (doc or {}).get('links') if isinstance(doc, dict) else None
+    return i, [str(x) for x in (items or [])], cmt.lstrip()
 
 
 def set_block_links(block: list[str], links: list[str], comment: str = '') -> None:
-    i = find_line(block, r'^      links:')
-    line = '      links: ' + json.dumps(links, ensure_ascii=False) + (('   ' + comment) if comment else '')
-    if i >= 0:
-        block[i] = line
-    else:
-        block.append(line)
-
-
-def add_state_comment(lines: list[str], text: str) -> None:
-    """`state:` 之後、既有 `  # <日期> D-xxx：` 註解行之後再加一行。"""
-    st_line = find_line(lines, r'^state:')
-    if st_line < 0:
+    """寫回 links；原本是區塊序列就照區塊序列寫（沿用原本的 dash 縮排），原本是流式就照流式寫。"""
+    di, fi = block_item(block)
+    i = TF.item_field(block, di, len(block), 'links', fi)
+    if i < 0:
+        block.append(_field_line(block, -1, fi, 'links', json.dumps(links, ensure_ascii=False),
+                                 ('   ' + comment) if comment else ''))
         return
-    j = st_line + 1
-    last = st_line
-    while j < len(lines) and lines[j].startswith('  #'):
-        if re.match(r'^  # \d{4}-\d{2}-\d{2} D-\d{3}：', lines[j]):
+    norm = TF.norm_item(block, di, len(block))
+    _head, val, _cmt = TF.split_field_line(norm[i - di])
+    pre = TF.dash_prefix(block[i]) if i == di else ' ' * fi
+    tail = ('   ' + comment) if comment else ''
+    if val.strip():
+        block[i] = f'{pre}links: ' + json.dumps(links, ensure_ascii=False) + tail
+        return
+    end = TF.key_block_end(norm, i - di, fi)
+    starts, dash = TF.seq_starts(norm, i - di, fi, end)
+    item_ind, gap = TF.seq_item_style(norm, starts, dash, fi + 2)
+    if not links:
+        block[i:di + end] = [f'{pre}links: []' + tail]
+        return
+    block[i:di + end] = [f'{pre}links:' + tail] + \
+        [' ' * item_ind + '-' + gap + json.dumps(x, ensure_ascii=False) for x in links]
+
+
+def add_state_comment(lines: list[str], text: str) -> str:
+    """`state:` 之後、既有 `  # <日期> D-xxx：` 註解行之後再加一行。回空字串＝已加；否則是略過的原因。
+
+    D# 的位數不限（不是只認三位數）；註解縮排沿用既有註解，沒有既有註解就用 state 的子鍵縮排。
+    """
+    st_line = TF.top_key(lines, 'state')
+    if st_line < 0:
+        why = 'project.yaml 沒有頂層 state:（或它寫成流式 mapping），這次的狀態註解沒有寫進去'
+        warn(why)
+        return why
+    st_end = TF.key_block_end(lines, st_line, 0)
+    ind = -1
+    j, last = st_line + 1, st_line
+    while j < st_end and lines[j].strip().startswith('#'):
+        if ind < 0:
+            ind = indent_of(lines[j])
+        if re.match(r'^\s*# \d{4}-\d{2}-\d{2} D-\d+：', lines[j]):
             last = j
         j += 1
-    lines.insert(last + 1, f'  # {text}')
+    if ind < 0:
+        ind = TF.child_map_indent(lines, st_line, 0, st_end)
+    lines.insert(last + 1, ' ' * (ind if ind > 0 else 2) + f'# {text}')
+    return ''
 
 
 def compare_project_except(old: dict, new: dict, allow_goals: bool = True, allow_state_analysis: bool = False) -> None:
@@ -1020,33 +1649,20 @@ def retag_results(text: str, key_map: dict[str, str], model_map: dict[str, tuple
     missing = [k for k in key_map if k not in data]
     if missing:
         raise ChainError(f'results.json 無鍵 {missing}')
-    lines = text.split('\n')
-    key_line = re.compile(r'^  "((?:[^"\\]|\\.)*)": \{\s*$')
-    current = ''
-    changed_lines = 0
-    for i, ln in enumerate(lines):
-        m = key_line.match(ln)
-        if m:
-            current = json.loads('"' + m.group(1) + '"')
-            continue
-        if current in key_map:
-            m2 = re.match(r'^    "plan_id": "([^"]*)"(,?)\s*$', ln)
-            if m2 and m2.group(1) != key_map[current]:
-                lines[i] = f'    "plan_id": {json.dumps(key_map[current])}{m2.group(2)}'
-                changed_lines += 1
-                continue
-        if current in model_map:
-            pm_old, pm_new, prefix = model_map[current]
-            m3 = re.match(r'^    "model_id": "((?:[^"\\]|\\.)*)"(,?)\s*$', ln)
-            if m3 and json.loads('"' + m3.group(1) + '"') == pm_old:
-                lines[i] = f'    "model_id": {json.dumps(pm_new, ensure_ascii=False)}{m3.group(2)}'
-                changed_lines += 1
-                continue
-            m4 = re.match(r'^    "description": ("(?:[^"\\]|\\.)*")(,?)\s*$', ln)
-            if m4:
-                lines[i] = f'    "description": {json.dumps(prefix + json.loads(m4.group(1)), ensure_ascii=False)}{m4.group(2)}'
-                changed_lines += 1
-    new_text = '\n'.join(lines)
+    doc = TF.JsonText(text, 'results.json')
+    edits: list[tuple[int, int, str]] = []
+    for key, new_pid in key_map.items():
+        if doc.has((key, 'plan_id')) and json.loads(doc.raw((key, 'plan_id'))) != new_pid:
+            edits.append(doc.set_value((key, 'plan_id'), json.dumps(new_pid)))
+    for key, (pm_old, pm_new, prefix) in model_map.items():
+        if doc.has((key, 'model_id')) and json.loads(doc.raw((key, 'model_id'))) == pm_old:
+            edits.append(doc.set_value((key, 'model_id'), json.dumps(pm_new, ensure_ascii=False)))
+        if doc.has((key, 'description')):
+            old_desc = json.loads(doc.raw((key, 'description')))
+            if isinstance(old_desc, str):
+                edits.append(doc.set_value((key, 'description'), json.dumps(prefix + old_desc, ensure_ascii=False)))
+    changed_lines = len(edits)
+    new_text = doc.apply(edits)
     new_data = json.loads(new_text)
     if list(new_data) != list(data):
         raise ChainError('results.json retag 後鍵序改變')
@@ -1082,24 +1698,17 @@ def results_keys_of_plan(root: Path, pid: str) -> list[str]:
 # ---------- validation.yaml ----------
 
 def validation_item_regions(lines: list[str]) -> list[tuple[int, int, str]]:
-    items_at = find_line(lines, r'^items:')
+    """validation.yaml 的 items 項目 [(start, end, id)]；dash 縮排從檔案量（不縮排也認），`id` 不必是第一欄。"""
+    items_at = TF.top_key(lines, 'items')
     if items_at < 0:
         return []
+    TF.need_block(lines, items_at, 'items', 'analysis/validation.yaml')
+    end = TF.key_block_end(lines, items_at, 0)
+    starts, _dash = TF.seq_starts(lines, items_at, 0, end)
     out = []
-    i = items_at + 1
-    while i < len(lines):
-        ln = lines[i]
-        if ln.strip() and indent_of(ln) == 0:
-            break
-        m = re.match(r'^  - id:\s*(\S+)', ln)
-        if m:
-            j = i + 1
-            while j < len(lines) and not (lines[j].strip() and (indent_of(lines[j]) == 0 or lines[j].startswith('  - '))):
-                j += 1
-            out.append((i, j, m.group(1).strip('"\'')))
-            i = j
-        else:
-            i += 1
+    for k, st in enumerate(starts):
+        stop = starts[k + 1] if k + 1 < len(starts) else end
+        out.append((st, stop, TF.item_id(lines, st, stop)))
     return out
 
 
@@ -1118,63 +1727,668 @@ def validation_update_no(text: str) -> int:
     return (max(prev_n) if prev_n else 0) + 1
 
 
+# ---------- 尚無正式結果：沒有 analysis/results.json ----------
+
+# 新專案跑正式分析之前沒有 analysis/results.json。這是正常階段，不是壞狀態：不需要結果鍵的動作
+# （調順序、降附錄、升主問題、搬 plan、降為敏感性分析）照常完成，紀錄照實寫「尚無正式結果」。
+# 判斷只看檔案存不存在（`no_results`），一律在第一次寫檔前定案一次（`Chain.take_stale_baseline`，
+# 與 waiver 狀態同一處），之後所有文字都讀那一次的結果——不得各處自己判、也不得去解析哪支腳本的輸出。
+# 說法只有這一組常數與下面那幾個 builder（同一行要讓掉重複的理由時走 builder，見 `SameLine`）。
+RESULTS_REL = 'analysis/results.json'
+NO_RESULTS_SHORT = '尚無正式結果'
+NO_RESULTS_BRIEF = RESULTS_REL + f' 不存在（{NO_RESULTS_SHORT}）'
+NO_RESULTS_MOVE = NO_RESULTS_BRIEF + '：沒有結果鍵可搬'
+NO_RESULTS_STEP = NO_RESULTS_BRIEF + '，無結果鍵可 retag'
+# 短說法：同一行（stdout 的一行、步驟紀錄的一則、決策的一個編號項目、檔頭的一行）已經有一次
+# `NO_RESULTS_BRIEF` 時，後面接的那一段改用這個，免得同一行把同一件事講兩次。
+NO_RESULTS_FP_SHORT = NO_RESULTS_SHORT + '，沒有 fingerprint 可記'
+# fps 的佔位值：沒有 results.json 時一個 fingerprint 都算不出來。任何對外文字都不該印出這個標記，
+# 印出來就表示有一處把「沒有的值」當成值在寫（測試對它逐一斷言）。
+NO_FP_MARK = '（尚無 fingerprint）'
+NO_FP: dict[str, str] = {'results': NO_FP_MARK, 'source': NO_FP_MARK, 'input': NO_FP_MARK}
+
+
+class SameLine:
+    """同一行裡同一個理由只說一次。
+
+    尚無正式結果的路徑上，好幾個子句各自帶同一個理由（「尚無正式結果」「沒有 fingerprint 可…」），
+    拼成同一行就把同一件事講兩次，而且會寫進專案的 `decisions.yaml`。做法是一行開一個這個物件、
+    依子句在行內的先後順序傳給那一行的各個子句：第一個問到某個片語的子句自己把理由說出來，同一行
+    後面的子句只講自己的結論。片語的單位與「誰讓誰」的判斷都只在這個模組，不散到各動作，也不對
+    拼好的字串做事後刪改。
+
+    `absent=False`（有正式結果）時 `need()` 一律回 True、一個字都不記：子句逐字沿用原句，有結果的
+    路徑因此逐位元不變。不傳物件（`None`，見 `line_need()`）等於沒有人在管這一行，行為同上。
+    """
+
+    WHY = '尚無正式結果'              # 理由：這個專案還沒有正式結果
+    FP = '沒有 fingerprint 可'        # 算不出／接不上 fingerprint（可算、可記、可接）
+    MARK = '不加 reaffirmed 標記'     # 不加標記這個結論
+    RELOG = '不重登'                  # 不重登 waiver 這個結論
+
+    def __init__(self, absent: Any = False) -> None:
+        self.absent = bool(absent)
+        self.said: set[str] = set()
+
+    def need(self, phrase: str) -> bool:
+        """本子句要不要自己把這個片語說出來：這一行還沒出現過才要（並登記起來）。"""
+        if not self.absent:
+            return True
+        if phrase in self.said:
+            return False
+        self.said.add(phrase)
+        return True
+
+    def own(self, phrase: str) -> None:
+        """這個片語由本子句說出（不問，直接登記）：它是本子句的主詞，讓給別人就不成句。"""
+        if self.absent:
+            self.said.add(phrase)
+
+
+def line_need(line: SameLine | None, phrase: str) -> bool:
+    """`SameLine.need()` 的 `None` 容忍版：沒給物件就當成這一行還沒說過。"""
+    return line.need(phrase) if isinstance(line, SameLine) else True
+
+
+def line_own(line: SameLine | None, phrase: str) -> None:
+    """`SameLine.own()` 的 `None` 容忍版。"""
+    if isinstance(line, SameLine):
+        line.own(phrase)
+
+
+def no_results_brief(line: SameLine | None = None) -> str:
+    """`<檔名> 不存在（尚無正式結果）`：理由這一行已經說過時只剩檔名那半句。"""
+    return NO_RESULTS_BRIEF if line_need(line, SameLine.WHY) else RESULTS_REL + ' 不存在'
+
+
+def no_results_text(line: SameLine | None = None) -> str:
+    """尚無正式結果：沒有結果鍵可 retag、沒有 fingerprint 可算。"""
+    bits = ['沒有結果鍵可 retag']
+    if line_need(line, SameLine.FP):
+        bits.append('沒有 fingerprint 可算')
+    return no_results_brief(line) + '：' + '、'.join(bits)
+
+
+def no_results_fp_text(line: SameLine | None = None) -> str:
+    """尚無正式結果：算不出 fingerprint，所以本次不寫 fingerprint、也不加 reaffirmed 標記。"""
+    why = '沒有 fingerprint 可算，' if line_need(line, SameLine.FP) else ''
+    tail = '本次不寫 fingerprint' + ('、不加 reaffirmed 標記' if line_need(line, SameLine.MARK) else '')
+    return no_results_brief(line) + '：' + why + tail
+
+
+NO_RESULTS = no_results_text()
+NO_RESULTS_FP = no_results_fp_text()
+
+
+def no_results(root: Path) -> bool:
+    """「尚無正式結果」＝ `analysis/results.json` 不存在。直接看檔案，不解析任何腳本的輸出。"""
+    return not (root / RESULTS_REL).is_file()
+
+
+def results_or(absent: Any, ok_text: str, absent_text: str = NO_RESULTS) -> str:
+    """尚無正式結果時改寫成實話；有結果時逐字沿用原句（`absent_or` 的 results.json 版）。"""
+    return absent_text if absent else ok_text
+
+
+def retag_step_name(absent: Any) -> str:
+    """`results.json plan_id retag` 那個步驟標題（會寫進 reviews/*.json）：沒有這個檔時標題也要照實。"""
+    return NO_RESULTS_STEP if absent else 'results.json plan_id retag'
+
+
+def no_results_warn(validation: bool, fields: list[str], waiver: str) -> str:
+    """沒有 results.json、卻留著只有跑過分析才會有的東西：照實說是哪一種、因此沒做什麼。
+
+    一致的新專案形狀（三者皆無）回空字串——那是正常階段，不印 WARNING。
+    """
+    bits = []
+    if validation:
+        bits.append('analysis/validation.yaml 還在')
+    if fields:
+        bits.append('state.analysis.rerun 留著 ' + '／'.join(fields))
+    if waiver:
+        bits.append(f'state.analysis.rerun 記著 waiver 決策 {waiver}')
+    if not bits:
+        return ''
+    # 沒有 waiver 決策時不得寫「不重登 waiver」（暗示有一個 waiver 在）；有才照實用那個說法
+    tail = '不重登 waiver' if waiver else f'不重登（{NO_WAIVER_BRIEF}）'
+    return ('WARNING ' + NO_RESULTS_BRIEF + '，但 ' + '、'.join(bits)
+            + '——本次只改 sq／plan_id 這類 metadata：不寫 fingerprint、不加 reaffirmed 標記、'
+            + tail + '，state.analysis 一字不動')
+
+
+# ---------- 動作前就過期／落後的欄位與 item：不得被動作吃掉 ----------
+
+STALE_FP_REASON = '動作前就與現值不符'
+LAGGING_REASON = '動作前 plan_id 就落後 active plan'
+
+
+class Carry(dict):
+    """逐欄能不能把 fingerprint 帶到新值，外加「尚無正式結果」旗標。
+
+    文字 helper 很多隻只拿到 `carry` 這個 dict（拿不到 `StalePolicy`、拿不到 `Chain`），旗標掛在它
+    身上，那些 helper 不用加參數就判得出來，判斷也仍然只有一個來源。
+
+    旗標只能明寫（建構時傳 `no_results`），不從 `src` 繼承：兩套機制會互相遮蔽，壞掉一套測不出來。
+    因此複製一律用 `copy()`——`dict(carry)` 與 `Carry(carry)` 都會把旗標丟掉，之後的文字就退回
+    「動作前就與現值不符」那種不實的說法。
+    """
+
+    def __init__(self, src: Any = None, no_results: bool = False) -> None:
+        super().__init__({'results': True, 'source': True} if src is None else src)
+        self.no_results = bool(no_results)
+
+    def copy(self) -> 'Carry':
+        return Carry(self, self.no_results)
+
+
+def carry_absent(carry: Any) -> bool:
+    """這個 carry 是不是「尚無正式結果」的（容忍舊路徑傳進來的普通 dict 與 None）。"""
+    return bool(getattr(carry, 'no_results', False))
+
+
+class StalePolicy:
+    """動作前的現況：哪一欄的指紋可以帶到新值、哪些 item 動作前就落後 active plan。
+
+    一律在第一次寫檔前算（`Chain.take_gate_baseline`），不是鏈跑到一半才算——跑到一半量到的是
+    動作自己造成的差異。動作前就不相符的欄位帶新值，等於替使用者宣稱那一欄已重新驗過；
+    動作前就落後的 item 改掛新版，等於替使用者宣稱它驗的是新版。兩者都不做。
+    """
+
+    def __init__(self, carry: dict[str, bool] | None = None, lagging: set[str] | None = None,
+                 no_results: bool = False) -> None:
+        self.carry = Carry(carry, no_results)
+        self.lagging = set(lagging or ())
+
+    @property
+    def no_results(self) -> bool:
+        """尚無正式結果（沒有 analysis/results.json）：一個 fingerprint 都算不出來。"""
+        return self.carry.no_results
+
+    @property
+    def mark(self) -> bool:
+        """加不加 reaffirmed 標記：它宣告「本次把這個 item 重接到這組指紋」，頂層任一欄沒帶新值就不成立。"""
+        return bool(self.carry['results'] and self.carry['source'])
+
+    @property
+    def pristine(self) -> bool:
+        """完全沒有動作前就過期或落後的東西：此時所有輸出與放寬前逐位元相同。"""
+        return self.mark and not self.lagging
+
+
+def recorded_fingerprints(doc: Any) -> dict[str, str]:
+    """validation.yaml（或 state.analysis.validation）記錄的兩個指紋，統一成 results／source 兩個鍵。"""
+    d = doc if isinstance(doc, dict) else {}
+    return {'results': str(d.get('results_fingerprint') or ''), 'source': str(d.get('source_fingerprint') or '')}
+
+
+def carry_of(recorded: dict[str, str], now: dict[str, str]) -> dict[str, bool]:
+    """逐欄判斷能不能帶新值：動作前相符才帶；不符或空白一律不動。
+
+    不能「任一過期就兩欄都不動」——results 相符、source 已過期時不帶 results，動作自己的 retag
+    就會讓 results 過期，那是本次新增的 blocker，整條鏈會被自己擋下。
+    """
+    out: dict[str, bool] = {}
+    for col in ('results', 'source'):
+        out[col] = bool(recorded.get(col)) and recorded[col] == now.get(col)
+    return out
+
+
+def carry_word(carry: dict[str, bool] | None) -> str:
+    """給人讀的動詞：有帶新值才叫「重接」，一欄都沒帶只能說「未重接」。"""
+    if carry is None or carry.get('results') or carry.get('source'):
+        return '重接'
+    return '未重接'
+
+
+def update_label(nth: str, carry: dict[str, bool] | None) -> str:
+    """validation.yaml 更新註記的開頭。"""
+    if carry is None or carry.get('results') or carry.get('source'):
+        return f'第{nth}次重接'
+    return f'第{nth}次更新（未重接 fingerprint）'
+
+
+def fp_move_text(old: dict[str, str], fps: dict[str, str], carry: dict[str, bool] | None = None,
+                 reason: str = STALE_FP_REASON, line: SameLine | None = None) -> str:
+    """`results <舊> → <新>、source <舊> → <新>`；沒帶新值的欄位改寫成實話，不得宣稱移動過。"""
+    if carry_absent(carry):
+        # 連「現值」都沒有，一個 hex 都不印（記錄值也不印：它只是上一輪的殘留）
+        return no_results_fp_text(line)
+    if carry is None or (carry.get('results') and carry.get('source')):
+        return f'results {old.get("results", "—")} → {fps["results"]}、source {old.get("source", "—")} → {fps["source"]}'
+    parts = []
+    for col in ('results', 'source'):
+        if carry.get(col):
+            parts.append(f'{col} {old.get(col, "—")} → {fps[col]}')
+        else:
+            parts.append(f'{col} 未帶新值（{reason}；記錄值 {old.get(col) or "空"}、現值 {fps[col]}）')
+    return '、'.join(parts)
+
+
+def only_retag_sentence(carry: dict[str, bool] | None, detail: str) -> str:
+    """各動作 validation.yaml 檔頭的「本次只重接 fingerprint」那一句。"""
+    if carry_absent(carry):
+        return NO_RESULTS_FP + '；也沒有任何數值改變'   # detail 講的是「幾鍵 rows 未變」，沒有這個檔就沒有鍵
+    if carry is None or carry.get('results') or carry.get('source'):
+        return f'本次只重接 fingerprint，沒有任何數值改變（{detail}）'
+    return f'本次未重接 fingerprint（頂層兩欄{STALE_FP_REASON}，刻意不帶新值），也沒有任何數值改變（{detail}）'
+
+
+def known_fp_text(carry: dict[str, bool] | None, old: dict[str, str], fps: dict[str, str],
+                  line: SameLine | None = None) -> str:
+    """決策 known_consequences 裡的 validation 指紋那一句。"""
+    if carry_absent(carry):
+        return no_results_fp_text(line)
+    if carry is None or (carry.get('results') and carry.get('source')):
+        return f'validation 重接：results {fps["results"]}／source {fps["source"]}'
+    return 'validation ' + carry_word(carry) + '：' + fp_move_text(old, fps, carry)
+
+
+def fp_col_text(old: dict[str, str], fps: dict[str, str], col: str, carry: dict[str, bool] | None = None,
+                reason: str = STALE_FP_REASON) -> str:
+    """單欄的 `<舊> → <新>`；沒帶新值就照實寫，不得宣稱移動過。"""
+    if carry_absent(carry):
+        return NO_RESULTS_FP
+    if carry is None or carry.get(col):
+        return f'{old.get(col, "—")} → {fps[col]}'
+    return f'未帶新值（{reason}；記錄值 {old.get(col) or "空"}、現值 {fps[col]}）'
+
+
+def summary_fp_col(summary: dict[str, Any], col: str) -> str:
+    """摘要裡只印一欄時用（reorder_questions 只動 source）。"""
+    fn = summary.get('fingerprint_new') or {}
+    return fp_col_text(summary.get('fingerprint_old') or {}, {col: fn.get(col)}, col,
+                       summary.get('fingerprint_carry'), summary.get('fingerprint_reason') or STALE_FP_REASON)
+
+
+def summary_fp_text(summary: dict[str, Any]) -> str:
+    """各動作摘要裡的 `results <舊> → <新>、source <舊> → <新>`：沒帶新值的欄位照實寫。"""
+    fo = summary.get('fingerprint_old') or {}
+    fn = summary.get('fingerprint_new') or {}
+    return fp_move_text(fo, {'results': fn.get('results'), 'source': fn.get('source')},
+                        summary.get('fingerprint_carry'),
+                        summary.get('fingerprint_reason') or STALE_FP_REASON)
+
+
+def policy_of(vinfo: dict[str, Any]) -> tuple[StalePolicy, dict[str, bool] | None, list[str]]:
+    """從 `step_validation` 回來的 vinfo 取出 (政策, 逐欄帶不帶, rerun 漂移欄位)。
+
+    各動作的 `build_decision`／`print_summary` 拿不到 `Chain`，政策由 vinfo 帶過去，簽章不用改。
+    沒有政策（直接呼叫的舊路徑）就回放寬前的行為。
+    """
+    policy = vinfo.get('policy') or StalePolicy()
+    return policy, vinfo.get('carry'), list(vinfo.get('drift') or [])
+
+
+def fp_move_label(carry: dict[str, bool] | None) -> str:
+    """`fingerprint <移動>：…` 的那兩個字。"""
+    if carry is None or carry.get('results') or carry.get('source'):
+        return '移動'
+    return '未移動'
+
+
+def mark_clause(policy: StalePolicy, key: str, line: SameLine | None = None) -> str:
+    """「各 item 加 <標記>」那一句：該不加標記時改寫成實話。"""
+    if policy.no_results:
+        # 這一句每次都和 fingerprint 那一句（NO_RESULTS／NO_RESULTS_FP）同行：理由誰先到誰說
+        why = []
+        if line_need(line, SameLine.WHY):
+            why.append(NO_RESULTS_SHORT)
+        if line_need(line, SameLine.FP):
+            why.append('沒有 fingerprint 可接')
+        line_own(line, SameLine.MARK)       # 不加標記是這一句的主詞，同一行後面的子句不再重講
+        return '各 item 不加 reaffirmed 標記' + (f'（{"，".join(why)}）' if why else '')
+    if policy.pristine:
+        return f'各 item 加 {key}'
+    if not policy.mark:
+        return f'各 item 不加 reaffirmed 標記（頂層指紋{STALE_FP_REASON}，本次沒有把它們接到現值上）'
+    return f'除 {"／".join(sorted(policy.lagging))} 外各 item 加 {key}（這幾個 item {LAGGING_REASON}）'
+
+
+def rehang_clause(policy: StalePolicy, items: list[str], full: str, sq_only: str, empty: str = '',
+                  scope: str = '') -> str:
+    """改掛那一句：`full` 是 sq 與 plan_id 都改的說法，`sq_only` 是只改 sq 的說法。
+
+    動作前就落後的 item 走 `sq_only`：它的 plan_id 仍指向真正驗過的版本，不得被本次動作改掛。
+    清單為空時：`empty` 有給就沿用「<empty> <full>」的接法（那幾句接起來讀得通，例如「無 item 改掛目標」），
+    沒給就寫成完整句子「<scope>沒有對應的 validation item」——拼成「（無 item） 只把對應 item …」不是句子。
+    """
+    stay = [v for v in items if v in policy.lagging]
+    move = [v for v in items if v not in policy.lagging]
+    if not items:
+        return f'{empty} {full}' if empty else scope + NO_ITEM_SENTENCE
+    if not stay:
+        return f'{"／".join(items)} {full}'
+    parts = [f'{"／".join(move)} {full}'] if move else []
+    parts.append(f'{"／".join(stay)} {sq_only}（{LAGGING_REASON}，plan_id 不動）')
+    return '；'.join(parts)
+
+
+# ---------- rerun waiver 的狀態：重登／漂移／無 waiver，三者只判一次 ----------
+
+NO_WAIVER_BRIEF = '無 waiver 決策'
+NO_WAIVER_SHORT = NO_WAIVER_BRIEF + '（state.analysis.rerun 不是 waived 且未給 --waiver-decision）'
+NO_WAIVER_TAIL = 'rerun 狀態需另行處理（重跑 rerun_all 或另立 waiver 決策）'
+
+
+class WaiverState:
+    """動作前定案的 rerun waiver 狀態，三者之一：重登、漂移、無 waiver。
+
+    一律在第一次寫檔前算一次（`Chain.take_stale_baseline`），之後所有對外文字都讀這一個物件，不得
+    各處自己推。沒有 waiver 決策時本動作既不重登也不改 `state.analysis.rerun`，文字就不能出現
+    「仍 waived」或沒有前綴的「重登」——那是替使用者宣稱一件沒發生、而且這個專案根本沒有的事。
+    理由的順序是「沒有 waiver」先於「漂移」：沒有 waiver 可重登時，漂移只是附帶說明。
+    """
+
+    def __init__(self, waiver: str = '', drift: list[str] | None = None,
+                 result: str = '', present: bool = False, no_results: bool = False) -> None:
+        self.waiver = str(waiver or '')          # waiver 決策編號（`waiver_of` 的結果），空＝沒有
+        self.drift = list(drift or ())           # `state.analysis.rerun` 動作前就與現值不符的欄位
+        self.result = str(result or '')          # `state.analysis.rerun.result`（有這個區塊才有值）
+        self.present = bool(present)             # `project.yaml` 有沒有 `state.analysis.rerun`
+        self.no_results = bool(no_results)       # 尚無正式結果：沒有 fingerprint 可重登到
+
+    @property
+    def carries(self) -> bool:
+        """本動作會不會重登 waiver（與 `step_waiver` 的判斷同一組條件）。"""
+        return bool(self.waiver) and not self.drift and not self.no_results
+
+    @property
+    def state(self) -> str:
+        if self.no_results:
+            return 'no_results'
+        return 'carry' if self.carries else ('drift' if self.waiver else 'none')
+
+    def why_none(self) -> str:
+        """沒有 waiver 時的現況說明：有 rerun 區塊就講它的 result，動作前就漂移另外講一句。"""
+        bits = [NO_WAIVER_SHORT]
+        if self.present:
+            bits.append(f'state.analysis.rerun 現為 result: {self.result or "（未填）"}')
+            if self.drift:
+                bits.append(f'它的 {"／".join(self.drift)} 動作前就與現值不符')
+        return '；'.join(bits)
+
+    def why_no_results(self, line: SameLine | None = None) -> str:
+        """尚無正式結果時的 waiver 說法，依有沒有 waiver 決策分兩句（判斷只在這一處）。
+
+        不走 `why_none()`：那句會講 `state.analysis.rerun` 的現值、還會叫人「重跑 rerun_all 或另立
+        waiver 決策」——這個專案連結果都還沒有，重跑與立 waiver 都還不是它該做的事。
+
+        沒有 waiver 決策時不得用「本次不重登 waiver」這種暗示有一個 waiver 在的說法：照「不重登」緊接
+        `NO_WAIVER_BRIEF` 當理由的寫法，與有結果的專案同一套。有 waiver 決策時照實把編號寫出來。
+
+        這一句自己帶「不重登」三個字，呼叫端**不得再疊一層同義前綴**；理由裡的「尚無正式結果」用短說法
+        （`NO_RESULTS_SHORT`）。`line` 給了而且同一行已經有子句說過理由時，這一句只留結論與影響
+        （「沒有 waiver」是另一個理由，不算重複，照舊寫出來）。
+        """
+        tail = 'state.analysis.rerun 一字不動'
+        lead = [NO_WAIVER_SHORT] if not self.waiver else []      # 沒有 waiver：另一個理由，不是重複
+        because = []
+        if line_need(line, SameLine.WHY):
+            because.append(NO_RESULTS_SHORT)
+        if line_need(line, SameLine.FP):
+            because.append('沒有 fingerprint 可算')
+        head = '、'.join(lead + (['，'.join(because)] if because else []))
+        line_own(line, SameLine.RELOG)
+        return ('不重登' + (f'——{head}，' if head else '，') + tail
+                + (f'（waiver 決策 {self.waiver}，範圍不變）' if self.waiver else ''))
+
+
+def waiver_clause(ws: WaiverState, line: SameLine | None = None) -> str:
+    """短句版的「waiver 重登」。"""
+    if ws.no_results:
+        # 沒有 waiver 時不得寫「不重登 waiver」（暗示有一個 waiver 在）；有 waiver 時把編號寫出來
+        why = [NO_RESULTS_SHORT] if line_need(line, SameLine.WHY) else []
+        line_own(line, SameLine.RELOG)
+        if ws.waiver:
+            return f'waiver 決策 {ws.waiver} 不重登' + (f'（{"、".join(why)}）' if why else '')
+        return '不重登（' + '、'.join([NO_WAIVER_BRIEF] + why) + '）'
+    if ws.carries:
+        return 'waiver 重登'
+    if ws.waiver:
+        return f'waiver 未重登（state.analysis.rerun 的 {"／".join(ws.drift)} {STALE_FP_REASON}）'
+    return f'不重登 waiver（{NO_WAIVER_BRIEF}）'
+
+
+def waiver_phrase(ws: WaiverState, ok_text: str, line: SameLine | None = None) -> str:
+    """各動作自己寫的「waiver 重登…」句子：不是重登時換成照實的說法。"""
+    return ok_text if ws.carries else waiver_clause(ws, line)
+
+
+def waiver_sentence(ws: WaiverState, line: SameLine | None = None) -> str:
+    """檔頭／決策裡整句的「rerun waiver 於新 fingerprint 重登」。"""
+    if ws.no_results:
+        return 'rerun waiver ' + ws.why_no_results(line)
+    if ws.carries:
+        return 'rerun waiver 於新 fingerprint 重登——仍是 waived，不是 pass'
+    if ws.waiver:
+        return (f'rerun waiver 未重登（state.analysis.rerun 的 {"／".join(ws.drift)} {STALE_FP_REASON}，'
+                '漂移不是本次動作造成的）')
+    return (f'本專案沒有 rerun waiver——{ws.why_none()}；本動作不重登、不改 state.analysis.rerun；'
+            + NO_WAIVER_TAIL)
+
+
+def waiver_step_name(ws: WaiverState) -> str:
+    """步驟紀錄的步驟標題（會寫進 reviews/*.json）：沒重登時標題也不能寫「重登」。"""
+    if ws.no_results:
+        return (f'rerun waiver 不重登（waiver 決策 {ws.waiver}、{NO_RESULTS_SHORT}）' if ws.waiver
+                else f'rerun waiver 不重登（{NO_WAIVER_BRIEF}、{NO_RESULTS_SHORT}）')
+    if ws.carries:
+        return 'rerun waiver 重登'
+    if ws.waiver:
+        return 'rerun waiver 不重登（動作前就漂移）'
+    return 'rerun waiver 不重登（無 waiver 決策）'
+
+
+def waiver_decision_line(ws: WaiverState, waiver_rel: str, ok_tail: str = '', drift_text: str = '未重登') -> str:
+    """決策 `(N) rerun waiver：…` 那一行的內容。
+
+    `ok_tail`／`drift_text` 是各動作原本的寫法（重登與漂移兩種狀態逐字沿用）；只有「無 waiver」換成實話。
+    """
+    if ws.no_results:
+        return ws.why_no_results()          # 那一句自己帶「不重登」，這裡不再疊一層
+    if waiver_rel:
+        return f'{waiver_rel}，仍是 waived、不是 pass{ok_tail}'
+    if ws.waiver:
+        return drift_text
+    return f'未重登——{ws.why_none()}；state.analysis.rerun 一字不動，{NO_WAIVER_TAIL}'
+
+
+def waiver_known_line(ws: WaiverState, ok_text: str, line: SameLine | None = None) -> str:
+    """決策 `known_consequences` 裡的 rerun 那一句：沒有 waiver 決策時不得說「仍 waived」。"""
+    if ws.no_results:
+        return 'rerun waiver ' + ws.why_no_results(line)
+    if ws.waiver:
+        return ok_text
+    return (f'本專案沒有 rerun waiver——{ws.why_none()}；本動作不重登、state.analysis.rerun 一字不動，'
+            + NO_WAIVER_TAIL)
+
+
+def waiver_summary_text(summary: dict[str, Any], line: SameLine | None = None) -> str:
+    """stdout 摘要的 `rerun waiver：…`。"""
+    rel = str(summary.get('waiver') or '')
+    if rel:
+        return rel
+    ws = summary.get('waiver_state')
+    if not isinstance(ws, WaiverState):
+        return '未重登'
+    if ws.no_results:
+        return ws.why_no_results(line)      # 那一句自己帶「不重登」，這裡不再疊一層「未重登——」
+    if ws.waiver:
+        return '未重登'
+    return f'未重登——{ws.why_none()}'
+
+
+def stale_rerun_warn(ws: WaiverState) -> str:
+    """`state.analysis.rerun` 動作前就與現值不符時的那一行 WARNING。
+
+    有 waiver 決策時，漂移就是本次不重登的理由，句子逐字沿用原本的寫法。沒有 waiver 時理由是
+    「沒有 waiver 可重登」，漂移只是附帶的現況：先講沒有 waiver（說法一律取自
+    `WaiverState.why_none()`——本模組是「無 waiver」唯一的文字來源），再把漂移放在後面，不得把它
+    寫成不重登的理由，也不得用「本次不重登 waiver」這種暗示有一個 waiver 在的說法。
+    """
+    if ws.no_results:
+        # 尚無正式結果時連現值都量不出來，不會判出漂移；真的走到這裡也只能照實說是哪一種現況
+        return 'WARNING rerun waiver ' + ws.why_no_results()
+    if ws.waiver:
+        return (f'WARNING state.analysis.rerun 的 {"／".join(ws.drift)} '
+                f'{STALE_FP_REASON}：本次不重登 waiver')
+    return f'WARNING {ws.why_none()}——以上都是動作前的現況，本動作不重登、不改 state.analysis.rerun'
+
+
+def waiver_state_of(vinfo: dict[str, Any]) -> WaiverState:
+    """從 `step_validation` 回來的 vinfo 取出 waiver 狀態（各動作的 `build_decision` 拿不到 `Chain`）。"""
+    ws = vinfo.get('waiver_state')
+    return ws if isinstance(ws, WaiverState) else WaiverState(drift=list(vinfo.get('drift') or []))
+
+
+# ---------- 沒有 analysis/validation.yaml：不得描述一個不存在的檔 ----------
+
+NO_ITEM_SENTENCE = '沒有對應的 validation item'
+VALIDATION_ABSENT = 'analysis/validation.yaml 不存在：沒有 item 可改掛、沒有指紋可帶、沒有標記可加'
+VALIDATION_ABSENT_FP = 'analysis/validation.yaml 不存在：沒有 validation 指紋可帶新值，也沒有 item'
+# 新 plan 的 amendment_reason 把檔名寫在前面，這裡只接後半句，不要再重複一次檔名
+VALIDATION_ABSENT_TAIL = '不存在（沒有 item 可改掛、沒有指紋可帶、沒有標記可加）'
+
+
+def absent_or(vinfo: dict[str, Any], ok_text: str, absent_text: str = VALIDATION_ABSENT) -> str:
+    """`analysis/validation.yaml` 不存在時改寫成實話；存在時逐字沿用原句。
+
+    「頂層指紋」「動作前就與現值不符」「各 item 不加 reaffirmed 標記」這些句子只在檔案存在時才有
+    意義——檔案不存在時沒有頂層可比、沒有 item 可標記，照原句寫就是在描述一個不存在的檔。
+    """
+    return absent_text if vinfo.get('absent') else ok_text
+
+
+def lagging_sentence(vinfo: dict[str, Any]) -> str:
+    """「哪些 item 因為動作前就落後而只改 sq」的實話；沒有這種 item 就回空字串。"""
+    ids = vinfo.get('sq_only') or []
+    if not ids:
+        return ''
+    return f'{"／".join(ids)} {LAGGING_REASON}，只改 sq、plan_id 不動（仍指向它真正驗過的版本）'
+
+
+def validation_note_text(vinfo: dict[str, Any], fps: dict[str, str]) -> str:
+    """step_validation 的步驟註記：沒帶新值、沒加標記、只改 sq 的 item 都照實寫。"""
+    carry = vinfo.get('carry')
+    line = SameLine(carry_absent(carry))        # 這一則註記就是一行：理由只由第一個子句說出
+    hung = '／'.join(vinfo['items']) or '無 item'
+    if carry is None or (carry.get('results') and carry.get('source') and not vinfo.get('unmarked')):
+        return (f'{hung} 改掛；各 item 加 {vinfo["reaffirm_key"]}；'
+                f'fingerprint ' + fp_move_text(vinfo['old'], fps, carry))
+    bits = [f'{hung} 改掛' if vinfo['items'] else '無 item 改掛']
+    lag = lagging_sentence(vinfo)
+    if lag:
+        bits.append(lag)
+    if vinfo.get('marked'):
+        bits.append(f'{"／".join(vinfo["marked"])} 加 {vinfo["reaffirm_key"]}')
+    if vinfo.get('unmarked'):
+        if carry_absent(carry):
+            why = '，'.join(([NO_RESULTS_SHORT] if line_need(line, SameLine.WHY) else [])
+                            + (['沒有 fingerprint 可接'] if line_need(line, SameLine.FP) else []))
+            line_own(line, SameLine.MARK)       # 不加標記是這一句的主詞，後面那一句不再重講
+        elif carry.get('results') and carry.get('source'):
+            why = LAGGING_REASON
+        else:
+            why = f'頂層指紋{STALE_FP_REASON}'
+        bits.append(f'{"／".join(vinfo["unmarked"])} 不加 reaffirmed 標記' + (f'（{why}）' if why else ''))
+    bits.append('fingerprint ' + fp_move_text(vinfo['old'], fps, carry, line=line))
+    return '；'.join(bits)
+
+
 def update_validation_generic(text: str, item_map: dict[str, tuple[str | None, str | None]], fps: dict[str, str],
-                              date: str, note: str, header: list[str]) -> tuple[str, dict[str, Any]]:
+                              date: str, note: str, header: list[str],
+                              policy: StalePolicy | None = None) -> tuple[str, dict[str, Any]]:
     """item_map {item id: (新 sq 或 None, 新 plan_id 或 None)}；每個 item 加 reaffirmed 標記；頂層兩個 fingerprint 重接；
-    在既有註解區塊之前插 header。"""
+    在既有註解區塊之前插 header。
+
+    `policy` 省略＝動作前兩欄都相符、沒有落後 item（放寬前的行為）。帶進來的 policy 會擋掉三件事：
+    動作前就不符的欄位不帶新值、落後的 item 不改掛 plan_id、該不加標記的 item 不加標記。
+    """
+    policy = policy or StalePolicy()
     lines = text.split('\n')
     regions = validation_item_regions(lines)
     if not regions:
         raise ChainError('validation.yaml 找不到 items: 清單')
     key = reaffirm_key(text, date)
-    ri, si = find_line(lines, r'^results_fingerprint:'), find_line(lines, r'^source_fingerprint:')
+    ri, si = TF.top_key(lines, 'results_fingerprint'), TF.top_key(lines, 'source_fingerprint')
     if ri < 0 or si < 0:
         raise ChainError('validation.yaml 缺頂層 results_fingerprint／source_fingerprint')
     old_res, old_src = scalar_line_value(lines[ri]), scalar_line_value(lines[si])
     changed: list[str] = []
+    sq_only: list[str] = []
+    marked: list[str] = []
+    unmarked: list[str] = []
     for start, end, vid in reversed(regions):
-        sq_i = find_line(lines, r'^    sq:', start, end)
-        pid_i = find_line(lines, r'^    plan_id:', start, end)
+        fi = TF.item_field_indent(lines, start, end)
+        pad = ' ' * fi
+        sq_i = TF.item_field(lines, start, end, 'sq', fi)
+        pid_i = TF.item_field(lines, start, end, 'plan_id', fi)
+        lagging = vid in policy.lagging
         if vid in item_map:
             new_sq, new_pid = item_map[vid]
+            if lagging and new_pid:
+                sq_only.append(vid)      # 落後的 item 不改掛：plan_id 仍指向它真正驗過的版本
+                new_pid = None
             if new_sq and sq_i >= 0:
-                lines[sq_i] = f'    sq: {new_sq}'
+                lines[sq_i] = TF.replace_value(lines[sq_i], new_sq)
             if new_pid and pid_i >= 0:
-                lines[pid_i] = f'    plan_id: {new_pid}'
+                lines[pid_i] = TF.replace_value(lines[pid_i], new_pid)
             changed.append(vid)
+        if not policy.mark or lagging:
+            unmarked.append(vid)         # 標記＝「本次把這個 item 重接到這組指紋」，不成立就不寫
+            continue
+        marked.append(vid)
+        norm = TF.norm_item(lines, start, end)
         last = -1
         for i in range(start, end):
-            if re.match(r'^    reaffirmed_\S+:', lines[i]):
+            if re.match(r'^' + pad + r'reaffirmed_\S+:', norm[i - start]):
                 last = i
         if last >= 0:
-            ins = min(region_end(lines, last, 5), end)
+            ins = min(TF.key_block_end(lines, last, fi), end)
         else:
             anchor = pid_i if pid_i >= 0 else (sq_i if sq_i >= 0 else start)
             ins = anchor + 1
-        lines[ins:ins] = [f'    {key}:', f'      results: {fps["results"]}', f'      source: {fps["source"]}',
-                          f'      note: {yaml_dq(note)}']
+        sub = ' ' * (fi + 2)
+        lines[ins:ins] = [f'{pad}{key}:', f'{sub}results: {fps["results"]}', f'{sub}source: {fps["source"]}',
+                          f'{sub}note: {yaml_dq(note)}']
     changed.reverse()
-    for k, v in (('results_fingerprint', fps['results']), ('source_fingerprint', fps['source'])):
-        i = find_line(lines, rf'^{k}:')
-        lines[i] = f'{k}: {v}'
+    sq_only.reverse()
+    marked.reverse()
+    unmarked.reverse()
+    if policy.carry['results']:
+        ri2 = TF.top_key(lines, 'results_fingerprint')
+        lines[ri2] = TF.replace_value(lines[ri2], fps['results'])
+    if policy.carry['source']:
+        si2 = TF.top_key(lines, 'source_fingerprint')
+        lines[si2] = TF.replace_value(lines[si2], fps['source'])
     first_comment = find_line(lines, r'^#', 1)
-    items_at = find_line(lines, r'^items:')
+    items_at = TF.top_key(lines, 'items')
     ins = first_comment if 0 < first_comment < items_at else items_at
-    if ins <= 0:
+    if ins < 0:
         raise ChainError('validation.yaml 找不到插入更新註解的位置')
     lines[ins:ins] = header
-    return '\n'.join(lines), {'items': changed, 'reaffirm_key': key, 'old': {'results': old_res, 'source': old_src}}
+    return '\n'.join(lines), {'items': changed, 'reaffirm_key': key, 'old': {'results': old_res, 'source': old_src},
+                              'carry': policy.carry.copy(), 'sq_only': sq_only, 'marked': marked, 'unmarked': unmarked}
 
 
 def verify_validation_generic(old_text: str, new_text: str, item_map: dict[str, tuple[str | None, str | None]], key: str,
-                              fps: dict[str, str]) -> None:
+                              fps: dict[str, str], policy: StalePolicy | None = None) -> None:
+    """只驗「實際該發生的事」：該帶新值的欄位帶了、不該帶的逐字未變、該加標記的加了、不該加的沒多出來。
+
+    放寬成不驗是不行的——不驗就等於把 (a)(b)(c) 的保證交給呼叫端自律。
+    """
+    policy = policy or StalePolicy()
     old, new = yaml.safe_load(old_text), yaml.safe_load(new_text)
     for k in set(old) | set(new):
         if k == 'items':
             continue
         if k in ('results_fingerprint', 'source_fingerprint'):
-            if str(new.get(k)) != fps['results' if k == 'results_fingerprint' else 'source']:
-                raise ChainError(f'validation.yaml 頂層 {k} 未正確重接')
+            col = 'results' if k == 'results_fingerprint' else 'source'
+            if policy.carry[col]:
+                if str(new.get(k)) != fps[col]:
+                    raise ChainError(f'validation.yaml 頂層 {k} 未正確重接')
+            elif old.get(k) != new.get(k):
+                raise ChainError(f'validation.yaml 頂層 {k} {STALE_FP_REASON}，不該被本次動作帶到新值')
             continue
         if old.get(k) != new.get(k):
             raise ChainError(f'validation.yaml 頂層 {k} 不該改變')
@@ -1183,16 +2397,20 @@ def verify_validation_generic(old_text: str, new_text: str, item_map: dict[str, 
         raise ChainError('validation.yaml items 筆數改變')
     for a, b in zip(oi, ni):
         b = dict(b)
-        mark = b.pop(key, None)
-        if not isinstance(mark, dict) or mark.get('results') != fps['results'] or mark.get('source') != fps['source']:
-            raise ChainError(f'validation.yaml {a.get("id")} 的 {key} 標記不正確')
-        a = dict(a)
         vid = str(a.get('id'))
+        mark = b.pop(key, None)
+        if policy.mark and vid not in policy.lagging:
+            if not isinstance(mark, dict) or mark.get('results') != fps['results'] or mark.get('source') != fps['source']:
+                raise ChainError(f'validation.yaml {vid} 的 {key} 標記不正確')
+        elif mark is not None:
+            raise ChainError(f'validation.yaml {vid} 不該加 {key} 標記'
+                             f'（{LAGGING_REASON if vid in policy.lagging else "頂層指紋" + STALE_FP_REASON}）')
+        a = dict(a)
         if vid in item_map:
             new_sq, new_pid = item_map[vid]
             if new_sq:
                 a['sq'] = new_sq
-            if new_pid:
+            if new_pid and vid not in policy.lagging:
                 a['plan_id'] = new_pid
         if a != b:
             raise ChainError(f'validation.yaml {vid} 除 sq／plan_id／{key} 外有差異')
@@ -1212,34 +2430,68 @@ def validation_items_by(root: Path, sq: str | None = None, plan_id: str | None =
     return out
 
 
+def lagging_items(root: Path) -> set[str]:
+    """動作前 `plan_id` 就不是該 `sq` 的 active plan 的 validation item。
+
+    判準與 check_validation 的「plan_id 不是 <sq> active plan <pid>」同一條：那筆 blocker 動作前就在，
+    動作後也該照舊在，比對時算既有。`plan_id` 為空是另一筆 blocker（`plan_id 為空`），
+    不算落後——它沒有指向任何版本，改掛不會洗掉任何已驗過的事實。
+    """
+    doc = load_yaml(root / 'analysis/validation.yaml') or {}
+    active = (plan_common.load_index(root).get('active') or {}) if (root / 'analysis/plans/index.yaml').is_file() else {}
+    out: set[str] = set()
+    for it in (doc.get('items') or []) if isinstance(doc, dict) else []:
+        if not isinstance(it, dict):
+            continue
+        sq, pid = str(it.get('sq')), str(it.get('plan_id') or '')
+        if pid and active.get(sq) and pid != str(active[sq]):
+            out.add(str(it.get('id')))
+    return out
+
+
 # ---------- project.yaml state.analysis.rerun ----------
 
-def update_rerun_state(text: str, fps: dict[str, str], report_rel: str, date: str, because: str) -> tuple[str, dict[str, Any]]:
+def update_rerun_state(text: str, fps: dict[str, str], report_rel: str, date: str, because: str,
+                       val_policy: StalePolicy | None = None) -> tuple[str, dict[str, Any]]:
     """state.analysis.rerun：at／三個 fingerprint／report 改新值，舊值推進 previous_waiver；state.analysis.validation 的兩個
-    fingerprint 與 at 改新值。找不到 rerun 區塊或它不是 waived → 回原文與 skipped 說明。"""
+    fingerprint 與 at 改新值。
+
+    先用 `safe_load` 判語意：`state.analysis.rerun` 不存在、或它的 `result` 不是 `waived`，才回 skipped
+    （這種情況本來就沒有東西要重登）。語意上**是** waived 卻在文字層定位不到，一律 ChainError——
+    決策日誌寫了「rerun 已重登」而 `project.yaml` 沒改，是不能靜默發生的事。
+
+    `val_policy` 管 state.analysis.validation 的兩個指紋：逐欄比對動作前的現值，動作前就不符或空白的
+    欄位不動（省略＝兩欄都帶，放寬前的行為）。`at` 只有兩欄都帶到新值時才改——只帶一欄還寫新日期，
+    等於宣稱那天整組都重驗過。
+    """
+    val_policy = val_policy or StalePolicy()
     lines = text.split('\n')
-    st = find_line(lines, r'^state:')
-    if st < 0:
-        return text, {'skipped': '無 state 區塊'}
-    st_end = region_end(lines, st, 1)
-    an = find_line(lines, r'^  analysis:', st, st_end)
-    if an < 0:
-        return text, {'skipped': '無 state.analysis'}
-    an_end = region_end(lines, an, 3)
-    rr = find_line(lines, r'^    rerun:', an, an_end)
+    old_doc = yaml.safe_load(text)
+    sem = ((old_doc or {}).get('state') or {}).get('analysis') or {}
+    sem_rerun = sem.get('rerun') if isinstance(sem, dict) else None
+    if not isinstance(sem_rerun, dict):
+        return text, {'skipped': 'project.yaml 語意上沒有 state.analysis.rerun（沒有要重登的 waiver）'}
+    if str(sem_rerun.get('result') or '') != 'waived':
+        return text, {'skipped': f'state.analysis.rerun.result 不是 waived（現值 {sem_rerun.get("result")!r}）'}
+    rr, rr_ind, rr_end = TF.map_path(lines, ('state', 'analysis', 'rerun'), 'project.yaml')
     if rr < 0:
-        return text, {'skipped': '無 state.analysis.rerun'}
-    rr_end = region_end(lines, rr, 5)
+        raise ChainError('project.yaml 的 state.analysis.rerun 語意上是 waived，文字層卻定位不到 '
+                         'state → analysis → rerun 這三層的鍵行，無法重登；未落檔')
+    TF.need_block(lines, rr, 'state.analysis.rerun', 'project.yaml')
+    f_ind = TF.child_map_indent(lines, rr, rr_ind, rr_end)
+    if f_ind < 0:
+        raise ChainError('project.yaml 的 state.analysis.rerun 底下量不到欄位縮排，無法重登；未落檔')
+    pad, sub = ' ' * f_ind, ' ' * (f_ind + 2)
     keys: dict[str, int] = {}
     for i in range(rr + 1, rr_end):
-        m = re.match(r'^      ([a-z_]+):', lines[i])
+        m = re.match(r'^' + pad + r'([a-z_]+):', lines[i])
         if m:
             keys[m.group(1)] = i
-    if 'result' not in keys or scalar_line_value(lines[keys['result']]) != 'waived':
-        return text, {'skipped': 'state.analysis.rerun.result 不是 waived'}
+    if 'result' not in keys:
+        raise ChainError(f'project.yaml 的 state.analysis.rerun 語意上是 waived，文字層卻找不到縮排 {f_ind} 的 '
+                         'result: 那一行，無法重登；未落檔')
     old_vals = {k: scalar_line_value(lines[keys[k]]) for k in ('fingerprint', 'input_fingerprint', 'results_fingerprint', 'report', 'at') if k in keys}
-    old_doc = yaml.safe_load(text)
-    old_rerun = old_doc['state']['analysis']['rerun']
+    old_rerun = sem_rerun
     depth = 0
     node = old_rerun.get('previous_waiver')
     while isinstance(node, dict):
@@ -1254,28 +2506,29 @@ def update_rerun_state(text: str, fps: dict[str, str], report_rel: str, date: st
     pw_start = pw_end = -1
     if 'previous_waiver' in keys:
         pw_start = keys['previous_waiver']
-        pw_end = region_end(lines, pw_start, 7)
-        inline = lines[pw_start].split(':', 1)[1].strip()
-        if inline and not inline.startswith('#'):
-            pw_lines = ['        previous_waiver: ' + inline]
+        pw_end = TF.key_block_end(lines, pw_start, f_ind)
+        inline = TF.inline_rest(lines[pw_start])
+        raw_cmt = TF.split_field_line(lines[pw_start])[2].strip()
+        if inline:
+            pw_lines = [sub + 'previous_waiver: ' + inline]
         else:
-            pw_lines = ['        previous_waiver:' + (('   ' + inline) if inline else '')] + ['  ' + ln if ln.strip() else ln for ln in lines[pw_start + 1:pw_end]]
-    new_pw = [f'      previous_waiver:   # {date} 第{cjk_ordinal(n_new - 1)}次重登的值；其內層 previous_waiver 為再前一次重登的值，逐層往內即為時間倒序',
-              f'        fingerprint: {old_vals.get("fingerprint", "")}',
-              f'        input_fingerprint: {old_vals.get("input_fingerprint", "")}',
-              f'        results_fingerprint: {old_vals.get("results_fingerprint", "")}',
-              f'        report: {old_vals.get("report", "")}',
-              f'        superseded_because: {yaml_dq(because)}'] + pw_lines
+            pw_lines = [sub + 'previous_waiver:' + (('   ' + raw_cmt) if raw_cmt else '')] + \
+                TF.shift_block(lines[pw_start + 1:pw_end], 2)
+    new_pw = [f'{pad}previous_waiver:   # {date} 第{cjk_ordinal(n_new - 1)}次重登的值；其內層 previous_waiver 為再前一次重登的值，逐層往內即為時間倒序',
+              f'{sub}fingerprint: {old_vals.get("fingerprint", "")}',
+              f'{sub}input_fingerprint: {old_vals.get("input_fingerprint", "")}',
+              f'{sub}results_fingerprint: {old_vals.get("results_fingerprint", "")}',
+              f'{sub}report: {old_vals.get("report", "")}',
+              f'{sub}superseded_because: {yaml_dq(because)}'] + pw_lines
 
     def set_line(i: int, key: str, value: str) -> None:
-        m = re.match(r'^(\s{6}' + key + r':\s*)(.*?)(\s+#.*)?$', lines[i])
-        lines[i] = f'{m.group(1)}{value}{m.group(3) or ""}'
+        lines[i] = TF.replace_value(lines[i], value)
     for k, v in (('fingerprint', fps['fingerprint']), ('input_fingerprint', fps['input_fingerprint']),
                  ('results_fingerprint', fps['results_fingerprint']), ('report', report_rel), ('at', f"'{date}'")):
         if k in keys:
             set_line(keys[k], k, v)
         else:
-            lines.insert(keys['result'] + 1, f'      {k}: {v}')
+            lines.insert(keys['result'] + 1, f'{pad}{k}: {v}')
             keys = {kk: (ii + 1 if ii > keys['result'] else ii) for kk, ii in keys.items()}
             keys[k] = keys['result'] + 1
             if pw_start >= keys['result'] + 1:
@@ -1284,24 +2537,31 @@ def update_rerun_state(text: str, fps: dict[str, str], report_rel: str, date: st
     if pw_start >= 0:
         lines[pw_start:pw_end] = new_pw
     else:
-        ins = keys['note'] if 'note' in keys else region_end(lines, rr, 5)
+        ins = keys['note'] if 'note' in keys else TF.key_block_end(lines, rr, rr_ind)
         lines[ins:ins] = new_pw
     text2 = '\n'.join(lines)
     lines = text2.split('\n')
-    st = find_line(lines, r'^state:')
-    st_end = region_end(lines, st, 1)
-    an = find_line(lines, r'^  analysis:', st, st_end)
-    an_end = region_end(lines, an, 3)
-    va = find_line(lines, r'^    validation:', an, an_end)
+    sem_val = sem.get('validation') if isinstance(sem, dict) else None
+    va, va_ind, va_end = TF.map_path(lines, ('state', 'analysis', 'validation'), 'project.yaml')
     val_changed = False
+    val_fields = []
+    if val_policy.carry['results']:
+        val_fields.append(('results_fingerprint', fps['results_fingerprint']))
+    if val_policy.carry['source']:
+        val_fields.append(('source_fingerprint', fps['fingerprint']))
+    if val_policy.mark:
+        val_fields.append(('at', f"'{date}'"))   # 只帶一欄還改日期，等於宣稱那天整組都重驗過
     if va >= 0:
-        va_end = region_end(lines, va, 5)
-        for k, v in (('results_fingerprint', fps['results_fingerprint']), ('source_fingerprint', fps['fingerprint']), ('at', f"'{date}'")):
-            i = find_line(lines, rf'^      {k}:', va, va_end)
+        v_ind = TF.child_map_indent(lines, va, va_ind, va_end)
+        for k, v in val_fields:
+            i = TF.find_key(lines, k, va + 1, va_end, v_ind) if v_ind >= 0 else -1
             if i >= 0:
-                m = re.match(r'^(\s{6}' + k + r':\s*)(.*?)(\s+#.*)?$', lines[i])
-                lines[i] = f'{m.group(1)}{v}{m.group(3) or ""}'
+                lines[i] = TF.replace_value(lines[i], v)
                 val_changed = True
+    if isinstance(sem_val, dict) and val_fields and not val_changed and \
+            any(k in sem_val for k, _v in val_fields):
+        raise ChainError('project.yaml 語意上有 state.analysis.validation 的指紋欄位，文字層卻定位不到，'
+                         '指紋無法重接；未落檔')
     new_text = '\n'.join(lines)
     new_doc = yaml.safe_load(new_text)
     new_rerun = new_doc['state']['analysis']['rerun']
@@ -1329,45 +2589,139 @@ def update_rerun_state(text: str, fps: dict[str, str], report_rel: str, date: st
     if oa != na:
         raise ChainError('project.yaml waiver 步驟波及 state.analysis 其他欄位')
     if isinstance(ov, dict) and isinstance(nv, dict):
+        allowed = {k for k, _v in val_fields}      # 只有政策允許帶新值的欄位可以不同，其餘逐字相同
         for k in set(ov) | set(nv):
-            if k in ('results_fingerprint', 'source_fingerprint', 'at'):
+            if k in allowed:
                 continue
             if ov.get(k) != nv.get(k):
-                raise ChainError(f'project.yaml waiver 步驟波及 state.analysis.validation.{k}')
-    return new_text, {'n': n_new, 'old': old_vals, 'validation_updated': val_changed}
+                raise ChainError(f'project.yaml waiver 步驟波及 state.analysis.validation.{k}'
+                                 f'（本次允許改動的欄位：{sorted(allowed) or "無"}）')
+    return new_text, {'n': n_new, 'old': old_vals, 'validation_updated': val_changed,
+                      'validation_fields': [k for k, _v in val_fields]}
 
 
 # ---------- GLOSSARY 編號對照表 ----------
 
-def glossary_table(lines: list[str]) -> tuple[int, int, int, int]:
-    """回 (節起點, 節尾, 主子問題列, 最後一個 AQ 列)；沒有這種列就回 (-1, -1, -1, -1)。
+GLOSSARY_REL = 'GLOSSARY.md'
+GLOSSARY_MAIN_CELL = '主子問題'       # 主子問題列的第三格：完全相等才算（第三格多了字的列不算）
+GLOSSARY_AQ_CELL = '附錄問題'         # AQ 錨點列的第三格開頭
+GLOSSARY_EMPTY_Q = '（無）'           # 一個主問題都不剩時第二格的寫法
+GLOSSARY_NO_TABLE = '無編號對照表'
+GLOSSARY_MANY_MAIN = '主子問題列不只一列，無法判斷要改哪一列'
+# 專案沒有這個檔時給的出路：init_glossary.py 會依範本建一份。步驟紀錄的 note 與決策第 (7) 項共用這兩個字串，
+# 兩支動作都不自己拼（說法只有一處，改一次就全對）。
+GLOSSARY_INIT_HINT = '可用 init_glossary.py 依範本建立'
+GLOSSARY_MISSING_NOTE = f'無 {GLOSSARY_REL}，略過；{GLOSSARY_INIT_HINT}'
+_FENCE_RE = re.compile(r'^\s*(`{3,}|~{3,})')
+_ATX_HEAD_RE = re.compile(r'^#{1,6}\s')
+_SETEXT_RULE_RE = re.compile(r'\s*(=+|-+)\s*')
+# 主子問題列的第二格：SQ 編號清單（含後綴字母），分隔符收「、」「,」「，」「/」「／」與空白
+_SQ_LIST_RE = re.compile(r'SQ\d+' + Q_SUFFIX + r'(?:[、,，/／\s]+SQ\d+' + Q_SUFFIX + r')*')
 
-    不看節號，只看形狀：先找第一個第三格寫「主子問題」的表格列，往上取最近的標題當節起點，
-    節尾取下一個 `^##`。節號、節名與表頭怎麼寫都不影響定位。"""
-    first = -1
+
+def _fenced_mask(lines: list[str]) -> list[bool]:
+    """每一行在不在 code fence 裡（開頭與收尾那兩行本身也算在裡面）。``` 與 ~~~ 各自配對。"""
+    out: list[bool] = []
+    marker = ''
+    for ln in lines:
+        m = _FENCE_RE.match(ln)
+        tok = m.group(1)[0] if m else ''
+        if marker:
+            out.append(True)
+            if tok == marker:
+                marker = ''
+        else:
+            out.append(bool(tok))
+            marker = tok
+    return out
+
+
+def _heading_lines(lines: list[str], fenced: list[bool]) -> set[int]:
+    """標題行的行號：ATX（`# ` 到 `###### `）與 setext（下一行是 `===`／`---` 的文字行）。
+
+    setext 的底線行本身不是標題；以 `|` 開頭的表格列也不當 setext 標題（表頭下面那條分隔線）。"""
+    heads: set[int] = set()
     for i, ln in enumerate(lines):
+        if fenced[i]:
+            continue
+        if _ATX_HEAD_RE.match(ln):
+            heads.add(i)
+            continue
+        if not ln.strip() or ln.lstrip().startswith('|'):
+            continue
+        nxt = i + 1
+        if nxt < len(lines) and not fenced[nxt] and _SETEXT_RULE_RE.fullmatch(lines[nxt]):
+            heads.add(i)
+    return heads
+
+
+def glossary_rows(lines: list[str]) -> tuple[list[int], list[int]]:
+    """編號對照表的兩種錨點列，各回行號清單：(主子問題列, AQ 錨點列)。
+
+    主子問題列＝第三格剛好是「主子問題」、第二格是 SQ 編號清單或「（無）」；
+    AQ 錨點列＝第二格完全是一個 AQ 編號、第三格以「附錄問題」開頭。
+    別張表只要形狀不同就不會被認；code fence 裡的行（範例表格、`# 註解`）一律不看。"""
+    fenced = _fenced_mask(lines)
+    main_rows: list[int] = []
+    aq_rows: list[int] = []
+    for i, ln in enumerate(lines):
+        if fenced[i]:
+            continue
         cells = [c.strip() for c in ln.split('|')]
-        if len(cells) >= 4 and cells[2] == '主子問題':
-            first = i
-            break
-    if first < 0:
+        if len(cells) < 4:
+            continue
+        if cells[2] == GLOSSARY_MAIN_CELL and (cells[1] == GLOSSARY_EMPTY_Q or _SQ_LIST_RE.fullmatch(cells[1])):
+            main_rows.append(i)
+        elif AQ_RE.fullmatch(cells[1]) and cells[2].startswith(GLOSSARY_AQ_CELL):
+            aq_rows.append(i)
+    return main_rows, aq_rows
+
+
+def glossary_skip_reason(lines: list[str]) -> str:
+    """`glossary_table` 定位不到時的原因；步驟紀錄與決策共用這一個字串。"""
+    main_rows, _aq_rows = glossary_rows(lines)
+    return GLOSSARY_MANY_MAIN if len(main_rows) > 1 else GLOSSARY_NO_TABLE
+
+
+def glossary_table(lines: list[str]) -> tuple[int, int, int, int]:
+    """回 (節起點, 節尾, 主子問題列, 最後一個 AQ 列)；定位不到就回 (-1, -1, -1, -1)。
+
+    不看節號，只看形狀：錨點是那一列主子問題列；沒有主子問題列就退到第一個 AQ 錨點列（`main_i` 回 -1），
+    主子問題列不只一列（逐題一列的表、或一份文件裡有兩張這樣的表）就不猜要改哪一列。
+    節起點＝錨點往上最近的標題（沒有就第 0 行），節尾＝節起點之後下一個任意層級的標題（沒有就行數）。
+    節號、節名與表頭怎麼寫都不影響定位。"""
+    main_rows, aq_rows = glossary_rows(lines)
+    if len(main_rows) > 1:
         return -1, -1, -1, -1
-    sec = 0
-    for i in range(first, -1, -1):
-        if re.match(r'^#{1,6}\s', lines[i]):
-            sec = i
-            break
-    sec_end = find_line(lines, r'^##', sec + 1)
-    if sec_end < 0:
-        sec_end = len(lines)
-    main_i = last_aq = -1
+    anchor = main_rows[0] if main_rows else (aq_rows[0] if aq_rows else -1)
+    if anchor < 0:
+        return -1, -1, -1, -1
+    fenced = _fenced_mask(lines)
+    heads = _heading_lines(lines, fenced)
+    sec = next((i for i in range(anchor, -1, -1) if i in heads), 0)
+    sec_end = next((i for i in range(sec + 1, len(lines)) if i in heads), len(lines))
+    main_i = main_rows[0] if main_rows else -1
+    last_aq = -1
     for i in range(sec, sec_end):
         cells = [c.strip() for c in lines[i].split('|')]
-        if len(cells) >= 4 and cells[2] == '主子問題':
-            main_i = i
-        if len(cells) >= 4 and re.fullmatch(r'AQ\d+', cells[1]):
+        if not fenced[i] and len(cells) >= 4 and AQ_RE.fullmatch(cells[1]):
             last_aq = i
     return sec, sec_end, main_i, last_aq
+
+
+def glossary_decision_text(ginfo: dict[str, Any] | None, parts: dict[str, str]) -> str:
+    """決策第 (7) 項：依第 7 步實際的結果寫，沒改到的部分不寫。兩支動作共用這一處說法。
+
+    ginfo：`update_glossary` 的回傳值；`None` 代表專案沒有 `GLOSSARY.md` 這個檔。
+    parts：`ginfo['changed']` 的每個元素 → 決策裡那一部分怎麼說。"""
+    if ginfo is None:
+        return f'(7) {GLOSSARY_REL}：專案沒有這個檔，編號對照表未更新（{GLOSSARY_INIT_HINT}）'
+    if ginfo.get('skipped'):
+        return f'(7) {GLOSSARY_REL} 編號對照表未更新：{ginfo["skipped"]}'
+    said = [parts[k] for k in ginfo.get('changed') or [] if k in parts]
+    if not said:
+        return f'(7) {GLOSSARY_REL} 編號對照表未更新：沒有改到任何一列'
+    return f'(7) {GLOSSARY_REL} 編號對照表：' + '、'.join(said)
 
 
 # ---------- Chain：步驟、備份、還原、run log ----------
@@ -1387,7 +2741,151 @@ class Chain:
         self.log.doc['decision_id'] = did
         self.log_rel = log_rel
         self.cur: dict[str, Any] | None = None
-        self.summary: dict[str, Any] = {'decision_id': did, 'log': log_rel, 'files': [], 'backups': []}
+        self.summary: dict[str, Any] = {'decision_id': did, 'log': log_rel, 'files': [], 'backups': [], 'warnings': []}
+        _WARN_SINK.clear()
+        _EXISTING_SINK.clear()
+        _EXISTING_SEEN.clear()
+        self.action = action
+        # 鏈上的 id 對照（src→to、old_pid→new_pid）：既有的關卡訊息在動作後會換 id，不對照就全被當成新增。
+        self.id_map: dict[str, str] = {}
+        # 鏈上隨 links 搬走的結果鍵（見 `MovedLink`）：由搬 links 那一步登記，只影響「哪些算既有」。
+        self.moved_links: list[MovedLink] = []
+        self.gate_base: dict[str, list[str]] = {}
+        self.params: dict[str, Any] = dict(args)   # 前置條件算出來的 waiver 決策也在裡面
+        self.take_gate_baseline()
+
+    def take_gate_baseline(self) -> None:
+        """第一次寫檔之前，把這條鏈會用到的全專案關卡各跑一次當基準（唯讀），並記下動作前的現況。"""
+        self.tamper_base: list[str] = []
+        self.goals_base = goals_of(load_yaml(self.root / 'project.yaml'))   # 快照三方合併要用的 G0
+        for key in CHAIN_GATES.get(self.action, DEFAULT_CHAIN_GATES):
+            self.gate_base[key], out = run_gate(self.root, key)
+            if key == 'coverage':
+                self.tamper_base = tamper_keys(out)
+        if self.tamper_base:
+            self.log.doc['tamper_baseline'] = list(self.tamper_base)
+        if 'plan' in self.gate_base:
+            self.gate_base['plan_sq'] = list(self.gate_base['plan'])
+        # `plan_sq` 不寫進步驟紀錄：它不是真的跑出來的 baseline，只是 `plan` 的複本。
+        # 存原文（不是比對用的正規化鍵）：給人讀的紀錄裡路徑與日期要是當次輸出那樣，`<FP>`／`<DATE>` 看起來像壞掉。
+        # 比對一律不經過這裡——用的是記憶體裡的 `self.gate_base`，比對鍵與語意都沿用 `normalize_finding`。
+        if any(v for k, v in self.gate_base.items() if k != 'plan_sq'):   # 乾淨專案不多寫這個鍵，步驟紀錄逐位元不變
+            self.log.doc['gate_baseline'] = {k: [getattr(x, 'raw', '') or str(x) for x in v]
+                                             for k, v in self.gate_base.items() if v and k != 'plan_sq'}
+        self.take_stale_baseline()
+
+    def take_stale_baseline(self) -> None:
+        """動作前就過期／落後／漂移的東西，一律在這裡定案：指紋逐欄、落後 item、rerun waiver。
+
+        關卡放寬成「只擋本次新增」之後，帶既有問題的專案會走完整條鏈，鏈上的寫入會把既有問題蓋掉
+        （指紋被帶到新值、落後的 item 被改掛、漂移的 waiver 被重登），決策紀錄還會寫出不實的句子。
+        判斷一律直接比對欄位值，不解析關卡的訊息文字。
+        """
+        self.fp_now: dict[str, str] = {}
+        self.policy = StalePolicy()                 # validation.yaml 頂層兩欄 ＋ 落後 item
+        self.state_policy = StalePolicy()           # project.yaml state.analysis.validation 兩欄
+        self.rerun_drift: list[str] = []
+        proj = load_yaml(self.root / 'project.yaml') or {}
+        sem = ((proj.get('state') or {}).get('analysis') or {}) if isinstance(proj, dict) else {}
+        rr = sem.get('rerun') if isinstance(sem, dict) else None
+        # waiver 狀態在這裡定案（前置條件已算好 waiver 決策），之後所有對外文字都讀它、不再各處自己推
+        # 尚無正式結果也在這裡定案（與 waiver 狀態同一處、同樣在第一次寫檔之前），之後一律讀 self.no_results
+        self.no_results = no_results(self.root)
+        self.waiver_state = WaiverState(self.params.get('waiver_decision') or '', [],
+                                        str(rr.get('result') or '') if isinstance(rr, dict) else '',
+                                        isinstance(rr, dict), self.no_results)
+        self.summary['waiver_state'] = self.waiver_state
+        self.summary['no_results'] = self.no_results
+        v_path = self.root / 'analysis/validation.yaml'
+        if self.no_results:
+            # 沒有 results.json 就算不出任何 fingerprint：`rerun_all --fingerprint-only` 與
+            # `check_validation --source-fingerprint-only` 都只印一行 INFO，呼叫它們只會得到
+            # 「量不到現值」那條路——那條路的文字會把沒量過的東西寫成動作前就不符，這裡刻意不走。
+            lag = lagging_items(self.root) if v_path.is_file() else set()
+            self.policy = StalePolicy({'results': False, 'source': False}, lag, no_results=True)
+            self.state_policy = StalePolicy({'results': False, 'source': False}, no_results=True)
+            kept = [f for f in ('fingerprint', 'input_fingerprint', 'results_fingerprint')
+                    if isinstance(rr, dict) and f in rr]
+            odd = no_results_warn(v_path.is_file(), kept, self.waiver_state.waiver)
+            self.stale_warn = [odd] if odd else []
+            if odd:
+                self.log.doc['stale_baseline'] = {'no_results': True, 'validation_yaml': v_path.is_file(),
+                                                  'rerun_fingerprint_fields': kept,
+                                                  'lagging_items': sorted(self.policy.lagging)}
+                warn(odd)
+            return
+        try:
+            self.fp_now = fingerprint_only(self.root)
+        except ChainError as exc:
+            self.policy = StalePolicy({'results': False, 'source': False})
+            self.state_policy = StalePolicy({'results': False, 'source': False})
+            self.stale_warn = [f'WARNING 動作前量不到目前的 fingerprint（{exc}）：'
+                               '本次一律不帶新值、不加 reaffirmed 標記、不重登 waiver']
+            self.rerun_drift = ['（量不到現值）']
+            self.waiver_state.drift = list(self.rerun_drift)
+            self.log.doc['stale_baseline'] = {'fingerprint_unavailable': True}
+            warn(self.stale_warn[0])
+            return
+        now = {'results': self.fp_now['results_fingerprint'], 'source': self.fp_now['fingerprint']}
+        lag = lagging_items(self.root) if v_path.is_file() else set()
+        self.policy = StalePolicy(carry_of(recorded_fingerprints(load_yaml(v_path)), now) if v_path.is_file()
+                                  else {'results': False, 'source': False}, lag)
+        self.state_policy = StalePolicy(carry_of(recorded_fingerprints(sem.get('validation')), now))
+        if isinstance(rr, dict):
+            for fld, col in (('fingerprint', 'fingerprint'), ('input_fingerprint', 'input_fingerprint'),
+                             ('results_fingerprint', 'results_fingerprint')):
+                if fld in rr and str(rr.get(fld) or '') != self.fp_now[col]:
+                    self.rerun_drift.append(fld)
+        self.waiver_state.drift = list(self.rerun_drift)
+        self.stale_warn = []
+        if not v_path.is_file():
+            # 檔案不存在時沒有「頂層指紋」可比、也沒有「原記錄」可維持，不得照過期那一句寫
+            self.stale_warn.append('WARNING 無 analysis/validation.yaml：這個檔不存在，'
+                                   '沒有 fingerprint 可帶新值、沒有 item 可改掛或加 reaffirmed 標記')
+        elif not self.policy.carry['results'] or not self.policy.carry['source']:
+            self.stale_warn.append(
+                f'WARNING analysis/validation.yaml 頂層指紋動作前就不是現值（results '
+                f'{"相符" if self.policy.carry["results"] else "不符"}、source '
+                f'{"相符" if self.policy.carry["source"] else "不符"}）：不符的欄位本次不帶新值，維持原記錄')
+        if self.policy.lagging:
+            self.stale_warn.append(f'WARNING validation item {"／".join(sorted(self.policy.lagging))} '
+                                   f'{LAGGING_REASON}：本次只改 sq、plan_id 不動')
+        if self.rerun_drift:
+            # 有 waiver 才能把漂移寫成不重登的理由；沒有 waiver 時理由是「沒有 waiver」，一律交給 helper 判
+            self.stale_warn.append(stale_rerun_warn(self.waiver_state))
+        if not self.policy.pristine or not self.state_policy.pristine or self.rerun_drift:
+            self.log.doc['stale_baseline'] = {
+                'validation_carry': dict(self.policy.carry), 'state_validation_carry': dict(self.state_policy.carry),
+                'lagging_items': sorted(self.policy.lagging), 'rerun_drift': list(self.rerun_drift)}
+        for line in self.stale_warn:
+            warn(line)
+
+    def gate_check(self, key: str, rc: int, out: str, record: bool = True) -> None:
+        """全專案關卡的收尾判準：只有這次新增的才中止，既有的照實記下來。"""
+        if key not in self.gate_base:
+            raise ChainError(f'{GATE_LABEL[key]}：這條鏈沒有取 {key} 的 baseline'
+                             f'（CHAIN_GATES 漏列 {self.action}），無法判斷是不是本次新增')
+        new, kept, gone = diff_findings(self.gate_base[key], gate_findings(rc, out), self.id_map,
+                                        moved_for_gate(key, self.moved_links))
+        n_kept = note_existing(GATE_LABEL[key], kept) if record else 0
+        n_gone = note_existing(GATE_LABEL[key], gone, gone=True) if record else 0
+        # 判斷要在寫步驟紀錄之前：中止時不得留下「本次新增 0 筆」這句不實的話
+        if new:
+            raise ChainError(f'{GATE_LABEL[key]} 本次新增 {len(new)} 筆（動作前沒有這些）：' + findings_text(new))
+        if (n_kept or n_gone) and self.cur is not None:
+            self.note(f'{GATE_LABEL[key]}：既有 {n_kept} 筆（不擋）、動作前有動作後沒有 {n_gone} 筆、本次新增 0 筆')
+
+    def register_moved_links(self, links: list[str], src_q: str, dst_q: str) -> None:
+        """登記本動作把哪些結果鍵的 link 由 `src_q` 搬到 `dst_q`（只有 move_plan／demote_plan 會搬）。
+
+        只收 `results:` 開頭的：check_coverage 只對這種 link 比鍵，也只有它的發現會因為改掛而換問題。
+        登記只決定「哪些算既有」，不寫進任何檔——沒有壞 link 被搬的專案輸出逐位元不變。
+        """
+        for one in links:
+            if str(one).startswith(RESULTS_LINK):
+                mv = MovedLink(str(one)[len(RESULTS_LINK):], src_q, dst_q)
+                if mv not in self.moved_links:
+                    self.moved_links.append(mv)
 
     def step(self, no: int, name: str) -> dict[str, Any]:
         if self.cur is not None and self.cur['status'] == 'running':
@@ -1398,6 +2896,8 @@ class Chain:
     def note(self, msg: str) -> None:
         assert self.cur is not None
         self.cur['notes'].append(msg)
+        if msg.startswith('WARNING'):
+            warn(msg)
 
     def before(self, path: Path) -> None:
         assert self.cur is not None
@@ -1428,6 +2928,8 @@ class Chain:
             self.log.doc['backups'] = self.backups.listing(self.root)
             self.summary['backups'] = self.backups.listing(self.root)
             self.summary['files'] = sorted({f for s in self.log.doc['steps'] for f in s['files']})
+            self.summary['warnings'] = list(_WARN_SINK)
+            self.log.doc['warnings'] = list(_WARN_SINK)
             self.log.write()
             return self.summary
         except Exception as exc:   # ChainError 之外的例外（權限、I/O、解析）一樣停下並還原
@@ -1473,12 +2975,11 @@ def step_seal_plan(ch: Chain, new_plan: dict, old_pid: str, clear_active_q: str 
         active.pop(clear_active_q, None)
     active[dst_q] = new_pid
     plan_common.save_index(ch.root, index)
+    ch.id_map[old_pid] = new_pid       # 既有訊息裡的舊 plan id 在動作後會換成新版，不對照就被當成新增
     rc, out = run_script('check_plan', ch.root)
-    if rc != 0:
-        raise ChainError(f'check_plan.py 未通過: {out[-600:]}')
+    ch.gate_check('plan', rc, out)
     rc, out = run_script('check_plan', ch.root, '--sq', dst_q, '--require-confirmed')
-    if rc != 0:
-        raise ChainError(f'check_plan.py --sq {dst_q} --require-confirmed 未通過: {out[-600:]}')
+    ch.gate_check('plan_sq', rc, out, record=False)   # 只查目標問題：別題的既有發現不在它的輸出裡，不能記
     diff = leaf_diff(old_plan, sealed)
     ch.after(plan_path)
     ch.after(index_path)
@@ -1489,9 +2990,9 @@ def step_seal_plan(ch: Chain, new_plan: dict, old_pid: str, clear_active_q: str 
 
 def step_retag_results(ch: Chain, key_map: dict[str, str], model_map: dict[str, tuple[str, str, str]] | None = None,
                        check_plan_after: bool = True) -> dict[str, Any]:
-    r_path = ch.root / 'analysis/results.json'
-    if not r_path.is_file():
-        ch.note('無 analysis/results.json，略過')
+    r_path = ch.root / RESULTS_REL
+    if ch.no_results:
+        ch.note(NO_RESULTS)
         return {'keys': [], 'rows': {}, 'model_retagged': []}
     ch.before(r_path)
     if not key_map and not model_map:
@@ -1503,34 +3004,55 @@ def step_retag_results(ch: Chain, key_map: dict[str, str], model_map: dict[str, 
         ch.note(f'{len(key_map)} 鍵 plan_id retag（{info["changed_lines"]} 行）：' + '、'.join(f'{k} → {v}' for k, v in key_map.items())[:600])
     if check_plan_after:
         rc, out = run_script('check_plan', ch.root, '--require-confirmed', '--results', 'analysis/results.json')
-        if rc != 0:
-            raise ChainError(f'check_plan.py --require-confirmed --results 未通過: {out[-600:]}')
+        ch.gate_check('plan_results', rc, out)
     return info
 
 
 def step_validation(ch: Chain, item_map: dict[str, tuple[str | None, str | None]], note: str, header: list[str]) -> tuple[dict[str, str], dict[str, Any]]:
     v_path = ch.root / 'analysis/validation.yaml'
-    fps = source_fingerprint(ch.root)
+    # 尚無正式結果時不呼叫 check_validation --source-fingerprint-only：它算不出值，只會印一行 INFO
+    fps = dict(NO_FP) if ch.no_results else source_fingerprint(ch.root)
+    ch.summary['fingerprint_carry'] = ch.policy.carry.copy()
+    ch.summary['fingerprint_reason'] = (NO_RESULTS_FP if ch.no_results else
+                                        STALE_FP_REASON if v_path.is_file() else '無 analysis/validation.yaml')
+    if ch.no_results:
+        ch.note(NO_RESULTS_FP)      # 步驟紀錄裡「尚無正式結果」的統一出處（8 支動作都經過這一步）
     if not v_path.is_file():
         ch.note('無 analysis/validation.yaml，略過')
-        return fps, {'items': [], 'reaffirm_key': '', 'old': {}}
+        return fps, {'items': [], 'reaffirm_key': '', 'old': {},
+                     'carry': ch.policy.carry.copy(), 'sq_only': [], 'marked': [], 'unmarked': [],
+                     'absent': True, 'policy': ch.policy, 'drift': list(ch.rerun_drift),
+                     'waiver_state': ch.waiver_state, 'no_results': ch.no_results}
     ch.before(v_path)
     v_old = read_text(v_path)
-    v_new, vinfo = update_validation_generic(v_old, item_map, fps, ch.date, note, header)
-    verify_validation_generic(v_old, v_new, item_map, vinfo['reaffirm_key'], fps)
+    v_new, vinfo = update_validation_generic(v_old, item_map, fps, ch.date, note, header, ch.policy)
+    verify_validation_generic(v_old, v_new, item_map, vinfo['reaffirm_key'], fps, ch.policy)
+    # 決策與摘要的文字要照實寫，所以把政策一起帶出去（各動作的 build_decision 簽章不用改）
+    vinfo['policy'], vinfo['drift'] = ch.policy, list(ch.rerun_drift)
+    vinfo['waiver_state'] = ch.waiver_state
+    vinfo['no_results'] = ch.no_results
     ch.write(v_path, v_new)
     rc, out = run_script('check_validation', ch.root)
-    nb = count_prefixed(out, 'BLOCKER')
-    if rc != 0 or nb:
-        raise ChainError(f'check_validation.py 未通過（{nb} blocker）: {out[-600:]}')
-    ch.note(f'{"／".join(vinfo["items"]) or "無 item"} 改掛；各 item 加 {vinfo["reaffirm_key"]}；'
-            f'fingerprint results {vinfo["old"]["results"]} → {fps["results"]}、source {vinfo["old"]["source"]} → {fps["source"]}')
+    ch.gate_check('validation', rc, out)
+    ch.note(validation_note_text(vinfo, fps))
     return fps, vinfo
 
 
 def step_waiver(ch: Chain, waiver: str, because: str) -> str:
+    if ch.no_results:
+        # 尚無正式結果：沒有 fingerprint 可重登到，`rerun_all --mode off` 也算不出值。這是新專案的
+        # 正常階段，不是警訊（形狀不一致的那一行 WARNING 已在 take_stale_baseline 印過一次，不重複印）。
+        ch.note(waiver_sentence(ch.waiver_state))
+        return ''
     if not waiver:
-        ch.note('WARNING 無 waiver 決策（state.analysis.rerun 不是 waived 且未給 --waiver-decision），略過重登；rerun 狀態需另行處理')
+        ch.note(f'WARNING {NO_WAIVER_SHORT}，本次不重登：不呼叫 rerun_all --mode off、'
+                f'state.analysis.rerun 與 state.analysis.validation 一字不動；{NO_WAIVER_TAIL}')
+        return ''
+    if ch.rerun_drift:
+        # 動作前就漂移：重登會把「這組指紋下已豁免重跑」蓋到一組從沒被豁免過的指紋上
+        ch.note(f'WARNING state.analysis.rerun 的 {"／".join(ch.rerun_drift)} 動作前就與 rerun_all 現值不符'
+                '（漂移不是本次動作造成的），本次不重登 waiver：不呼叫 rerun_all --mode off、'
+                'state.analysis.rerun 一字不動；rerun 狀態需另行處理')
         return ''
     p_path = ch.root / 'project.yaml'
     waiver_rel = unique_report_path(ch.root, 'rerun-waiver', ch.date, '.json')
@@ -1540,25 +3062,93 @@ def step_waiver(ch: Chain, waiver: str, because: str) -> str:
         raise ChainError(f'rerun_all.py --mode off 失敗: {out[-500:]}')
     fps = fingerprint_only(ch.root)
     ch.before(p_path)
-    p_new, sinfo = update_rerun_state(read_text(p_path), fps, waiver_rel, ch.date, because)
+    p_new, sinfo = update_rerun_state(read_text(p_path), fps, waiver_rel, ch.date, because, ch.state_policy)
     if 'skipped' in sinfo:
         ch.note(f'WARNING project.yaml state 未更新：{sinfo["skipped"]}')
     else:
         ch.write(p_path, p_new)
-        ch.note(f'state.analysis.rerun 第{cjk_ordinal(sinfo["n"])}次重登（舊值推進 previous_waiver）；state.analysis.validation fingerprint 改新值')
+        if ch.state_policy.mark:
+            tail = 'state.analysis.validation fingerprint 改新值'
+        else:
+            held = '／'.join(f'{c}_fingerprint' for c in ('results', 'source') if not ch.state_policy.carry[c])
+            tail = f'state.analysis.validation 的 {held} {STALE_FP_REASON}，不帶新值、at 不改'
+        ch.note(f'state.analysis.rerun 第{cjk_ordinal(sinfo["n"])}次重登（舊值推進 previous_waiver）；' + tail)
     ch.after(ch.root / waiver_rel)
     ch.note(f'{waiver_rel}：waived（{waiver}），不是 pass')
     return waiver_rel
 
 
+# ---------- check_coverage 的快照那一句：照實際發生的事寫，不得各動作自己寫死 ----------
+
+SNAPSHOT_REL = 'evaluations/goals-snapshot.json'
+# 快照這一步實際走了哪一條。文字只有這一組，8 支動作共用。
+COVERAGE_PATH_TEXT = {
+    'update': '比對本次預期的 TAMPER 後以 --update-snapshot 更新快照',
+    'create': '本動作以 check_coverage --update-snapshot 新建了快照',
+    'merge': '改以三方合併寫快照，未代替使用者確認那些既有改動',
+    'direct': 'sub_questions 已空、check_coverage 無法執行，快照由腳本直接寫入',
+    'compare': '只比對、不動快照',
+    'skip': '本次沒有比對也沒有建立快照',
+}
+
+
+def coverage_record(ch: Chain, snapshot_before: bool, base_t: list[str],
+                    expected_tampers: set[str], path: str) -> dict[str, Any]:
+    """把快照這一步**實際發生的事**記下來（`ch.summary['coverage']`，只在記憶體裡，不進步驟紀錄）。
+
+    決策與 `known_consequences` 裡講 check_coverage 的那一句一律由 `coverage_text()` 依這份結果產生：
+    各動作原本寫死「0 tamper」「--update-snapshot」，在動作前就有 TAMPER、或動作前沒有快照的專案上
+    都是不實的句子。
+    """
+    cov: dict[str, Any] = {'snapshot_before': bool(snapshot_before), 'tamper_before': len(base_t),
+                           'expected': sorted(expected_tampers), 'path': path, 'tamper_after': None}
+    ch.summary['coverage'] = cov
+    return cov
+
+
+def coverage_normal(cov: Any) -> bool:
+    """正常形狀＝動作前有 goals 快照、也沒有動作前就在的 TAMPER。"""
+    return bool(isinstance(cov, dict) and cov.get('snapshot_before') and not cov.get('tamper_before'))
+
+
+def coverage_text(cov: Any, normal: str) -> str:
+    """決策裡講 check_coverage 的那一句（8 支動作共用）。
+
+    正常形狀逐字沿用各動作原本的寫法（`normal`）；其餘形狀照 `coverage_record` 記下的實況寫——
+    動作前就有 TAMPER 時不得寫「0 tamper」「--update-snapshot」，動作前沒有快照時不得寫
+    「快照不變」「TAMPER 只有…兩筆」。沒有記錄（理論上不會發生）時沿用原句，不自己編。
+    """
+    if not isinstance(cov, dict) or not cov.get('path') or coverage_normal(cov):
+        return normal
+    if cov['snapshot_before']:
+        bits = [f'動作前就有 {cov["tamper_before"]} 筆未確認的 goals 改動（TAMPER），與本次動作無關']
+    else:
+        bits = [f'動作前沒有 goals 快照（{SNAPSHOT_REL} 不存在），沒有可比的基準']
+    bits.append(COVERAGE_PATH_TEXT[cov['path']])
+    if cov['tamper_after'] is not None:
+        bits.append(f'動作後 {cov["tamper_after"]} 筆 TAMPER'
+                    + ('（都是動作前既有的）' if cov['tamper_after'] else ''))
+    return '；'.join(bits)
+
+
+def coverage_note(cov: dict[str, Any]) -> str:
+    """步驟紀錄裡「動作前沒有 goals 快照」那一則（正常形狀的 note 由各步自己逐字寫，不走這裡）。"""
+    return (f'動作前沒有 goals 快照（{SNAPSHOT_REL} 不存在），略過 TAMPER 比對'
+            + (f'（本次預期 {"、".join(cov["expected"])}）' if cov['expected'] else '')
+            + '；' + COVERAGE_PATH_TEXT[cov['path']]
+            + (f' → {cov["tamper_after"]} 筆 TAMPER' if cov['tamper_after'] is not None else ''))
+
+
 def step_coverage(ch: Chain, expected_tampers: set[str], allow_empty_main: bool = False) -> None:
     snap = ch.root / 'evaluations/goals-snapshot.json'
-    bib = empty_bib(ch.root)
     proj = load_yaml(ch.root / 'project.yaml')
     sq_l, aq_l = goals_of(proj)
+    base_t = [map_ids(k, ch.id_map) for k in ch.tamper_base]
+    cov = coverage_record(ch, snap.is_file(), base_t, expected_tampers, '')
     if not sq_l:
         if not allow_empty_main:
             raise ChainError('goals.sub_questions 為空，check_coverage 會擋')
+        cov['path'] = 'direct'
         ch.before(snap)
         ch.backup(snap)
         snap.parent.mkdir(parents=True, exist_ok=True)
@@ -1566,24 +3156,49 @@ def step_coverage(ch: Chain, expected_tampers: set[str], allow_empty_main: bool 
         ch.after(snap)
         ch.note('WARNING sub_questions 已空，check_coverage 無法執行（它把空主問題當 BLOCKER）；快照由本程式直接寫入')
         return
-    argv = [ch.root / 'project.yaml', ch.root / 'analysis/results.json', bib, '--snapshot', snap]
-    if (ch.root / 'evaluations').is_dir():
-        argv += ['--history', ch.root / 'evaluations']
+    argv = coverage_argv(ch.root)
     rc, out = run_script('check_coverage', *argv)
     tampers = [ln for ln in out.splitlines() if ln.startswith('TAMPER')]
-    got = {re.sub(r'（.*$', '', t) for t in tampers}
-    blockers = [ln for ln in out.splitlines() if ln.startswith('BLOCKER')]
-    if snap.is_file() and got != {f'TAMPER {x}' for x in expected_tampers}:
-        raise ChainError(f'check_coverage TAMPER 與預期不符（預期 {sorted(expected_tampers) or "無"}）: {tampers or "（無）"}')
-    if blockers:
-        raise ChainError(f'check_coverage BLOCKER: {blockers}')
+    if base_t:
+        # 動作前就有未確認的 goals 改動：只判新增，並改用三方合併寫快照——`--update-snapshot` 會把整份
+        # goals 寫進去，等於替使用者確認了那些既有改動。
+        new_t = multiset_minus(tamper_keys(out), base_t + sorted(expected_tampers))
+        if new_t:
+            raise ChainError(f'check_coverage 本次新增 TAMPER（動作前沒有）：{new_t}；'
+                             f'動作前既有 {sorted(base_t)}、本次預期 {sorted(expected_tampers) or "無"}')
+    elif snap.is_file():
+        got = {re.sub(r'（.*$', '', t) for t in tampers}
+        if got != {f'TAMPER {x}' for x in expected_tampers}:
+            raise ChainError(f'check_coverage TAMPER 與預期不符（預期 {sorted(expected_tampers) or "無"}）: {tampers or "（無）"}')
+    ch.gate_check('coverage', rc, out)
     ch.before(snap)
     ch.backup(snap)
-    run_script('check_coverage', *argv, '--update-snapshot')
+    if base_t:
+        g1 = goals_of(load_yaml(ch.root / 'project.yaml'))
+        write_snapshot(snap, merge_snapshot(snapshot_items(snap), ch.goals_base, g1, ch.id_map))
+    else:
+        run_script('check_coverage', *argv, '--update-snapshot')
     rc2, out2 = run_script('check_coverage', *argv)
-    if any(ln.startswith('TAMPER') for ln in out2.splitlines()) or rc2 != 0:
-        raise ChainError(f'check_coverage --update-snapshot 後仍有 TAMPER／BLOCKER: {out2[-400:]}')
+    if base_t:
+        after_t = sorted(tamper_keys(out2))
+        if after_t != sorted(base_t):
+            raise ChainError(f'快照三方合併後的 TAMPER 鍵與動作前不符：動作前 {sorted(base_t)}、合併後 {after_t}')
+        ch.gate_check('coverage', rc2, out2, record=False)
+        ch.after(snap)
+        cov.update({'path': 'merge', 'tamper_after': len(after_t)})
+        ch.note(f'快照前 TAMPER {len(tampers)} 筆（本次預期 {"、".join(sorted(expected_tampers)) or "無"}）→ 三方合併寫快照 → '
+                f'只剩動作前既有的 {len(after_t)} 筆（{"、".join(after_t)}），未代替使用者確認')
+        return
+    if any(ln.startswith('TAMPER') for ln in out2.splitlines()):
+        raise ChainError(f'check_coverage --update-snapshot 後仍有 TAMPER: {out2[-400:]}')
+    ch.gate_check('coverage', rc2, out2, record=False)   # 既有的 BLOCKER 不擋（第一次呼叫已經記過），新增的才擋
     ch.after(snap)
+    cov.update({'path': 'update' if cov['snapshot_before'] else 'create', 'tamper_after': 0})
+    if not cov['snapshot_before']:
+        # 動作前沒有快照：上面那段比對被 `elif snap.is_file()` 跳過了，`--update-snapshot` 是在
+        # 新建它。寫成「快照前 TAMPER 0 筆（<本次預期>）」會自相矛盾——括號裡是預期、不是量到的。
+        ch.note(coverage_note(cov))
+        return
     ch.note(f'快照前 TAMPER {len(tampers)} 筆（{"、".join(sorted(expected_tampers)) or "無"}）→ 更新後 0 tamper')
 
 
@@ -1592,16 +3207,10 @@ def step_decision(ch: Chain, entry: dict[str, Any]) -> int:
         raise ChainError(f'decisions.yaml 的下一個編號已不是 {ch.did}（期間有別的寫入）')
     d_path = ch.root / 'decisions.yaml'
     ch.before(d_path)
+    base = decisions_baseline(ch.root)      # append 之前取：舊條目的問題不該擋這次動作
     append_decision(ch.root, entry, ch.backups)
     ch.after(d_path)
-    r_path = ch.root / 'analysis/results.json'
-    argv = [d_path, ch.root / 'project.yaml'] + (['--results', r_path] if r_path.is_file() else [])
-    rc, out = run_script('check_decisions', *argv)
-    if rc != 0:
-        raise ChainError(f'check_decisions.py 失敗: {out[-500:]}')
-    bad = [ln for ln in out.splitlines() if ln.startswith('WARNING') and ch.did in ln]
-    if bad:
-        raise ChainError(f'check_decisions.py 對 {ch.did} 有 WARNING: {bad}')
+    check_decisions_gate(ch.root, ch.did, base)
     size = len(format_decision(entry).encode('utf-8'))
     ch.note(f'{ch.did} append（{size} bytes）；check_decisions 對 {ch.did} 0 warning')
     ch.summary['decision_bytes'] = size
@@ -1639,14 +3248,47 @@ def daily_block(title: str, purpose: str, cmd: str, files: list[str], log_rel: s
                       '', '### 檔案狀態', '- 只改上列輸出檔，改前皆已備份；輸入資料未動。'])
 
 
+def require_clean_plans(root: Path, plans: list[tuple[str, str]]) -> None:
+    """要從舊 plan 封出新版之前的前置條件：來源（與目標）plan 不乾淨就中止，不得洗白。
+
+    `plans` 是 [(角色, plan_id)]。四種不乾淨由 `plan_common.plan_integrity` 判（與 check_plan 同一套）：
+    未 confirmed、缺 content_hash、content_hash 與內容不符、index 的 hash 與 plan 不一致。
+    check_plan 這關只查 active plan，而被封版的來源 plan 在動作後已經不是 active 了，所以它擋不到——
+    動作一路 rc=0 以 `--confirmed-by user` 封出新版，等於替使用者把未確認或被改過的內容確認掉、
+    還給它一個新的合法雜湊。放在前置條件：dry-run 與 apply 都走這裡，而且在第一次寫檔之前。
+    """
+    index = plan_common.load_index(root)
+    by_id = {str(e.get('plan_id')): e for e in (index.get('plans') or []) if isinstance(e, dict)}
+    bad: list[str] = []
+    seen: set[str] = set()
+    for role, pid in plans:
+        if not pid or str(pid) in seen:
+            continue          # 來源與目標是同一份 plan 時（同題搬動）只檢查一次，訊息不重複
+        seen.add(str(pid))
+        path = root / 'analysis/plans' / f'{pid}.yaml'
+        entry = by_id.get(str(pid))
+        if entry and entry.get('path'):
+            path = root / str(entry['path'])
+        if not path.is_file():
+            continue          # 缺檔由各動作自己的前置條件判（訊息更具體）
+        try:
+            plan = plan_common.load_yaml(path)
+        except Exception as exc:
+            raise ChainError(f'{role} plan {pid} 無法解析：{exc}') from None
+        bad += [f'{role} {x}' for x in plan_common.plan_integrity(plan if isinstance(plan, dict) else {}, entry, str(pid))]
+    if bad:
+        raise ChainError('；'.join(bad) + '。本動作要從這份 plan 封出新版，而重新封版會把未確認或被改過的內容'
+                         '變成已確認、並給它一個新的合法 content_hash；請先確認或還原該 plan 再執行本動作')
+
+
 def waiver_of(root: Path, override: str) -> str:
     """--waiver-decision 省略時取 state.analysis.rerun.decision；驗格式與存在。"""
     proj = load_yaml(root / 'project.yaml') or {}
     state = proj.get('state') if isinstance(proj, dict) else None
     rerun = ((state or {}).get('analysis') or {}).get('rerun') or {} if isinstance(state, dict) else {}
     waiver = override or (str(rerun.get('decision') or '') if isinstance(rerun, dict) else '')
-    if waiver and not re.fullmatch(r'D-\d{3}', waiver):
-        raise ChainError(f'--waiver-decision 格式須為 D-<三位>（現值 {waiver}）')
+    if waiver and not re.fullmatch(r'D-\d{3,}', waiver):
+        raise ChainError(f'--waiver-decision 格式須為 D-<至少三位數>（現值 {waiver}）')
     if waiver and not any(str(d.get('id')) == waiver for d in decisions_list(root)):
         raise ChainError(f'decisions.yaml 無 waiver 決策 {waiver}')
     return waiver
@@ -1671,12 +3313,13 @@ def action_main(name: str, version: str, args, root: Path, check_preconditions, 
         for note in PL.ensure_progress_layout(root):
             print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
+        check_ssot_parseable(root)   # 壞掉的 SSOT 檔先擋在這裡，不要讓關卡子程序的 traceback 外漏
         ctx = check_preconditions(root, args)
+        did = next_decision_id(root)      # 讀 decisions.yaml；壞檔也要走 BLOCKER，不能漏成 traceback
+        token0 = ssot_token(root, token_extra)
     except ChainError as exc:
         print(f'BLOCKER {exc}')
         return 2
-    did = next_decision_id(root)
-    token0 = ssot_token(root, token_extra)
     if getattr(args, 'expect_token', '') and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
         return 2
@@ -1691,6 +3334,7 @@ def action_main(name: str, version: str, args, root: Path, check_preconditions, 
         remove_workspace(ws)
         if args.dry_run:
             print_summary(summary, True, token0)
+            print_warnings(summary)
             return 0
     else:
         print(f'（批次模式 {BATCH_STEP_ENV}=1：整串已在 run_batch.py 的工作區跑過，本步驟略過自己的工作區 dry-run）')
@@ -1703,6 +3347,7 @@ def action_main(name: str, version: str, args, root: Path, check_preconditions, 
         print(f'BLOCKER apply 失敗：{exc}')
         return 1
     print_summary(summary, False, ssot_token(root))
+    print_warnings(summary)
     print(f'結果: 完成；決策 {did}；run log {summary["log"]}')
     return 0
 
@@ -1738,16 +3383,17 @@ def _validate_reassign(root: Path, payload) -> tuple[dict | None, str]:
     src = str(payload.get('from') or '').strip()
     dst = str(payload.get('to') or '').strip()
     pm = str(payload.get('primary_model') or '').strip()
-    if not re.fullmatch(r'SQ\d+', src):
+    if not SQ_RE.fullmatch(src):
         return None, 'payload.from 須為 SQ<數字>'
     sq, _aq = goals_ids(root)
     if src not in sq:
         return None, f'payload.from {src} 不在 goals.sub_questions'
     if dst:
-        if not re.fullmatch(r'AQ\d+', dst):
+        if not AQ_RE.fullmatch(dst):
             return None, 'payload.to 須為 AQ<數字> 或省略'
-        if question_id_occupied(root, dst):
-            return None, f'payload.to {dst} 已被使用'
+        why = question_id_occupied_why(root, dst)
+        if why:
+            return None, f'payload.to {dst} 已被使用' + ('' if why == QID_CLASSIC else f'：{why}')
     if len(pm) > 200:
         return None, 'payload.primary_model 過長'
     return {'from': src, 'to': dst, 'primary_model': pm}, ''
@@ -1758,16 +3404,17 @@ def _validate_promote(root: Path, payload) -> tuple[dict | None, str]:
         return None, 'promote 需要 payload object'
     src = str(payload.get('from') or '').strip()
     dst = str(payload.get('to') or '').strip()
-    if not re.fullmatch(r'AQ\d+', src):
+    if not AQ_RE.fullmatch(src):
         return None, 'payload.from 須為 AQ<數字>'
     _sq, aq = goals_ids(root)
     if src not in aq:
         return None, f'payload.from {src} 不在 goals.appendix_questions'
     if dst:
-        if not re.fullmatch(r'SQ\d+', dst):
+        if not SQ_RE.fullmatch(dst):
             return None, 'payload.to 須為 SQ<數字> 或省略'
-        if question_id_occupied(root, dst):
-            return None, f'payload.to {dst} 已被使用'
+        why = question_id_occupied_why(root, dst)
+        if why:
+            return None, f'payload.to {dst} 已被使用' + ('' if why == QID_CLASSIC else f'：{why}')
     return {'from': src, 'to': dst}, ''
 
 
@@ -1822,6 +3469,8 @@ def _validate_move_sensitivity(root: Path, payload) -> tuple[dict | None, str]:
     pid = str(payload.get('plan') or '').strip()
     rid = str(payload.get('item') or '').strip()
     dst = str(payload.get('to_plan') or '').strip()
+    if no_results(root):
+        return None, NO_RESULTS_MOVE
     index = plan_common.load_index(root)
     active = set((index.get('active') or {}).values())
     if pid not in active:
@@ -1915,7 +3564,7 @@ def _validate_move_result(root: Path, payload) -> tuple[dict | None, str]:
         return None, 'payload.key 不得為空'
     r_path = root / 'analysis/results.json'
     if not r_path.is_file():
-        return None, '無 analysis/results.json'
+        return None, NO_RESULTS_MOVE
     results = load_json(r_path)
     obj = results.get(key) if isinstance(results, dict) else None
     if not isinstance(obj, dict):
@@ -1970,7 +3619,7 @@ def _validate_nest_result(root: Path, payload) -> tuple[dict | None, str]:
         return None, 'payload.key 不得為空'
     r_path = root / 'analysis/results.json'
     if not r_path.is_file():
-        return None, '無 analysis/results.json'
+        return None, NO_RESULTS_MOVE
     results = load_json(r_path)
     obj = results.get(key) if isinstance(results, dict) else None
     if not isinstance(obj, dict):
@@ -2389,7 +4038,7 @@ ACTIONS: dict[str, dict[str, Any]] = {
 # ---------- 批次（0.17.0）：kind batch，payload {actions: [{kind, payload}, …]}，腳本 run_batch.py ----------
 
 BATCH_MAX = 20
-PLAN_ID_RE = re.compile(r'((?:SQ|AQ)\d+)-v(\d+)$')
+PLAN_ID_RE = re.compile(r'((?:SQ|AQ)\d+' + Q_SUFFIX + r')-v(\d+)$')
 # 各 kind 在批次寬鬆驗證時的欄位形狀：plan＝plan id 欄、q＝問題 id 欄、key＝結果鍵欄、str＝其他必填字串欄、opt＝可省略的字串欄
 BATCH_SHAPE: dict[str, dict[str, tuple[str, ...]]] = {
     'reassign': {'q': ('from',), 'opt': ('to', 'primary_model')},

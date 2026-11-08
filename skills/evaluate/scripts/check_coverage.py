@@ -9,7 +9,8 @@
 - 每個 SQ 是否達終態 (addressed/blocked/dropped); open → BLOCKER（完整評估時）
 - blocked/dropped 未附 status_reason → WARNING
 - links 有效性: "results:<鍵>" 須存在於 results.json; "cite:<key>" 須存在於 bib;
-  "ms:<...>" 不做機械檢查; 其他前綴 → WARNING
+  "ms:<...>" 不做機械檢查; 其他前綴 → WARNING。results.json 這個檔本身還不存在時（新專案
+  跑正式分析之前）當成「沒有結果」繼續檢查: 不報錯, links 那段照實說結果檔不存在
 - --evidence: 已審查證據交叉比對。傳入且檔案存在時, 每個 "cite:<key>" 的 citekey 必須
   出現在 evidence-synthesis.yaml 的 studies[].citekey（即已過篩選與偏誤評估）, 否則
   BLOCKER。封死「在 bib 裡但沒過審查」的 citekey 被拿來充當 SQ 證據鏈。檔案不存在或
@@ -31,6 +32,7 @@
 輸出: 報告到 stdout; 有 BLOCKER 時 exit 1。--sq 指定時只檢查該 SQ／AQ（輕量模式）。
 """
 import json
+import os
 import re
 import sys
 
@@ -62,7 +64,6 @@ def classify_cause(text):
 
 def parse_history(hist_dir, sq_ids):
     """回傳 ({sq_id: [(序, 裁決, 主因)]}, decomp 最近一筆或 None)。"""
-    import os
     hist = {sid: [] for sid in sq_ids}
     decomp = []
     if not hist_dir or not os.path.isdir(hist_dir):
@@ -110,7 +111,12 @@ def main():
         sys.exit(1)
     # 附錄問題（穩健性／敏感度／跨方法，v0.7.3）：與主 SQ 分離，缺此鍵回溯相容視同 []
     aqs = (proj.get('goals') or {}).get('appendix_questions') or []
-    results = json.load(open(res_path, encoding='utf-8'))
+    # 結果檔還不存在（新專案跑正式分析之前）不是這支腳本的錯誤：當成「沒有結果」繼續檢查，
+    # links 那段照實說檔案不存在，不丟 traceback、也不寫成「無鍵」（那會讓人以為檔案在）。
+    # 只用檔名、不印傳進來的完整路徑：dry-run 在暫存工作區跑，印路徑會讓 dry 與 apply 的訊息不同。
+    res_name = os.path.basename(res_path)
+    results = json.load(open(res_path, encoding='utf-8')) \
+        if os.path.exists(res_path) else None
     bib_keys = set(re.findall(r'@\w+\s*\{\s*([^,\s]+)\s*,',
                               open(bib_path, encoding='utf-8').read()))
 
@@ -118,7 +124,6 @@ def main():
     ev_path = get_arg('--evidence')
     screened = None
     if ev_path:
-        import os
         if os.path.exists(ev_path):
             ev = yaml.safe_load(open(ev_path, encoding='utf-8')) or {}
             screened = {str(st.get('citekey')) for st in (ev.get('studies') or [])
@@ -153,7 +158,10 @@ def main():
             if link.startswith('results:'):
                 k = link[len('results:'):]
                 sq_res_keys.append(k)
-                if k not in results:
+                if results is None:
+                    blockers.append(f'{sid}: link 無效, 結果檔 {res_name} 不存在'
+                                    f'（尚無正式結果）, 對不到 "{k}"')
+                elif k not in results:
                     blockers.append(f'{sid}: link 無效, results.json 無鍵 "{k}"')
             elif link.startswith('cite:'):
                 k = link[len('cite:'):]
@@ -182,7 +190,6 @@ def main():
     snap_path = get_arg('--snapshot')
     tampered = []
     if snap_path:
-        import os
         combined = list(sqs) + list(aqs)
         if os.path.exists(snap_path):
             old_raw = json.load(open(snap_path, encoding='utf-8'))

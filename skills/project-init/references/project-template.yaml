@@ -93,6 +93,7 @@ target:
     figures: ""             # embedded（圖表隨文）/ separate（圖表分離）
 
 glossary:                   # 術語中英對照表；翻譯一致性的唯一依據，隨專案累積
+                            # 這裡只登譯名；縮寫、變數、方法的定義寫在 GLOSSARY.md
   - zh: ""
     en: ""
 

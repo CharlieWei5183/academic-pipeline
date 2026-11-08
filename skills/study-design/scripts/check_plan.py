@@ -29,6 +29,7 @@ from plan_common import (
     goal_map,
     load_index,
     load_yaml,
+    plan_integrity,
     plan_path,
     validate_plan_shape,
 )
@@ -116,15 +117,8 @@ def main() -> int:
             blockers.append(f"{pid}: sq={plan.get('sq')} 與 index {sqid} 不一致")
         if str(plan.get("plan_id")) != str(pid):
             blockers.append(f"{pid}: plan_id 與 index 不一致")
-        if plan.get("status") != "confirmed":
-            blockers.append(f"{pid}: 尚未 confirmed")
-        digest = str(plan.get("content_hash") or "")
-        if not digest:
-            blockers.append(f"{pid}: 缺 content_hash")
-        elif digest != content_hash(plan):
-            blockers.append(f"{pid}: content_hash 不符——不得原地修改 confirmed plan")
-        if entry and entry.get("content_hash") != digest:
-            blockers.append(f"{pid}: index content_hash 與 plan 不一致")
+        # 封版完整性的四筆（未 confirmed／缺 hash／hash 不符／index 不一致）與動作鏈共用 plan_integrity
+        blockers.extend(plan_integrity(plan, entry, str(pid)))
         if plan.get("origin") and plan.get("origin") != goals.get(sqid, {}).get("origin", ""):
             warnings.append(f"{pid}: origin 與 goals 不一致")
 

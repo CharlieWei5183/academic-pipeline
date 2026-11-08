@@ -34,6 +34,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import render_progress as rp  # noqa: E402
 import ssot_actions_common as C  # noqa: E402
+import ssot_text_format as TF  # noqa: E402
 from ssot_actions_common import ChainError  # noqa: E402
 
 VERSION = '0.20.0'
@@ -50,7 +51,7 @@ TIER_ZH = {'extended': '放入 Extended Data', '': '移出 Extended Data'}
 REJECTED_TEMPLATE = ('不在 renderer 加 override、不把 ED 歸屬寫進 results.json 或 plan yaml（那些在 rerun_all 的 fingerprint 雜湊範圍，會讓 validation 過期）、'
                      '不動圖表的 manifest role、不動其他節點的清單項目')
 KEY_RE = re.compile(r'^(plans|results|validation):(.*)$')
-ITEM_RE = re.compile(r'^(\s+)-\s*(.*?)\s*$')
+ITEM_RE = re.compile(r'^([ ]*)-(?:[ \t]+(.*?)|)\s*$')   # 序列項；縮排可為 0（不縮排的序列也要認）
 
 
 # ---------- 參數 ----------
@@ -142,7 +143,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         if node in after and after[node]['band'] != ('ext' if changes[node] == 'extended' else after[node]['band']):
             raise ChainError(f'{node} 改後仍不在 Extended Data（renderer 沒接受）')
     questions = {str(before[node].get('strip') or '')[2:] for node in changes}
-    questions = {q for q in questions if re.fullmatch(r'(SQ|AQ)\d+', q)}
+    questions = {q for q in questions if C.Q_ID_RE.fullmatch(q)}   # 後綴字母（SQ6b）也算合法問題 id
     inbox = None
     if args.inbox:
         inbox = C.inbox_item(root, args.inbox)
@@ -203,7 +204,7 @@ def apply_changes_text(text: str, changes: dict[str, str]) -> str:
                 ln = lines[end]
                 mi = ITEM_RE.match(ln)
                 if mi:
-                    items.append((ln, _unquote(mi.group(2))))
+                    items.append((ln, _unquote(mi.group(2) or '')))
                     end += 1
                 elif (ln.strip() == '' or ln.lstrip().startswith('#')) and end + 1 < len(lines) and ITEM_RE.match(lines[end + 1]):
                     items.append((ln, None))   # 項目之間的空行或整行註解：後面還有項目才算區塊內，原行保留
@@ -222,6 +223,8 @@ def apply_changes_text(text: str, changes: dict[str, str]) -> str:
                 items = [(l, v) for l, v in items if v != sid]
                 if len(items) == before_n:
                     raise ChainError(f'{name} 沒有 {sid} 可移除')
+        # 新項目的 dash 前綴照該清單既有項目量（不縮排的序列也跟著不縮排）；清單原本是空的就用預設 2 空白
+        new_pre = next((TF.dash_write_prefix(l) for l, _v in items if l and TF.is_dash(l)), '  - ')
         real = [(l, v) for l, v in items if v is not None]
         tail = ((sep or '   ') + comment) if comment else ''   # 值與尾註解之間的空白照原行
         if not real:
@@ -234,7 +237,7 @@ def apply_changes_text(text: str, changes: dict[str, str]) -> str:
                 elif l:
                     new_block.append(l)
                 else:
-                    new_block.append(f'  - {_quote(v)}')
+                    new_block.append(f'{new_pre}{_quote(v)}')
         lines[ki:end] = new_block
     return '\n'.join(lines) + '\n'
 
@@ -365,14 +368,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         d_path = root / 'decisions.yaml'
         log.file_before(e, d_path)
         entry = build_decision(root, args, ctx, did, date, log_rel, f'備份 {bk.name}' if bk else ('檔案原本不存在，用模板新建、無備份' if created else '無備份'))
+        cd_base = C.decisions_baseline(root)   # append 之前取：舊條目本來就有的問題不該擋這次動作
         C.append_decision(root, entry, backups)
         log.file_after(e, d_path)
-        rc, out = C.run_script('check_decisions', d_path, root / 'project.yaml', '--results', root / 'analysis/results.json')
-        if rc != 0:
-            raise ChainError(f'check_decisions.py 失敗: {out[-500:]}')
-        bad = [ln for ln in out.splitlines() if ln.startswith('WARNING') and did in ln]
-        if bad:
-            raise ChainError(f'check_decisions.py 對 {did} 有 WARNING: {bad}')
+        C.check_decisions_gate(root, did, cd_base)
         summary['decision_bytes'] = len(C.format_decision(entry).encode('utf-8'))
         e['notes'].append(f'{did} append（{summary["decision_bytes"]} bytes）；check_decisions 對 {did} 0 warning')
         log.finish(e)
@@ -464,13 +463,15 @@ def main(argv: list[str] | None = None) -> int:
         for note in C.PL.ensure_progress_layout(root):
             print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
+        C.check_ssot_parseable(root)   # 壞掉的 SSOT 檔先擋在這裡，不要讓關卡子程序的 traceback 外漏
         ctx = check_preconditions(root, args)
+        did = C.next_decision_id(root)    # 讀 decisions.yaml；壞檔也要走 BLOCKER，不能漏成 traceback
+        extra = ''.join(C.action_token_extra('set_tier', {'node': node, 'tier': tier}, args.inbox)
+                        for node, tier in ctx['changes'].items())
+        token0 = C.ssot_token(root, extra)
     except ChainError as exc:
         print(f'BLOCKER {exc}')
         return 2
-    did = C.next_decision_id(root)
-    extra = ''.join(C.action_token_extra('set_tier', {'node': node, 'tier': tier}, args.inbox) for node, tier in ctx['changes'].items())
-    token0 = C.ssot_token(root, extra)
     if args.expect_token and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
         return 2
@@ -484,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
     C.remove_workspace(ws)
     if args.dry_run:
         print_summary(summary, True, token0)
+        C.print_warnings(summary)
         return 0
     if C.ssot_token(root, extra) != token0:
         print('BLOCKER dry-run 期間 SSOT 已被改動，未 apply；請重跑')
@@ -494,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'BLOCKER apply 失敗：{exc}')
         return 1
     print_summary(summary, False, C.ssot_token(root))
+    C.print_warnings(summary)
     print(f'結果: 完成；決策 {did}；run log {summary["log"]}')
     return 0
 

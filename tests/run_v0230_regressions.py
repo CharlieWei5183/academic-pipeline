@@ -693,7 +693,7 @@ def test_existing(tmp: Path) -> None:
     finally:
         C.remove_workspace(ws)
     assert 'submission/package.yaml' in C.COPY_FILES and 'submission' in C.RELINK_DIRS
-    assert 'submission/package.yaml' not in C.TOKEN_FILES, 'TOKEN_FILES 不動（第三棒才決定要不要納入）'
+    assert 'submission/package.yaml' not in C.TOKEN_FILES, 'TOKEN_FILES 不動（要不要納入另案決定）'
     print('  規格 9 既有回歸 ok')
 
 

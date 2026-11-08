@@ -1,5 +1,188 @@
 # CHANGELOG
 
+## 0.29.0（2026-11-09）
+
+同一套動作腳本要能用在形狀不同的專案上。0.28.2 把「專案長什麼樣」寫進了動作鏈自己的假設裡：SSOT 檔必須照某一種排版
+寫出、專案必須已經有正式結果、全專案關卡必須一條發現都沒有、`GLOSSARY.md` 必須已經有人手寫過。任一條不成立，動作就
+跑不完，少數地方還會把沒發生的事寫進專案帳本。這一版把對檔案格式的假設改成看形狀，把全專案關卡改成只擋動作本身新增的
+問題（既有的照實記進決策），讓還沒有正式結果的專案照樣跑完並照實寫，也讓每個專案都有一份 `GLOSSARY.md`。
+
+### 檔案格式的假設與靜默寫錯
+
+1. **排版一律從檔案本身量**：新增 `skills/status/scripts/ssot_text_format.py`。JSON 走結構掃描：縮排 1／2／4、TAB、
+   一行式都定位得到，只替換值那一段，`1.50`、`1E2` 這類數字寫法不會被正規化成別的寫法；YAML 走行層級 helper：mapping
+   與序列的縮排從檔案量、序列不縮排也認、項目欄位的縮排從該項目的 dash 行量、`id` 不必是第一欄。處理不了的寫法（流式
+   集合）明確中止並指出是哪個檔的哪一段，不靜默跳過。`retag_results` 與 `set_figure_role` 的 role 改寫、`project.yaml`
+   的 goals 區塊、`validation.yaml` 的 items、`decisions.yaml` 的 append、`extended-data.yaml` 與
+   `submission/package.yaml` 的清單都改走它。合法但排版不同的專案因此跑得完整條鏈。
+2. **五處靜默寫錯**：`set_block_field` 改既有欄位時保留行尾註解（原本整段註解會消失）；`status_reason` 是區塊純量時
+   舊值不再掉，`links:` 流式與區塊序列都讀得到、寫回時沿用該檔原本那種寫法；`update_rerun_state` 先用語意判斷是不是
+   waived，語意上是 waived 而文字層定位不到就中止，不再出現「決策寫了、rerun 沒重登」；`add_state_comment` 認任意位數
+   的決策編號，缺 `state:` 時留下看得見的提示，註解縮排沿用原檔；
+   `write_text` 沿用檔案原本的換行，CRLF 不再被整份改成 LF。鏈裡的 WARNING 一併印到 stdout 摘要，不只埋在步驟紀錄。
+3. **註解與條目的判定照 YAML 規則**：`strip_comment` 依值的第一個非空白字元分引號字串、流式集合、純量三態，純量裡的
+   撇號不開啟字串，`#` 前面不是空白就不算註解；`decisions_style` 只認「欄位縮排、值留空的鍵行」底下那些 dash，區塊
+   純量內容裡的條列不再被誤認成條目；`append_decision` 在 `decisions:` 後面還有別的頂層鍵時插在該區塊尾端（接檔尾會
+   整檔解析不出來），後面只剩空行或註解時輸出逐位元不變；`check_inbox` 的序列項定位改用同一組 helper；`run_batch` 的
+   批次摘要一定帶出子步驟的 WARNING。SSOT 檔不是合法 YAML／JSON 時，動作入口先擋下來、印 `BLOCKER <檔名> 無法解析：…`
+   並回非 0，不再讓關卡子程序的 traceback 外漏。
+4. **帶後綴字母的問題編號**：`SQ6b`、`AQ7b` 這種編號在 `--from`／`--to` 驗證、`Q_ID_RE`、自動配號、前端比對、plan id、
+   決策的 question 與 links 檢核、Extended Data 歸屬與決策時間軸排序都放行；帶後綴字母的 plan 改 Extended Data 歸屬時，
+   決策的 question 欄認得出那個問題，不再退成主問題。決策編號的比對一律放寬成三位以上（`skills/status/scripts/` 的動作
+   與關卡腳本，加上 `skills/analyze-data/scripts/check_manifest.py` 的 reason 欄檢核），四位數的帳本不會被當成格式
+   不對；四處比對決策編號的正規式抽成模組常數，行為不變，但可以直接斷言它認得長過三位的編號。
+5. **結構掃描改線性**：JSON 物件成員查詢改惰性索引（重複鍵以最後一個為準，與 `json.loads` 同），一批替換改為依位置走
+   一遍再 join 一次。頂層鍵很多又要改很多鍵時，原本是鍵數乘改動數疊上筆數乘檔案大小，兩段都是二次式。索引惰性建立，
+   沒被查過的子物件不占記憶體；替換區間真的重疊時明確中止。另外拿掉只轉呼叫一行的 helper、把 JSON 路徑型別改名
+   `JPath`（別和 `pathlib` 的同名型別混淆）、當註解用的裸字串改成 `#`。
+
+### 全專案關卡只擋這次新增的
+
+6. **動作前後各量一次**：動作鏈會在中途呼叫 `check_plan`、`check_validation`、`check_coverage`、`check_decisions`。
+   舊碼對這四關一律「有任何 blocker 就中止」，於是專案只要本來就有一筆問題，所有動作都做不了，而那些問題與這次動作
+   無關。改法是一條通用邏輯，不加旗標、不做逐專案設定、不設門檻：第一次寫檔之前把這條鏈會用到的關卡各跑一次當 baseline
+   （唯讀），之後每次呼叫都拿當下結果與 baseline 比 multiset，只有新增的才中止。比對時訊息先正規化（遮掉指紋與 ISO
+   日期），鏈上記問題與 plan 的新舊 id 對照、把既有訊息裡的舊 id 換成新 id（以完整 token 為準），同一個既有問題不會
+   因為 id 變了就被誤判成新增。rc 非 0 又沒有任何 BLOCKER 行＝關卡自己當掉，記成一筆 CRASH；印了幾行 BLOCKER 之後才
+   丟 traceback 的也算。`check_decisions` 的 baseline 在 append 之前取，五個呼叫點（含 submission-prep 的打包與
+   套件編輯兩支）共用同一支 helper，那兩支的 stdout 也跟著印出既有項目；「WARNING 含本次決策編號」的判準不變，只擋
+   新增不等於放行本次條目。baseline 沒有任何既有項目時走原本的路徑，輸出（含 SSOT 位元組與步驟紀錄）與改版前相同。
+7. **既有發現照實呈現，不靜默消失**：既有項目列進三處（stdout 摘要的 WARNING、決策的 `known_consequences`、步驟紀錄），
+   全部列出，不設筆數上限。同一支關卡在一條鏈裡被不同參數、或因為封兩次版而各跑一遍時，同一筆只記一次（按腳本、
+   類別、正規化後的訊息去重；同一次呼叫裡兩行相同仍按 multiset 保留筆數）。呈現用關卡輸出的原行，不用遮過指紋與日期的
+   正規化字串（`Finding` 是 `str` 的子類，比對用正規化形式、顯示用原文）。「既有且仍在」與「動作前有、動作後沒有」在
+   決策紀錄裡分兩段，後者請使用者確認是不是這次動作改掉的，不再和前者寫成同一句「與本次動作無關」。`check_plan --sq`
+   只查一題，別題的既有發現在它的輸出裡本來就不會出現，所以那一關改成只判新增、不記既有。關卡判出本次新增而中止時，
+   步驟紀錄不再留下「本次新增 0 筆」那句（判斷移到寫紀錄之前），通過時那句的筆數等於實際記下的筆數。
+8. **快照與配號**：baseline 有 TAMPER 時不走 `--update-snapshot`（那會把整份 goals 寫進快照，等於替使用者確認了還沒
+   確認的改動），改用三方合併（動作前快照、動作前 goals、動作後 goals），只把本次動作的效果套進快照，合併後再查一次，
+   TAMPER 鍵必須等於動作前，多了就中止。TAMPER 一律用鍵比而不比全文（欄位改動的全文帶著新舊值，動作改了別的東西就
+   對不上）。自動配號納入 goals 快照，不再撞上「已從 goals 移除、使用者還沒確認」的號；明確指定那個號會被拒並說明原因。
+9. **dry-run 工作區的指紋等於原根**：工作區把不用改的檔做成指向原根的絕對 symlink，而指紋計算一律跳過 symlink，於是
+   工作區漏算了幾個檔、算出來的值與原根不同，而 baseline 比對正是靠這個值。`skills/analyze-data/scripts/rerun_all.py`
+   新增 `workspace_link()`，認出「工作區替原檔擺的連結」後視同原檔（標記檔存在、目標是絕對路徑、目標尾段的路徑段等於
+   它相對 root 的路徑段）；專案自己的 symlink 與沒有標記檔的根行為不變、指紋不變。
+
+### 既有的問題不得被動作吃掉
+
+10. **動作前就過期、落後、漂移的東西一律不動**：關卡放寬之後，帶既有問題的專案會走完整條鏈，鏈上的寫入原本會把既有
+    問題蓋掉。判斷集中到 `Chain.take_stale_baseline()`，在第一次寫檔前算一次，之後鏈上所有寫入與所有對外文字都讀它，
+    一律直接比對欄位值，不解析關卡的訊息文字。頂層驗證指紋逐欄判斷：`results_fingerprint` 與 `source_fingerprint` 各自
+    比對動作前的現值，相符的照舊帶到新值、不符或空白的不動（不能「任一過期就兩欄都不動」：results 相符時若不帶，動作
+    自己的 retag 就會讓它過期，變成本次新增的 blocker 而把整條鏈擋下）。`reaffirmed_*` 標記只在「本次真的把這個 item
+    重接到這組指紋」時才寫；動作前就落後的 item 只改 `sq`、不改掛 `plan_id`（它仍指向真正驗過的版本）；
+    `state.analysis.rerun` 的指紋動作前就與現值不符時不重登 waiver，與指紋過期彼此獨立。
+    `verify_validation_generic` 改成雙向驗，不該加的標記、不該帶的欄位、不該改掛的 `plan_id` 都要攔。
+11. **來源 plan 不乾淨就拒絕封新版（新行為）**：要從舊 plan 封出新版的動作，來源與目標 plan 只要未 confirmed、缺
+    `content_hash`、`content_hash` 與內容不符，或 index 的 hash 與 plan 不一致，動作就中止並說明重新封版會把未確認或
+    被改過的內容變成已確認。判準抽成 `skills/study-design/scripts/plan_common.py` 的 `plan_integrity`，與 `check_plan`
+    共用一份；擋在前置條件，所以 dry-run 與 apply 都走得到，而且在第一次寫檔之前。0.28.2 會接受這種 plan 並把它的內容
+    原地洗成新版的已確認內容，所以這是行為變更，不是純粹的修正。
+12. **搬 plan 時隨 links 搬走的既有發現照樣算既有**：`move_plan` 與 `demote_plan` 把來源問題的 results links 搬到目的
+    問題時，動作前就壞掉的那條 link（結果檔沒有那個鍵，或連結果檔都還沒有）會在動作前報在來源問題下、動作後報在目的
+    問題下，比對對不到同一筆就被當成本次新增而中止整條鏈。只改比對、不改任何寫入：`Chain` 多一份搬移登記（鍵、來源
+    問題、目的問題），兩支動作在搬 links 那一步呼叫它，比對時對「開頭恰好掛來源問題、句子帶那個鍵」的動作前項目多生
+    一種「換成目的問題」的對照形式。登記不寫進任何檔；只對登記過的鍵生效、只從來源問題換到目的問題、只有
+    `check_coverage` 吃這種對照、multiset 語意不變（動作後同一個鍵多出一筆仍算新增、仍中止）。
+13. **進度頁面的佔位節點**：validation item 的 `plan_id` 指到不存在的 plan 時，`render_progress` 建的佔位 method 節點
+    subtype 是空字串，IR 驗證判 IR-12，整頁畫不出來、動作鏈的重畫那一步也走不完。補成合法 subtype，並多出一筆指名是
+    哪個 item 的 WARNING。另外 `check_coverage` 用的暫存空 bib 改成一個 process 共用一個並在結束時刪掉，不再在暫存
+    目錄留一地檔案。
+
+### 沒有正式結果的專案也跑得完
+
+14. **新狀態「尚無正式結果」**：新專案在跑正式分析之前沒有 `analysis/results.json`，八支動作鏈原本全部在
+    `step_validation` 的指紋那一步中止。這是正常階段，不是壞狀態。判斷只看檔案，說法只有 `ssot_actions_common.py`
+    那一組常數，在第一次寫檔前定案一次。這個狀態下不呼叫 `rerun_all --fingerprint-only` 與
+    `check_validation --source-fingerprint-only`（算不出值），也不走「量不到現值」那條路，不建 `results.json` 或
+    `validation.yaml`、`state.analysis` 一字不動。`reorder_questions`、`reassign_question`、`promote_question`、
+    `move_plan`、`demote_plan` 照常完成，決策、`known_consequences`、stdout、步驟紀錄、步驟標題與新 plan 的
+    `amendment_reason` 都照實寫；`move_result`、`move_sensitivity`、`nest_result` 以看得懂的訊息拒絕（exit 2、第一次
+    寫檔之前，dry-run 與 apply 都一樣），`move_sensitivity` 原本會先寫兩個 plan 檔才倒。關卡缺檔時也照實回報：
+    `check_coverage.py` 把缺檔當成沒有結果、link 訊息照實說結果檔不存在（不寫成「無鍵」），`coverage_argv` 一律傳
+    專案裡那個路徑（results 是位置參數，少傳一個會被當成 bib 而 usage exit 2），`plan_results` 與 `decisions` 則是
+    檔案存在才帶 `--results`。除了 `check_coverage.py` 認得缺檔這一處，其他四支關卡腳本處理缺檔的部分一行未改。
+15. **沒有 waiver、沒有 `validation.yaml`、沒有對應 item 時文字照實寫**：這三者缺一，舊的文字模板就會寫出沒發生的事，
+    而且會寫進專案檔。waiver 狀態改成只判一次（`WaiverState`，在第一次寫檔前定案）再傳給各處：有決策且沒漂移的重登
+    路徑文字逐字不變；沒有 waiver 一律寫成「本專案沒有 waiver 決策、本動作不重登、不改 `state.analysis.rerun`」，不
+    出現「仍 waived」或沒有前綴的「重登」；動作前就漂移時先講沒有 waiver、再把漂移放在後面當動作前的現況。沒有
+    `analysis/validation.yaml` 時，決策、`known_consequences` 與新 plan 的 `amendment_reason` 換成「這個檔不存在：
+    沒有 item 可改掛、沒有指紋可帶、沒有標記可加」。沒有對應 item 時不再拼出不成句的括號，改寫成完整句子。覆蓋的對外
+    文字包含 `validation.yaml` 檔頭與 reaffirmed note、決策那一行、`known_consequences`、stdout 摘要、步驟紀錄的 note
+    與步驟標題（標題會寫進 `reviews/*.json`，沒重登時它也是一句不實的話）。寫入行為一律未改。
+16. **同一行的理由只說一次**：尚無正式結果時，檔名那一句、標記那一句與 waiver 那一句各自帶同一個理由，拼成同一行就把
+    同一件事講兩次，還會寫進 `decisions.yaml`。改在組句的地方：一行開一個 `SameLine`，依子句在行內的先後順序傳給各
+    子句，第一個問到某個片語的子句自己說理由，後面的只講自己的結論。片語的單位與「誰讓誰」只在這一個模組判，不對拼好
+    的字串做事後刪改；有正式結果的路徑逐位元不變。
+17. **決策裡 `check_coverage` 那一句照實寫**：那一句原本由八支動作各自寫死。改由 `step_coverage` 把實際發生的事記成
+    結構化結果、`coverage_text()` 依它產生：正常形狀逐字沿用原句；動作前就有 TAMPER 時說出既有筆數與三方合併，不寫
+    「0 tamper」「`--update-snapshot`」；動作前沒有快照時說出沒有快照與本動作做了什麼，不寫「快照不變」。0.28.2 在
+    帶後綴字母的編號、結果鍵的 `plan_id` 沒跟著改的專案上走不到寫決策那一步，前面那些修好之後才會走到，所以這一句
+    一併在發佈前改成照實寫。
+
+### 每個專案都有一份 `GLOSSARY.md`
+
+18. **編號對照表的定位只看形狀**：`glossary_table()` 原本拿「第一個第三格寫主子問題的表格列」當錨點，別張表寫成同樣
+    的字就改到錯的表、只有 AQ 列的表找不到、AQ 編號不收後綴字母、節尾只吃 `^##`、code fence 裡的範例列與註解也被當真。
+    新增 `glossary_rows()`：主子問題列要第三格剛好是「主子問題」、第二格是 SQ 編號清單或「（無）」；AQ 錨點列要第二格
+    完全是一個 AQ 編號、第三格以「附錄問題」開頭；fence 裡的行一律不看。`glossary_table()` 改以主子問題列為錨點，沒有
+    就退到第一個 AQ 錨點列，不只一列就不猜要改哪一列；標題認 ATX 與 setext，節尾改成下一個任意層級的標題。
+19. **決策第 (7) 項照第 7 步的實際結果寫**：那一項改由 `glossary_decision_text()` 組（`reassign_question.py` 與
+    `promote_question.py` 共用一處說法）：兩部分都改到時與原本那句逐位元相同、只改到一部分就只寫那一部分、沒有
+    `GLOSSARY.md` 或定位不到就寫未更新，原因字串與步驟紀錄同一個。0.28.2 起不論實況都寫成「主子問題列改…、補…一列」，
+    沒有這個檔的專案等於把沒發生的事寫進 `decisions.yaml`。沒有這個檔時，第 7 步的 note 與決策第 (7) 項各多一句提示
+    可以用 `init_glossary.py` 建一份（說法放在 `ssot_actions_common.py` 一處，兩支動作不各自拼）。
+    `promote_question.update_glossary()` 找來源列時跳過 code fence，與 `glossary_rows` 用同一個判斷，節內 fence 裡的
+    範例列不再被當成來源列改掉。
+20. **內建範本與 `init_glossary.py`**：縮寫、變數、方法與問題編號的定義原本沒有落點，計畫、報告與稿件各寫一種說法，
+    編號對照表也只有手寫過那份文件的專案才有。新增 `skills/project-init/references/glossary-template.md`（四段，編號
+    那一段由工具依 goals 代換）與 `skills/status/scripts/init_glossary.py`（三步鏈：`GLOSSARY.md` → `decisions.yaml`
+    → 重畫與 daily log，結構與關卡沿用 `set_figure_role.py`）。依專案現況走三條路：沒有這個檔就依範本建；有檔而編號
+    對照表還沒有任何編號列、檔裡也沒有「編號對照表」這個標題，就只在檔尾追加那一節（既有內容逐位元保留）；已經有編號
+    列或已經有同名標題就不寫也不記決策，所以舊專案補建與重跑都安全。apply 時重新判斷檔案現況，dry-run 之後才冒出來的
+    檔由入口與鏈各擋一層。建立與追加都在寫檔前用 `glossary_rows` 量新內容，主子問題列不是恰好一列、或認得的 AQ 錨點
+    列數不等於 goals 的附錄問題數時照常寫檔，但 stdout 與步驟紀錄各多一行 WARNING 列出不是 SQ／AQ 加數字的編號，
+    決策第 (1) 項照實補一句。寫進專案帳本的說法也照實：沒給 `--reason` 時理由第一段是「使用者裁定建立 GLOSSARY.md
+    （未附理由）」（與其他動作同一種寫法，不宣稱使用者做過別的裁定），決策第 (1) 項建立那一種寫「縮寫、變數、方法
+    三段只有表頭」，因為編號對照表已經依 goals 填了編號。project-init 多一個第 7 步、命令帶 `--reason`，
+    study-design、interpret-results、write-manuscript、status 的 SKILL、`interpreter` 與 `research-designer`
+    兩個 agent 與 README 都接上；與 `project.yaml` 的 `glossary` 的分工寫在術語表範本、專案範本的
+    `glossary` 註解與 README：那裡只登中英譯名，定義只寫在 `GLOSSARY.md`。
+
+### 寫進專案的其他文字
+
+21. **首次建檔的檔頭與步驟紀錄的 baseline**：`append_decision()` 在 `decisions.yaml` 首次建檔時的檔頭原本寫死兩支腳本
+    的名字，別的動作建檔時就不對，改成取 `method` 開頭的腳本名、取不到才用通稱；已經存在的檔一個位元都不動。
+    `Chain.take_gate_baseline()` 的步驟紀錄原本存比對用的正規化鍵，路徑裡連續十六進位的一段與 ISO 日期都被換成佔位
+    記號，給人讀的紀錄看起來像壞掉；改存當次輸出的原行，比對仍用記憶體裡的 baseline 與正規化函式，語意不變。步驟紀錄
+    的 baseline 也不再收 `plan_sq`（它不是跑出來的 baseline，只是另一關的複本）。
+
+新增 `tests/run_v0290_regressions.py`（規格 1～72）：24 個同語意不同格式的 SSOT 變體配對 11 個動作、JSON 結構掃描與
+YAML 行層級 helper 的單元斷言、五處靜默寫錯、帶既有問題的專案八個動作 dry-run 與 apply 都要過且既有項目要進三處、
+用影子複本注入錯誤驗「本次新增一定要擋」、快照三方合併與編號不重用、動作前就過期／落後／漂移時的逐欄不變、四種不乾淨
+的 plan 在 dry-run 與 apply 都中止、沒有正式結果的四種形狀 × 各動作、waiver 三態的每個文字 helper、同一行只說一次、
+編號對照表的定位與決策第 (7) 項、`init_glossary.py` 的三種現況與護欄、建表自檢、首次建檔的檔頭、步驟紀錄的 baseline
+形式，以及本版的登記。驗牙表 147 處逐一改壞都必須讓對應規格失敗，未改壞的影子複本必須是綠的。`run_v0282` 的兩處斷言
+隨新行為更新（帶後綴字母的編號現在合法、只有 AQ 列的表現在定位得到），規格 6 照慣例放寬成單調斷言，當期精確版號改由
+本版這一支 pin。另外 `run_v0162` 與 `run_v0200` 的 fixture 本身就處在「動作前已過期」或「plan 被原地改過」的狀態
+（舊的動作鏈會順手把它洗白，所以一直沒被看見），接回一致值，兩處斷言一字未改；`run_v0161` 的 refix 抽成共用函式供它們
+使用，`run_v0230` 的失敗是轉跑 `run_v0200` 帶出來的，一併解決。
+
+### 已知限制
+
+- 動作前量不到 rerun 指紋時（`rerun_all.py --fingerprint-only` 在取 baseline 那一次暫時失敗），waiver 與依政策產生的
+  文字會用保守說法寫成「動作前就與現值不符」。寫入本身是保守的：不帶新值、不重登、不加標記。持續失敗時驗證那一步會
+  中止並還原。
+- 沒有 waiver 的專案跑動作時，`validation.yaml` 的頂層指紋可能帶到新值，而 `state.analysis.validation` 維持舊值。
+  0.28.2 就是這樣寫，本版沒有改。
+- 決策紀錄很大的專案，重畫進度頁面很慢，stdout 有的行會很長。
+- `retag` 在很大的結果檔上比 0.28.2 慢。
+- 動作開頭多了「SSOT 檔解析得動」的前置檢查：解析不了就直接 exit 2，不再進鏈。
+- 重畫失敗仍會讓整條鏈中止並還原。
+- 沒有正式結果時，stdout 有一行把「`analysis/results.json` 不存在」說了兩次，一次是理由、一次是主詞。只在 stdout，
+  不寫進任何檔。
+- 回歸測試裡有一個計時斷言，機器很忙時可能誤紅。
+
 ## 0.28.2（2026-11-07）
 
 只升版號、補回歸測試與文件，程式行為一行都不動。下面四項修正在 `v0.28.1` 標記的程式碼裡就已經有了，

@@ -94,7 +94,15 @@ def variant(tmp: Path, name: str) -> Path:
     ppath = root / 'analysis/plans/SQ1-v1.yaml'
     doc = plan_common.load_yaml(ppath)
     doc['outputs'][1]['supports'] = 'k1'
+    # 改過內容就要重算 content_hash（plan 與 index 同步）：留著舊 hash 的 plan 是 check_plan 會報的
+    # 「不得原地修改 confirmed plan」，動作鏈現在也拒絕從那種 plan 封出新版
+    doc['content_hash'] = plan_common.content_hash(doc)
     plan_common.dump_yaml(ppath, doc)
+    index = plan_common.load_index(root)
+    for entry in index.get('plans') or []:
+        if str(entry.get('plan_id')) == 'SQ1-v1':
+            entry['content_hash'] = doc['content_hash']
+    plan_common.save_index(root, index)
     mpath = root / 'analysis/figures/manifest.json'
     man = json.loads(mpath.read_text(encoding='utf-8'))
     man['figures'].append({'id': 'F_d', 'file': 'analysis/figures/f.svg', 'type': 'figure', 'results_keys': ['k1', 'k2'], 'status': 'registered_not_reviewed', 'caption': 'D（缺 role，呈現 k1／k2）'})

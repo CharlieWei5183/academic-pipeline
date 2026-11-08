@@ -57,10 +57,11 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise ChainError(f'goals.sub_questions 無 {args.src}')
     index = plan_common.load_index(root)
     to = args.dst or C.next_question_id(root, 'AQ')
-    if not re.fullmatch(r'AQ\d+', to):
+    if not C.AQ_RE.fullmatch(to):
         raise ChainError(f'--to 須為 AQ<數字>（現值 {to}）')
-    if C.question_id_occupied(root, to):
-        raise ChainError(f'{to} 已被使用（goals 或 index.active）')
+    why = C.question_id_occupied_why(root, to)
+    if why:
+        raise ChainError(f'{to} 已被使用（{why}）')
     old_pid = str((index.get('active') or {}).get(args.src) or '')
     if not old_pid:
         raise ChainError(f'index.active 無 {args.src} 的 active plan')
@@ -68,6 +69,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     if not old_path.is_file():
         raise ChainError(f'active plan 檔不存在: {old_path}')
     old_plan = plan_common.load_yaml(old_path)
+    C.require_clean_plans(root, [('來源', old_pid)])
     if args.primary_model and args.primary_model == str((old_plan.get('primary_model') or {}).get('id') or ''):
         raise ChainError(f'--primary-model {args.primary_model} 已是 {old_pid} 的 primary_model')
     inbox = C.check_inbox_pending(root, args.inbox)
@@ -77,7 +79,8 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise ChainError(f'{args.src} 是最後一個主問題；搬走後 goals.sub_questions 為空，check_coverage 會擋。'
                          '確定要這樣做請加 --allow-empty-main（第 6 步改為只寫快照、不跑 check_coverage）')
     return {'project': project, 'to': to, 'old_pid': old_pid, 'old_plan': old_plan, 'inbox': inbox, 'waiver': waiver,
-            'remaining': remaining, 'other_aq': [str(x.get('id')) for x in aq], 'new_pid': C.next_plan_id(root, to)}
+            'remaining': remaining, 'other_aq': [str(x.get('id')) for x in aq], 'new_pid': C.next_plan_id(root, to),
+            'vitems': C.validation_items_by(root, sq=args.src)}
 
 
 # ---------- 第 1 步：project.yaml ----------
@@ -91,7 +94,7 @@ def move_question(text: str, ctx: dict[str, Any], did: str, date: str, args: arg
     same = ('，同 ' + '／'.join(prev) + ' 的處理') if prev else ''
     others = '／'.join(ctx['other_aq']) + ' 不動、' if ctx['other_aq'] else ''
     inbox_txt = f'依收件匣 {args.inbox} 裁定' if args.inbox else '依使用者裁定'
-    block[0] = f'    - id: {to}          # 前 {src}（{did} 降為附錄，{inbox_txt}；{others}sub_questions 保留 {src} 編號不重用{same}）'
+    C.set_block_id(block, to, f'# 前 {src}（{did} 降為附錄，{inbox_txt}；{others}sub_questions 保留 {src} 編號不重用{same}）')
     keys = '／'.join(info['result_keys']) if info['result_keys'] else '（無）'
     vids = '／'.join(info['validation_items']) if info['validation_items'] else '（無）'
     pm_txt = ''
@@ -129,7 +132,8 @@ def verify_move(old_text: str, new_text: str, src: str, to: str) -> dict[str, An
 
 # ---------- 第 2 步：新 plan ----------
 
-def build_new_plan(old_plan: dict, ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace) -> tuple[dict, dict]:
+def build_new_plan(old_plan: dict, ctx: dict[str, Any], did: str, date: str, args: argparse.Namespace,
+                   policy: C.StalePolicy | None = None, v_absent: bool = False) -> tuple[dict, dict]:
     src, to, old_pid, new_pid = args.src, ctx['to'], ctx['old_pid'], ctx['new_pid']
     ver = new_pid.split('-v')[1]
     inbox_txt = f'收件匣 {args.inbox} ' if args.inbox else '使用者裁定'
@@ -188,12 +192,24 @@ def build_new_plan(old_plan: dict, ctx: dict[str, Any], did: str, date: str, arg
         changed_top |= {'primary_model', 'robustness', 'multiplicity'}
     changes.append(C.unchanged_keys_sentence(old_plan, changed_top, old_pid))
     new['changes'] = changes
+    pol = policy or C.StalePolicy()
+    v_txt = (C.VALIDATION_ABSENT_TAIL if v_absent else
+             f'只把對應 item 的 sq／plan_id 改掛 {to}／{new_pid}、不寫 fingerprint、不加 reaffirmed 標記'
+             if pol.no_results else
+             f'只把對應 item 的 sq／plan_id 改掛 {to}／{new_pid}並重接頂層 fingerprint' if pol.pristine else
+             C.rehang_clause(pol, ctx['vitems'], f'只把對應 item 的 sq／plan_id 改掛 {to}／{new_pid}', f'只把對應 item 的 sq 改 {to}')
+             + ('並重接頂層 fingerprint' if pol.carry['source'] or pol.carry['results']
+                else f'、頂層 fingerprint 不帶新值（{C.STALE_FP_REASON}）'))
     new['amendment_reason'] = (
         f'本版只把 {old_pid} 改掛到附錄問題 {to}（{inbox_txt}；decisions.yaml {did}）。主問題 {src} 降為附錄問題 {to}'
         f'（{others}{src} 編號不重用{same}），本 plan 因此以 {old_pid} 為底建立 {new_pid} 並 supersedes {old_pid}，只改歸屬（sq）與檔頭欄位'
-        f'{pm_change}。數字一律不動：{len(keys)} 個結果鍵（{"／".join(keys)}）的 rows 逐位沿用，不新增、不重算、不重跑。'
-        f'封版後 analysis/results.json 只 retag plan_id 為 {new_pid}；analysis/validation.yaml 只把對應 item 的 sq／plan_id 改掛 {to}／{new_pid}'
-        f'並重接頂層 fingerprint，判定與 limitations 不變。reviewer-methods 設計審、code-review 重審、validate-results 重判、evaluate 對 {to}'
+        f'{pm_change}。'
+        + (f'{C.NO_RESULTS_BRIEF}：沒有結果鍵可 retag，封版不動任何數字。'
+           if pol.no_results else
+           f'數字一律不動：{len(keys)} 個結果鍵（{"／".join(keys)}）的 rows 逐位沿用，不新增、不重算、不重跑。'
+           f'封版後 analysis/results.json 只 retag plan_id 為 {new_pid}；')
+        + 'analysis/validation.yaml ' + v_txt
+        + f'，判定與 limitations 不變。reviewer-methods 設計審、code-review 重審、validate-results 重判、evaluate 對 {to}'
         ' 的 result-fit 不在本鏈執行，列為 open item。')
     tj = str(old_plan.get('timing_justification') or '').rstrip()
     m = re.findall(r'\((\d+)\)', tj)
@@ -213,13 +229,13 @@ def update_glossary(text: str, src: str, to: str, did: str, date: str, remaining
     lines = text.split('\n')
     sec, _sec_end, main_i, last_aq = C.glossary_table(lines)
     if sec < 0:
-        return text, {'skipped': '無編號對照表'}
+        return text, {'skipped': C.glossary_skip_reason(lines)}
     changed = []
     if main_i >= 0:
         cells = lines[main_i].split('|')
-        cells[1] = f' {"、".join(remaining) if remaining else "（無）"} '
+        cells[1] = f' {"、".join(remaining) if remaining else C.GLOSSARY_EMPTY_Q} '
         note = cells[3].strip()
-        hits = list(re.finditer(r'降為 [A-Z]{2}\d+', note))
+        hits = list(re.finditer(r'降為 [A-Z]{2}\d+' + C.Q_SUFFIX, note))
         if hits:
             cut = hits[-1].end()
             note = note[:cut] + f'、{src} 已依 {did}（{date}）降為 {to}' + note[cut:]
@@ -259,11 +275,13 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
     pm_old = str((old_plan.get('primary_model') or {}).get('id') or '')
 
     def body(ch: C.Chain) -> None:
+        ch.id_map[src] = to      # 既有的關卡訊息提到 src 時，動作後會變成 to，不是新增
         ch.step(1, 'project.yaml goals 搬移')
         p_path = root / 'project.yaml'
         ch.before(p_path)
         p_old = C.read_text(p_path)
-        new_plan, extra = build_new_plan(old_plan, ctx, did, date, args)
+        new_plan, extra = build_new_plan(old_plan, ctx, did, date, args, ch.policy,
+                                         not (root / 'analysis/validation.yaml').is_file())
         info = {'result_keys': planned_keys, 'validation_items': vitems, 'pm_old': pm_old, 'new_robustness_id': extra['new_robustness_id']}
         p_new = move_question(p_old, ctx, did, date, args, info)
         mv = verify_move(p_old, p_new, src, to)
@@ -273,7 +291,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         sealed, diff = C.step_seal_plan(ch, new_plan, old_pid, src, to)
         ch.summary['plan_hash'] = sealed.get('content_hash')
         ch.summary['leaf_diff'] = diff
-        ch.step(3, 'results.json plan_id retag')
+        ch.step(3, C.retag_step_name(ch.no_results))
         keys = C.results_keys_of_plan(root, old_pid)
         model_map: dict[str, tuple[str, str, str]] = {}
         if args.primary_model and keys:
@@ -288,24 +306,33 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
             ch.note(f'WARNING 這些鍵不在 {new_pid} 的 outputs／expected_keys：{undeclared}')
         ch.summary['result_keys'] = keys
         ch.summary['rows'] = rinfo['rows']
-        ch.step(4, 'validation.yaml 改掛與 fingerprint 重接')
+        carry = ch.policy.carry
+        ch.step(4, f'validation.yaml 改掛與 fingerprint {C.carry_word(carry)}')
         v_path = root / 'analysis/validation.yaml'
         v_text = C.read_text(v_path) if v_path.is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
         bk_name = f'validation.yaml.pre_{src.lower()}_to_{to.lower()}_backup'
-        note = (f'第{nth}次重接（{inbox_txt}／{did}：{src} 降為附錄問題 {to}、{new_pid} 封版 supersedes {old_pid}、{len(keys)} 鍵 retag、'
-                f'對應 item 改掛 {to}、waiver 重登）；本項內容一字未改（以 {bk_name} 逐鍵比對）')
+        note = (f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：{src} 降為附錄問題 {to}、{new_pid} 封版 supersedes {old_pid}、'
+                + C.results_or(ch.no_results, f'{len(keys)} 鍵 retag、', C.NO_RESULTS_BRIEF + '、')
+                + f'對應 item 改掛 {to}、{C.waiver_clause(ch.waiver_state)}）；本項內容一字未改（以 {bk_name} 逐鍵比對）')
         old_res = next((C.scalar_line_value(ln) for ln in v_text.split('\n') if ln.startswith('results_fingerprint:')), '—')
         old_src = next((C.scalar_line_value(ln) for ln in v_text.split('\n') if ln.startswith('source_fingerprint:')), '—')
-        fps_pre = C.source_fingerprint(root)
+        # 尚無正式結果時算不出 fingerprint（那支腳本只會印一行 INFO）；檔頭那幾行改寫成實話，不呼叫它
+        fps_pre = dict(C.NO_FP) if ch.no_results else C.source_fingerprint(root)
+        lh3 = C.SameLine(ch.no_results)         # 檔頭 (3)(4) 擠在同一行：理由只由第一個子句說出
         header = [
-            f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：主問題 {src} 降為附錄問題 {to}、{new_pid} supersedes {old_pid}）：由 reassign_question.py {VERSION} 執行，',
-            f'#   本次只重接 fingerprint，沒有任何數值改變（{len(keys)} 鍵 rows 逐位元未變，只改 plan_id 字串）。',
+            f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：主問題 {src} 降為附錄問題 {to}、{new_pid} supersedes {old_pid}）：由 reassign_question.py {VERSION} 執行，',
+            '#   ' + C.only_retag_sentence(carry, f'{len(keys)} 鍵 rows 逐位元未變，只改 plan_id 字串') + '。',
             f'#   (1) project.yaml：goals.sub_questions 的 {src} 整段搬到 goals.appendix_questions 尾端改 id {to}，其餘欄位逐字不動。',
             f'#   (2) {new_pid} 封版 supersedes {old_pid}（index active 加 {to}、移除 {src}、{old_pid} 標 superseded／replaced_by {new_pid}）。',
-            f'#   (3) results.json：{len(keys)} 鍵 plan_id {old_pid} → {new_pid}。(4) rerun waiver 於新 fingerprint 重登——仍是 waived，不是 pass。',
-            f'#   fingerprint 移動：results {old_res} → {fps_pre["results"]}、source {old_src} → {fps_pre["source"]}（input {fps_pre["input"]}）。',
-            f'#   本次改動：{"／".join(vitems) or "（無 item）"} 的 sq 改 {to}、plan_id 改 {new_pid}；各 item 加 {C.reaffirm_key(v_text, date) if v_text else "—"}；其餘欄位一字未改，'
+            '#   (3) ' + C.results_or(ch.no_results, f'results.json：{len(keys)} 鍵 plan_id {old_pid} → {new_pid}', C.no_results_text(lh3))
+            + '。(4) ' + C.waiver_sentence(ch.waiver_state, lh3) + '。',
+            # 尚無正式結果時用短說法：上面第二行的 `only_retag_sentence` 已經把 NO_RESULTS_FP 整句講過一次
+            '#   ' + C.results_or(ch.no_results, f'fingerprint {C.fp_move_label(carry)}：'
+                                 + C.fp_move_text({'results': old_res, 'source': old_src}, fps_pre, carry)
+                                 + f'（input {fps_pre["input"]}）', C.NO_RESULTS_FP_SHORT) + '。',
+            '#   本次改動：' + C.rehang_clause(ch.policy, vitems, f'的 sq 改 {to}、plan_id 改 {new_pid}', f'只改 sq 為 {to}')
+            + f'；{C.mark_clause(ch.policy, C.reaffirm_key(v_text, date) if v_text else "—")}；其餘欄位一字未改，'
             f'未動證明以 {bk_name} 逐鍵比對為準。',
             f'#   歷史紀錄中的「{src}」自此即指 {to}，不回改。設計審、code-review 重審、validate 重判、evaluate result-fit 列為 open item。',
         ]
@@ -313,7 +340,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         ch.summary['fingerprint_old'] = vinfo.get('old') or {}
         ch.summary['fingerprint_new'] = fps
         ch.summary['validation_items'] = vinfo['items']
-        ch.step(5, 'rerun waiver 重登')
+        ch.step(5, C.waiver_step_name(ch.waiver_state))
         because = (f'{src} 降為附錄問題 {to}（{inbox_txt}／{did}）：goals 搬移、{new_pid} 封版 supersedes {old_pid}、'
                    f'{len(keys)} 鍵 plan_id retag 使 source／results fingerprint 改變；waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         waiver_rel = C.step_waiver(ch, ctx['waiver'], because)
@@ -322,6 +349,7 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         C.step_coverage(ch, {f'{to}: 新增', f'{src}: 被移除'}, allow_empty_main=args.allow_empty_main)
         ch.step(7, 'GLOSSARY.md 編號對照表')
         g_path = root / 'GLOSSARY.md'
+        ginfo: dict[str, Any] | None = None      # 決策第 (7) 項照這個寫：None＝專案沒有這個檔
         if g_path.is_file():
             ch.before(g_path)
             g_new, ginfo = update_glossary(C.read_text(g_path), src, to, did, date, ctx['remaining'], str(mv['moved'].get('question') or ''),
@@ -333,9 +361,10 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                 ch.write(g_path, g_new)
                 ch.note('更新 ' + '、'.join(ginfo['changed']))
         else:
-            ch.note('無 GLOSSARY.md，略過')
+            ch.note(C.GLOSSARY_MISSING_NOTE)
         ch.step(8, f'decisions.yaml append {did}')
-        C.step_decision(ch, build_decision(root, args, ctx, did, date, inbox_txt, sealed, diff, rinfo, vinfo, fps, waiver_rel, log_rel, extra, mv, keys))
+        C.step_decision(ch, build_decision(root, args, ctx, did, date, inbox_txt, sealed, diff, rinfo, vinfo, fps, waiver_rel, log_rel, extra, mv, keys,
+                                       ch.summary.get('coverage'), ginfo))
         ch.step(9, '收件匣結案、重畫、daily log')
         cmd = (f'python3 reassign_question.py {root} --from {src} --to {to}' + (f' --primary-model {args.primary_model}' if args.primary_model else '')
                + (f' --inbox {args.inbox}' if args.inbox else '') + ' --apply')
@@ -347,9 +376,13 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: str, date: str, inbox_txt: str, sealed: dict, diff: dict,
-                   rinfo: dict, vinfo: dict, fps: dict, waiver_rel: str, log_rel: str, extra: dict, mv: dict, keys: list[str]) -> dict[str, Any]:
+                   rinfo: dict, vinfo: dict, fps: dict, waiver_rel: str, log_rel: str, extra: dict, mv: dict, keys: list[str],
+                   cov: dict[str, Any] | None = None, ginfo: dict[str, Any] | None = None) -> dict[str, Any]:
     src, to, old_pid, new_pid = args.src, ctx['to'], ctx['old_pid'], ctx['new_pid']
     old_fp = vinfo.get('old') or {}
+    policy, carry, drift = C.policy_of(vinfo)
+    ws = C.waiver_state_of(vinfo)
+    l4 = C.SameLine(policy.no_results)      # 決策 (4)：理由只由行內第一個子句說出
     remaining = '／'.join(ctx['remaining']) if ctx['remaining'] else '無（sub_questions 已空）'
     pm_line = ''
     if args.primary_model:
@@ -361,13 +394,16 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
         f'(2) analysis/plans/{new_pid}.yaml 以 {old_pid} 為底封版，content_hash {sealed.get("content_hash")}；與 {old_pid} 的 leaf 差異：'
         f'{diff["same"]} 同、{len(diff["changed"])} 改、{len(diff["added"])} 增、{len(diff["removed"])} 刪（逐欄見 run log）；'
         f'index.yaml 加 {new_pid}（active）、active 加 {to}、移除 {src}、{old_pid} 標 superseded／replaced_by {new_pid}，舊 yaml 不動{pm_line}\n'
-        f'(3) analysis/results.json：{len(keys)} 鍵 plan_id {old_pid} → {new_pid}（{"／".join(keys) if len(keys) <= 4 else "鍵名見 links"}）；rows 逐位元不變（共 {sum(v or 0 for v in rinfo["rows"].values())} 列）\n'
-        f'(4) analysis/validation.yaml：{"／".join(vinfo["items"]) or "無 item"} 改掛 {to}／{new_pid}，內容不動；各 item 加 {vinfo.get("reaffirm_key") or "—"}；'
-        f'fingerprint results {old_fp.get("results", "—")} → {fps["results"]}、source {old_fp.get("source", "—")} → {fps["source"]}（input {fps["input"]}）\n'
-        f'(5) rerun waiver：{waiver_rel or "未重登（無 waiver 決策）"}{"，仍是 waived、不是 pass；state.analysis.rerun 舊值推進 previous_waiver" if waiver_rel else ""}\n'
-        f'(6) check_coverage：{"TAMPER 只有 " + to + " 新增、" + src + " 被移除兩筆 → --update-snapshot → 0 tamper" if ctx["remaining"] else "sub_questions 已空、無法執行，快照由腳本直接寫入"}\n'
-        f'(7) GLOSSARY.md 編號對照表：主子問題列改「{remaining}」、補 {to} 一列\n'
-        f'(8)(9) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；progress/PROGRESS.html／progress/PROGRESS.ir.json／progress/DECISIONS-TIMELINE.md 重畫；'
+        '(3) ' + C.results_or(policy.no_results,
+                              f'analysis/results.json：{len(keys)} 鍵 plan_id {old_pid} → {new_pid}（{"／".join(keys) if len(keys) <= 4 else "鍵名見 links"}）；rows 逐位元不變（共 {sum(v or 0 for v in rinfo["rows"].values())} 列）') + '\n'
+        '(4) ' + C.absent_or(vinfo, f'analysis/validation.yaml：{C.rehang_clause(policy, vinfo["items"], f"改掛 {to}／{new_pid}", f"只改掛 {to}")}，內容不動；'
+                             + f'{C.mark_clause(policy, vinfo.get("reaffirm_key") or "—", l4)}；'
+                             + C.results_or(policy.no_results, 'fingerprint ' + C.fp_move_text(old_fp, fps, carry) + f'（input {fps["input"]}）',
+                                            C.no_results_fp_text(l4))) + '\n'
+        f'(5) rerun waiver：{C.waiver_decision_line(ws, waiver_rel, "；state.analysis.rerun 舊值推進 previous_waiver", "未重登（state.analysis.rerun 動作前就漂移）")}\n'
+        f'(6) check_coverage：{C.coverage_text(cov, "TAMPER 只有 " + to + " 新增、" + src + " 被移除兩筆 → --update-snapshot → 0 tamper" if ctx["remaining"] else "sub_questions 已空、無法執行，快照由腳本直接寫入")}\n'
+        + C.glossary_decision_text(ginfo, {'主子問題列': f'主子問題列改「{remaining}」', f'{to} 列': f'補 {to} 一列'}) + '\n'
+        + f'(8)(9) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；progress/PROGRESS.html／progress/PROGRESS.ir.json／progress/DECISIONS-TIMELINE.md 重畫；'
         f'所有改到的檔備份為 <檔名>.pre_{src.lower()}_to_{to.lower()}_backup')
     body = str((ctx['inbox'] or {}).get('body') or '').strip()
     reason_parts = []
@@ -377,10 +413,15 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
         reason_parts.append(args.reason.strip())
     if not reason_parts:
         reason_parts.append(f'使用者裁定 {src} 降為附錄問題 {to}（未附理由）')
-    reason_parts.append(f'全鏈只改歸屬與 metadata，{len(keys)} 鍵數字一位元未動；由 reassign_question.py {VERSION} 確定性執行')
+    reason_parts.append(C.results_or(policy.no_results, f'全鏈只改歸屬與 metadata，{len(keys)} 鍵數字一位元未動',
+                                     '全鏈只改歸屬與 metadata，' + C.NO_RESULTS_BRIEF + '、沒有數字可動')
+                        + f'；由 reassign_question.py {VERSION} 確定性執行')
     known = (
-        f'(1) validation 重接：results {fps["results"]}／source {fps["source"]}，各 item 內容不變\n'
-        f'(2) rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass；任一 raw data／plan／scripts／results 再變即須重登\n'
+        '(1) ' + C.results_or(policy.no_results,
+                              C.absent_or(vinfo, C.known_fp_text(carry, old_fp, fps) + '，各 item 內容不變', C.VALIDATION_ABSENT_FP),
+                              C.NO_RESULTS_FP) + '\n'
+        '(2) ' + C.waiver_known_line(ws, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass；任一 raw data／plan／scripts／results 再變即須重登'
+                                     + ('；本次未重登（動作前就漂移）' if drift else '')) + '\n'
         f'(3) 歷史紀錄中的「{src}」（舊決策 links、validation note、plan 檔、daily log）不回改，讀到即指 {to}；check_decisions 對舊條目的「link SQ 不存在 {src}」WARNING 屬預期\n'
         f'(4) open item：' + '；'.join(x.format(plan=new_pid, q=to) for x in C.OPEN_ITEMS) + '\n'
         f'(5) 主問題現為 {remaining}；稿件對應 {src} 的節搬到 SI 為下游另案')
@@ -402,15 +443,17 @@ def build_decision(root: Path, args: argparse.Namespace, ctx: dict[str, Any], di
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
     ld = summary.get('leaf_diff') or {}
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
     lines = [f'=== reassign_question {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
              f'{summary["from"]} → {summary["to"]}；plan {summary["old_pid"]} → {summary["new_pid"]}（content_hash {summary.get("plan_hash")}）',
              f'預定決策 {summary["decision_id"]}（約 {summary.get("decision_bytes", 0)} bytes）；步驟紀錄 {summary["log"]}',
              f'plan leaf 差異：{ld.get("same")} 同、{len(ld.get("changed") or [])} 改、{len(ld.get("added") or [])} 增、{len(ld.get("removed") or [])} 刪：'
              + '、'.join((ld.get('changed') or []) + (ld.get('added') or []))[:300],
-             f'results.json retag {len(summary.get("result_keys") or [])} 鍵：{"、".join(summary.get("result_keys") or []) or "無"}',
-             f'validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛；fingerprint results {fo.get("results", "—")} → {fn.get("results")}、source {fo.get("source", "—")} → {fn.get("source")}',
-             f'rerun waiver：{summary.get("waiver") or "未重登"}']
+             C.results_or(summary.get('no_results'),
+                          f'results.json retag {len(summary.get("result_keys") or [])} 鍵：{"、".join(summary.get("result_keys") or []) or "無"}',
+                          C.NO_RESULTS),
+             f'validation item {"／".join(summary.get("validation_items") or []) or "無"} 改掛；'
+             + C.results_or(summary.get('no_results'), 'fingerprint ' + C.summary_fp_text(summary), C.NO_RESULTS_FP),
+             'rerun waiver：' + C.waiver_summary_text(summary)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 
@@ -429,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = root.resolve()
     args.root = str(root)
-    if not re.fullmatch(r'SQ\d+', args.src):
+    if not C.SQ_RE.fullmatch(args.src):
         print(f'BLOCKER --from 須為 SQ<數字>（現值 {args.src}）')
         return 2
     token_extra = C.action_token_extra('reassign', {'from': args.src, 'to': args.dst, 'primary_model': args.primary_model}, args.inbox)

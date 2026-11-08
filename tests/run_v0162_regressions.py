@@ -211,6 +211,7 @@ def test_undeclared_key(tmp: Path) -> None:
     results = json.loads(r_path.read_text(encoding='utf-8'))
     results['u1'] = {**results['r1'], 'description': 'u1 未宣告', 'value': 9.9}
     r_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    T1.refix(root)   # 直接改 results.json 會讓記錄的指紋變成動作前就過期；那是另一條規則，別混進這個測試
     out = run(MR, root, '--key', 'u1', '--to-plan', 'SQ2-v1', '--date', '2026-09-15', '--apply')
     assert '結果: 完成；決策 D-003' in out and 'u1（SQ1-v1 的未宣告結果）→ SQ2-v1 outputs' in out and '來源 SQ1-v1 不出新版（鍵未在該 plan 宣告）' in out, out
     assert not (root / 'analysis/plans/SQ1-v2.yaml').exists() and plan_common.load_index(root)['active'] == {'SQ1': 'SQ1-v1', 'SQ2': 'SQ2-v2', 'AQ1': 'AQ1-v1'}

@@ -12,10 +12,11 @@
 - 修正 2 續：`promote_question.update_glossary()` 共用同一個定位函式，所以表頭與節名換寫法也找得到列。→ 規格 3。
 - 修正 3（role 註記不寫死決策編號）：決策編號只屬於單一專案，工具不能把它寫進別的專案的 plan。→ 規格 4。
 - 修正 4（`set_tier.py` 的 reason 規格句與 daily log 區塊標題）→ 規格 5。
-- 規格 6（登記）：plugin.json == 0.28.2、CHANGELOG 最上面是 `## 0.28.2`、tests README 與 README 登記本檔。
+- 規格 6（登記）：plugin.json ≥ 0.28.2、CHANGELOG 仍有 `## 0.28.2` 那一節、tests README 與 README 登記本檔。
 
 規格 1～3 直接呼叫函式，不走整條動作鏈（九步由 `run_v0160`／`run_v0161` 負責）；fixture 的編號、名稱與日期
-全是編出來的，不對應任何專案。規格 6 精確 pin 當期版號，下一版要照慣例把這兩條改成單調斷言。
+全是編出來的，不對應任何專案。規格 6 已照慣例放寬成單調斷言，當期精確版號由 `run_v0290_regressions.py` pin。
+本檔描述的是 0.28.2 當時的修正；0.29.0 起認列改由 `glossary_rows` 依形狀判斷，既有斷言不變。
 """
 from __future__ import annotations
 
@@ -105,14 +106,19 @@ def test_glossary_table() -> None:
     lines = doc('#### 對照', HEAD_B, [MAIN_ROW, DID_ROW], tail='## 其他').split('\n')
     sec, _se, main_i, last_aq = C.glossary_table(lines)
     assert lines[main_i] == MAIN_ROW and last_aq == -1 and sec >= 0
-    # AQ 像但不完全像的格子不算（`AQ`、`AQ9x`、第二格以外的位置）
-    fake = ['| AQ | 附錄問題 | 不帶號 |', '| AQ9x | 附錄問題 | 多了字 |', '| 甲 | AQ9 | 位置不對 |']
+    # AQ 像但不完全像的格子不算（`AQ` 不帶號、`AQ-9` 多了字、第二格以外的位置；`AQ9x` 現在是合法的後綴字母編號）
+    fake = ['| AQ | 附錄問題 | 不帶號 |', '| AQ-9 | 附錄問題 | 多了字 |', '| 甲 | AQ9 | 位置不對 |']
     lines = doc('#### 對照', HEAD_B, [MAIN_ROW] + fake, tail='## 其他').split('\n')
     _s, _e, _m, last_aq = C.glossary_table(lines)
     assert last_aq == -1, lines[last_aq]
 
     # (e) 有表格但沒有「主子問題」那一格 → (-1, -1, -1, -1)
-    for rows2 in ([AQ8_ROW, DID_ROW], [], ['| SQ6 | 子問題 | 類別寫法不同 |'], ['| 主子問題 | SQ6 | 欄位順序不對 |']):
+    # 只有 AQ 列的表（0.29.0 起）：以第一個 AQ 錨點列定位，main_i 回 -1、last_aq 指向它
+    lines = doc('#### 對照', HEAD_B, [AQ8_ROW, DID_ROW], tail='## 其他').split('\n')
+    sec, sec_end, main_i, last_aq = C.glossary_table(lines)
+    assert lines[sec] == '#### 對照' and lines[sec_end] == '## 其他', (lines[sec], lines[sec_end])
+    assert main_i == -1 and lines[last_aq] == AQ8_ROW, (main_i, lines[last_aq])
+    for rows2 in ([], ['| SQ6 | 子問題 | 類別寫法不同 |'], ['| 主子問題 | SQ6 | 欄位順序不對 |']):
         lines = doc('#### 對照', HEAD_B, rows2, tail='## 其他').split('\n')
         assert C.glossary_table(lines) == (-1, -1, -1, -1), rows2
     assert C.glossary_table('# 只有標題\n\n沒有表格。'.split('\n')) == (-1, -1, -1, -1)
@@ -302,16 +308,18 @@ def test_set_tier_text() -> None:
 
 def test_registration() -> None:
     cl = (PLUGIN / 'CHANGELOG.md').read_text(encoding='utf-8')
-    assert cl.startswith(f'# CHANGELOG\n\n## {V}（'), cl[:60]   # 當期精確版號由本檔 pin，下一版改單調斷言
+    assert f'\n## {V}（' in cl, cl[:80]   # 0.29.0 起不再是最上面一節，只要那一節仍在
     ver = json.loads((PLUGIN / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version']
-    assert ver == V, ver
+    assert tuple(int(x) for x in ver.split('.')) >= (0, 28, 2), ver   # 精確版號改由 run_v0290 pin
     name = Path(__file__).name
     assert name in (PLUGIN / 'tests/README.md').read_text(encoding='utf-8')
     assert name in (PLUGIN / 'README.md').read_text(encoding='utf-8')
-    # 依慣例：前一支回歸測試改為單調斷言，升版不會誤紅
+    # 依慣例：前一支回歸測試改為單調斷言，升版不會誤紅。下一支會對本檔做同一件事，所以這個針不能是字面字串
+    # （否則本檔自己就含著它，下一支永遠判本檔仍精確 pin）：用相加組出來。
+    needle = 'cl.startswith(' + "f'# CHANGELOG"
     prev = (PLUGIN / 'tests/run_v0281_regressions.py').read_text(encoding='utf-8')
-    assert '(0, 28, 1)' in prev and "cl.startswith(f'# CHANGELOG" not in prev, 'run_v0281 仍精確 pin，升版會誤紅'
-    print('[regression] 規格 6：CHANGELOG 最上面是 0.28.2、plugin.json == 0.28.2、tests README 與 README 登記本檔、'
+    assert '(0, 28, 1)' in prev and needle not in prev, 'run_v0281 仍精確 pin，升版會誤紅'
+    print('[regression] 規格 6：CHANGELOG 仍有 0.28.2 那一節、plugin.json ≥ 0.28.2、tests README 與 README 登記本檔、'
           'run_v0281 已是單調斷言: pass')
 
 

@@ -37,4 +37,8 @@ tools: ["Read", "Write", "Glob", "Grep"]
 - `analysis/plans/<SQ>-vN.yaml`：依模板填妥；`status: draft`、`content_hash` 留空，待人工確認後由 seal script 寫入。
 - 變更版本須附 `supersedes`、`amendment_reason`、`changes`，並更新 `analysis/plans/index.yaml` 的提案內容；真正啟用由 skill 在確認後處理。
 
-回報時列出：每份計畫的 plan_id、adapter-specific target（estimand／prediction target／themes／synthesis／theorem 等）、主要輸出鍵、承重／次要定位、尚待 reviewer-methods 解決的風險。
+## 術語
+
+材料裡的 `GLOSSARY.md` 是縮寫、變數與方法名稱的現行寫法：計畫一律沿用表內既有的名稱，不另起別名。表裡沒有的名稱照你的用法寫進計畫，再把它們列成一份清單交回（名稱、一句話說明、單位或取值範圍、出處），由 skill 補進那份檔；你沒有 Edit，不要自己改它。
+
+回報時列出：每份計畫的 plan_id、adapter-specific target（estimand／prediction target／themes／synthesis／theorem 等）、主要輸出鍵、承重／次要定位、尚待 reviewer-methods 解決的風險，以及 `GLOSSARY.md` 還沒有的新名稱清單（沒有就寫「無」）。

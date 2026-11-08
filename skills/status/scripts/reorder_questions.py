@@ -95,21 +95,36 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         ch.write(p_path, p_new)
         ch.note('／'.join(ctx['old_order']) + ' → ' + '／'.join(order) + '；每段內容逐字不動、註解跟著區塊走')
         snap = root / 'evaluations/goals-snapshot.json'
-        if snap.is_file() and (root / 'analysis/results.json').is_file():
-            rc, out = C.run_script('check_coverage', p_path, root / 'analysis/results.json', C.empty_bib(root), '--snapshot', snap)
-            if any(ln.startswith('TAMPER') for ln in out.splitlines()):
-                raise ChainError('check_coverage 對調順序後的 goals 報 TAMPER（id 集合應相同）')
-            ch.note('check_coverage 0 tamper（快照不動）')
-        ch.step(2, 'validation.yaml fingerprint 重接')
+        # 動作前有沒有快照、走了哪一條，記成結構化結果：決策那一句由 C.coverage_text 依它產生
+        cov = C.coverage_record(ch, snap.is_file(), list(ch.tamper_base), set(),
+                                'compare' if snap.is_file() else 'skip')
+        # 沒有 analysis/results.json 也照比：`check_coverage` 自己認得結果檔不存在，關卡跑得完，
+        # 「調順序不該新增 TAMPER」這個比對仍然有意義（少比就等於這個關卡沒在看）
+        if snap.is_file():
+            rc, out = C.run_script('check_coverage', *C.coverage_argv(root))
+            new_t = C.multiset_minus(C.tamper_keys(out), ch.tamper_base)
+            if new_t:
+                raise ChainError(f'check_coverage 對調順序後的 goals 報新的 TAMPER（id 集合應相同）：{new_t}')
+            ch.gate_check('coverage', rc, out)
+            ch.note('check_coverage 0 tamper（快照不動）' if not ch.tamper_base   # 乾淨專案的步驟紀錄逐字不變
+                    else f'check_coverage 0 新增 tamper（快照不動；動作前既有 {len(ch.tamper_base)} 筆）')
+        if not snap.is_file():
+            ch.note(C.coverage_note(cov))       # 沒有快照時上面整段跳過，照實說沒有比對也沒有建立
+        carry = ch.policy.carry
+        ch.step(2, f'validation.yaml fingerprint {C.carry_word(carry)}')
         v_path = root / 'analysis/validation.yaml'
         v_text = C.read_text(v_path) if v_path.is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
-        note = f'第{nth}次重接（{inbox_txt}／{did}：goals.{args.list} 調順序 {"／".join(order)}）；本項內容一字未改、不改掛'
-        header = [f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：goals.{args.list} 由 {"／".join(ctx["old_order"])} 改為 {"／".join(order)}）：由 reorder_questions.py {VERSION} 執行，',
-                  '#   goals 清單的順序是 source fingerprint 的一部分，本次只重接 fingerprint；沒有任何數值改變、沒有 item 改掛、results fingerprint 不變。']
+        note = f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：goals.{args.list} 調順序 {"／".join(order)}）；本項內容一字未改、不改掛'
+        header = [f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：goals.{args.list} 由 {"／".join(ctx["old_order"])} 改為 {"／".join(order)}）：由 reorder_questions.py {VERSION} 執行，',
+                  '#   goals 清單的順序是 source fingerprint 的一部分，'
+                  + C.results_or(ch.no_results,
+                                 '本次只重接 fingerprint；' if carry['source'] else f'但 source fingerprint {C.STALE_FP_REASON}，本次不帶新值；',
+                                 C.NO_RESULTS_FP + '；')
+                  + '沒有任何數值改變、沒有 item 改掛' + C.results_or(ch.no_results, '、results fingerprint 不變', '') + '。']
         fps, vinfo = C.step_validation(ch, {}, note, header)
         ch.summary['fingerprint_old'], ch.summary['fingerprint_new'] = vinfo.get('old') or {}, fps
-        ch.step(3, 'rerun waiver 重登')
+        ch.step(3, C.waiver_step_name(ch.waiver_state))
         waiver_rel = C.step_waiver(ch, ctx['waiver'], f'goals.{args.list} 調順序為 {"／".join(order)}（{inbox_txt}／{did}）使 source fingerprint 改變；'
                                    f'數字不動；waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         ch.summary['waiver'] = waiver_rel
@@ -119,17 +134,32 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         if not reason_parts:
             reason_parts.append('使用者裁定調整順序（未附理由）')
         reason_parts.append(f'只改 goals.{args.list} 的排列，每個問題的內容、plan、結果、驗證一字不動；由 reorder_questions.py {VERSION} 確定性執行')
+        # 尚無正式結果時這兩行各自是「一行」：理由只由行內第一個子句說出（依序組句，不事後刪改）
+        l3 = C.SameLine(ch.no_results)
+        nores_d3 = C.no_results_text(l3) + '；' + C.absent_or(
+            vinfo, f'analysis/validation.yaml：{C.mark_clause(ch.policy, vinfo.get("reaffirm_key") or "—", l3)}、不改掛', C.VALIDATION_ABSENT)
+        lk3 = C.SameLine(ch.no_results)
+        nores_k3 = C.no_results_fp_text(lk3)
         C.step_decision(ch, {'id': did, 'date': date, 'stage': 'evaluate', 'checkpoint': f'goals.{args.list} 調順序：' + '／'.join(order), 'question': 'main',
                              'method': f'reorder_questions.py {VERSION} --list {args.list} --order {",".join(order)}' + (f' --inbox {args.inbox}' if args.inbox else '') + f' --apply；步驟紀錄 {log_rel}',
                              'decision': f'(1) project.yaml：goals.{args.list} 由 {"／".join(ctx["old_order"])} 改為 {"／".join(order)}；每個區塊（含註解）逐字搬移；state 加一行註解\n'
-                                         f'(2) 快照不變（id 集合相同，check_coverage 0 tamper）；plan／results／validation item 不動\n'
-                                         f'(3) analysis/validation.yaml：只重接 source fingerprint {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}（goals 清單順序是它的一部分）；'
-                                         f'results fingerprint {fps["results"]} 不變；各 item 加 {vinfo.get("reaffirm_key") or "—"}、不改掛\n'
-                                         f'(4) rerun waiver：{waiver_rel or "未重登"}{"，仍是 waived、不是 pass" if waiver_rel else ""}\n'
+                                         f'(2) {C.coverage_text(cov, "快照不變（id 集合相同，check_coverage 0 tamper）")}；plan／results／validation item 不動\n'
+                                         '(3) ' + C.results_or(ch.no_results, C.absent_or(vinfo, 'analysis/validation.yaml：'
+                                         + (f'只重接 source fingerprint {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}（goals 清單順序是它的一部分）；'
+                                            if carry['source'] else
+                                            f'source fingerprint 未帶新值（{C.STALE_FP_REASON}；記錄值 {(vinfo.get("old") or {}).get("source") or "空"}、現值 {fps["source"]}）；')
+                                         + f'results fingerprint {fps["results"]} 不變；{C.mark_clause(ch.policy, vinfo.get("reaffirm_key") or "—")}、不改掛'),
+                                         nores_d3) + '\n'
+                                         f'(4) rerun waiver：{C.waiver_decision_line(ch.waiver_state, waiver_rel)}\n'
                                          f'(5) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；進度圖重畫（泳道與關聯圖問題欄依新順序）',
                              'reason': '；'.join(reason_parts), 'rejected': '不改任何問題的內容、不重編 id、不動 plan 與結果、不改 validation 判定',
                              'known_consequences': f'(1) 只影響進度圖與稿件呈現順序；evaluate 的覆蓋判定不受順序影響\n(2) 舊決策與 validation 引用的 id 不變\n'
-                                                   f'(3) source fingerprint 因順序而變、已重接；rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass',
+                                                   '(3) ' + C.results_or(ch.no_results,
+                                                                         C.absent_or(vinfo, ('source fingerprint 因順序而變、已重接' if carry['source'] else
+                                                                                             f'source fingerprint 因順序而變，但它{C.STALE_FP_REASON}，本次不帶新值'),
+                                                                                     C.VALIDATION_ABSENT_FP),
+                                                                         nores_k3)
+                                                   + '；' + C.waiver_known_line(ch.waiver_state, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass', lk3),
                              'links': list(order) + ([waiver_rel] if waiver_rel else []) + [log_rel] + ([ctx['waiver']] if ctx['waiver'] else []), 'supersedes': ''})
         ch.step(5, '收件匣結案、重畫、daily log')
         cmd = f'python3 reorder_questions.py {root} --list {args.list} --order {",".join(order)}' + (f' --inbox {args.inbox}' if args.inbox else '') + ' --apply'
@@ -140,11 +170,15 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
+    fn = summary.get('fingerprint_new') or {}
+    last = C.SameLine(summary.get('no_results'))        # 最後一行：理由只由行內第一個子句說出
     lines = [f'=== reorder_questions {VERSION}：{"dry-run（未寫任何專案檔）" if dry else "apply"} ===',
              f'goals.{summary["list"]}：{"／".join(summary["old_order"])} → {"／".join(summary["order"])}',
              f'預定決策 {summary["decision_id"]}（約 {summary.get("decision_bytes", 0)} bytes）；步驟紀錄 {summary["log"]}',
-             f'source fingerprint {fo.get("source", "—")} → {fn.get("source")}（順序是它的一部分；results {fn.get("results")} 不變）；rerun waiver：{summary.get("waiver") or "未重登"}']
+             C.results_or(summary.get('no_results'),
+                          'source fingerprint ' + C.summary_fp_col(summary, 'source')
+                          + f'（順序是它的一部分；results {fn.get("results")} 不變）', C.no_results_text(last))
+             + '；rerun waiver：' + C.waiver_summary_text(summary, last)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 

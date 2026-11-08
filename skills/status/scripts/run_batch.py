@@ -40,6 +40,8 @@ import ssot_actions_common as C  # noqa: E402
 from ssot_actions_common import ChainError, plan_common  # noqa: E402
 
 VERSION = '0.17.0'
+# 決策編號不得寫死三位數（編號會長過三位，寫死會把長編號切成前三位或整個認不出來）。
+DECISION_LINE_RE = re.compile(r'決策 (D-\d{3,})')
 STEP_TIMEOUT = 1800
 FAIL_AT_ENV = 'SSOT_BATCH_FAIL_AT'   # 測試用故障注入：設為 k → 對 root 執行時第 k 步不跑、直接當作失敗（工作區不受影響）；只給回歸測試用
 RELAY_PLAN_FIELDS = ('plan', 'to_plan')
@@ -160,17 +162,24 @@ def step_argv(target: Path, kind: str, payload: dict[str, Any], reason: str, dat
 
 
 def step_lines(out: str, limit: int = 8) -> list[str]:
-    """子步驟 stdout 的摘要：從「=== kind …」起、到「要改的檔：」前，最多 limit 行；沒有標頭就取最後幾行。"""
+    """子步驟 stdout 的摘要：從「=== kind …」起、到「要改的檔：」前，最多 limit 行；沒有標頭就取最後幾行。
+
+    子步驟的 WARNING 是印在摘要最後面的（「要改的檔：」之後），上面那段節錄一定讀不到；
+    批次摘要是使用者唯一看得到的輸出，所以 WARNING 另外收，不受 limit 截斷，也不受節錄的終止條件影響。
+    """
     lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+    warnings = list(dict.fromkeys(ln for ln in lines if ln.startswith('WARNING')))
     start = next((i for i, ln in enumerate(lines) if ln.startswith('===')), None)
     if start is None:
-        return lines[-limit:]
+        body = lines[-limit:]
+        return body + [w for w in warnings if w not in body]
     body = []
     for ln in lines[start + 1:]:
         if ln.startswith('要改的檔') or ln.startswith('token:') or ln.startswith('下一步') or ln.startswith('備份：'):
             break
         body.append(ln)
-    return body[:limit]
+    body = body[:limit]
+    return body + [w for w in warnings if w not in body]
 
 
 def run_sequence(target: Path, actions: list[dict[str, Any]], reason_base: str, date: str, inbox_id: str, where: str) -> dict[str, Any]:
@@ -201,7 +210,7 @@ def run_sequence(target: Path, actions: list[dict[str, Any]], reason_base: str, 
                 rc, out = -1, f'{Path(argv[1]).name} 逾時（{STEP_TIMEOUT} 秒）'
         entry['rc'] = rc
         entry['summary_lines'] = step_lines(out)
-        m = re.search(r'決策 (D-\d{3})', out)
+        m = DECISION_LINE_RE.search(out)
         entry['decision'] = m.group(1) if m else ''
         m = re.search(r'run log (\S+)', out)
         entry['run_log'] = m.group(1) if m else ''
@@ -302,13 +311,14 @@ def main(argv: list[str] | None = None) -> int:
         for note in C.PL.ensure_progress_layout(root):
             print(note if note.startswith('WARNING') else f'INFO 版面遷移 {note}')
     try:
+        C.check_ssot_parseable(root)   # 壞掉的 SSOT 檔先擋在這裡，不要讓關卡子程序的 traceback 外漏
         ctx = check_preconditions(root, args)
+        actions, n = ctx['actions'], len(ctx['actions'])
+        token_extra = C.action_token_extra('batch', {'actions': ctx['raw']}, args.inbox)
+        token0 = C.ssot_token(root, token_extra)   # 讀 SSOT；壞檔也要走 BLOCKER，不能漏成 traceback
     except ChainError as exc:
         print(f'BLOCKER {exc}')
         return 2
-    actions, n = ctx['actions'], len(ctx['actions'])
-    token_extra = C.action_token_extra('batch', {'actions': ctx['raw']}, args.inbox)
-    token0 = C.ssot_token(root, token_extra)
     if args.expect_token and args.expect_token != token0:
         print('BLOCKER SSOT 狀態 token 不符（dry-run 後有別的 session 改了 SSOT）：請重跑 --dry-run')
         return 2

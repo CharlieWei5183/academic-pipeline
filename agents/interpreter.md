@@ -54,6 +54,10 @@ claims:
 
 另寫 `analysis/interpretation.md`，每 SQ 一節，保留反證、限定與尚不能下的結論，供稿件直接消費。
 
+## 術語
+
+材料裡的 `GLOSSARY.md` 是縮寫、變數與方法名稱的現行寫法：claim 與判讀文字一律沿用表內既有的名稱，不另起別名。表裡沒有的名稱照你的用法寫，再把它們列成一份清單交回（名稱、一句話說明、單位或取值範圍、出處），由 skill 補進那份檔；你沒有 Edit，不要自己改它。沒有新名稱就寫「無」。
+
 ## 權限邊界
 
-不修改 goals、results.json、validation.yaml 與稿件；claims 與分級只是草案，須經 claim-audit 與使用者逐條確認才生效——`confirmed: true` 由 interpret-results 在確認後寫入，不由你設。
+不修改 goals、results.json、validation.yaml、`GLOSSARY.md` 與稿件；claims 與分級只是草案，須經 claim-audit 與使用者逐條確認才生效——`confirmed: true` 由 interpret-results 在確認後寫入，不由你設。

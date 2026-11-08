@@ -346,6 +346,7 @@ project-init
 | integrity | `check_integrity.py` |
 | consistency | `check_gate.py` |
 | review state | `record_review_score.py` |
+| 術語表 | `init_glossary.py` |
 | progress | `render_progress.py`、`render_decisions_timeline.py` |
 
 ### 決策紀錄（`decisions.yaml`）
@@ -396,6 +397,7 @@ integrity/register.yaml
 analysis/exploration-log.yaml
 reviews/issue-ledger.yaml
 decisions.yaml                                # 人工確認與方向性取捨（D#）
+GLOSSARY.md                                   # 術語表：縮寫、變數、方法、編號對照表
 progress/DECISIONS-TIMELINE.md                # 自動產生
 progress/PROGRESS.ir.json                     # 自動產生
 progress/PROGRESS.html                        # 自動產生
@@ -403,6 +405,17 @@ progress/PROGRESS.inbox.yaml                  # 收件匣（使用者資料）
 progress/PROGRESS.actions.log                 # 套用動作的紀錄
 progress/logs/hook.log                        # hook 執行紀錄
 ```
+
+### 術語表：`GLOSSARY.md` 與 `project.yaml` 的 `glossary`
+
+同一個名稱分兩處記，各管一件事，不互相抄：
+
+| 檔 | 管什麼 | 誰維護 |
+|---|---|---|
+| `GLOSSARY.md` | 「這個名稱是什麼意思」：縮寫、變數、方法、問題編號對照表四段 | project-init 用 `init_glossary.py` 依範本建立；study-design、interpret-results、write-manuscript 用到新名稱時逐列補上；編號對照表那一段由 `reassign_question.py` 與 `promote_question.py` 自動維護 |
+| `project.yaml` 的 `glossary` | 中英譯名對照，翻譯一致性的唯一依據 | write-manuscript 登錄專有名詞、translate-en 照它翻 |
+
+`init_glossary.py` 只在專案沒有 `GLOSSARY.md`、或有檔而既沒有認得的編號列也沒有「編號對照表」一節時才寫，既有內容一律不覆寫，所以舊專案補建與重跑都安全。
 
 ### 版面：`progress/` 與 `backups/`
 
@@ -606,6 +619,7 @@ python3 tests/run_v0270_regressions.py
 python3 tests/run_v0280_regressions.py
 python3 tests/run_v0281_regressions.py
 python3 tests/run_v0282_regressions.py
+python3 tests/run_v0290_regressions.py
 python3 tests/run_literature3d_regressions.py
 ```
 

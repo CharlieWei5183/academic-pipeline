@@ -7,7 +7,7 @@
         [--manifest <data-manifest.yaml>]
 
 檢查:
-- id 形如 D-<三位連號> 且連號、唯一; 必填欄位（id/date/stage/checkpoint/decision/reason）
+- id 形如 D-<至少三位數的連號> 且連號、唯一; 必填欄位（id/date/stage/checkpoint/decision/reason）
 - date 經 str() 後須為 ISO 8601（YYYY-MM-DD）
 - stage 屬 skill 名詞彙表（STAGES）
 - 選填欄位型別: question / exec_issue / method 為字串; evidence 為字串清單
@@ -54,7 +54,12 @@ STAGES = {
 # 各 stage 收尾必記的那一筆 D# 固定用此 checkpoint 字串; 進度時間軸 renderer 以此比對。
 STAGE_CLOSE_CHECKPOINT = '階段收尾'
 
+# 決策編號不得寫死三位數（編號會長過三位，寫死會把長編號切成前三位或整個認不出來）。
+DECISION_ID_RE = re.compile(r'D-\d{3,}')
 DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
+# 問題 id 可帶後綴字母（SQ6b／AQ7b 這種分支編號）; 與 ssot_actions_common 的 Q_ID_RE／SQ_RE 同一套。
+Q_ID_RE = re.compile(r'(SQ|AQ)\d+[a-z]*')
+SQ_ID_RE = re.compile(r'SQ\d+[a-z]*')
 
 # 階段覆蓋表: (stage, project.yaml state 內的路徑, 判準種類, 判準參數)。
 # 判準種類:
@@ -205,9 +210,9 @@ def main():
     d_ids, nums = set(), []
     for d in decisions:
         did = str(d.get('id') or '?')
-        m = re.fullmatch(r'D-(\d{3})', did)
+        m = re.fullmatch(r'D-(\d{3,})', did)
         if not m:
-            warnings.append(f'{did}: id 格式須為 D-<三位連號>')
+            warnings.append(f'{did}: id 格式須為 D-<至少三位數的連號>')
         else:
             nums.append(int(m.group(1)))
         if did in d_ids:
@@ -228,7 +233,7 @@ def main():
                 warnings.append(f'{did}: {f} 須為字串（實際 {type(d.get(f)).__name__}）')
         # question 指向 SQ#/AQ# 時須存在; exec_issue 須掛在某個 question 之下
         q = str(d.get('question') or '').strip()
-        if re.fullmatch(r'(SQ|AQ)\d+', q):
+        if Q_ID_RE.fullmatch(q):
             if not question_ids:
                 infos.append(f'{did}: project.yaml 無 sub_questions／appendix_questions, 不驗 question "{q}"')
             elif q not in question_ids:
@@ -247,7 +252,7 @@ def main():
             warnings.append(f'{did}: supersedes 指向不存在的 "{sup}"')
         for link in (d.get('links') or []):
             link = str(link)
-            if re.fullmatch(r'SQ\d+', link):
+            if SQ_ID_RE.fullmatch(link):
                 if sq_ids and link not in sq_ids:
                     warnings.append(f'{did}: link SQ 不存在 "{link}"')
             elif link.startswith('results.'):
@@ -277,7 +282,7 @@ def main():
                     warnings.append(f'{did}: link manifest 步驟不存在 "{link}"')
                 elif p_ids is None:
                     infos.append(f'{did}: 未提供 data-manifest, 不驗 "{link}"')
-            elif re.fullmatch(r'D-\d{3}', link):
+            elif DECISION_ID_RE.fullmatch(link):
                 if link not in {str(x.get('id')) for x in decisions}:
                     warnings.append(f'{did}: link D# 不存在 "{link}"')
             else:

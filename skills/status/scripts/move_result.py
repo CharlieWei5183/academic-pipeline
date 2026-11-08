@@ -47,6 +47,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssot_actions_common as C  # noqa: E402
+import ssot_text_format as TF  # noqa: E402
 from ssot_actions_common import ChainError, plan_common  # noqa: E402
 
 VERSION = '0.16.4'
@@ -84,6 +85,7 @@ def check_preconditions(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     if same and not src_new:
         raise ChainError('內部錯誤：同一份 plan 卻沒有新版號')
     other_src_keys = [k for k in C.results_keys_of_plan(root, src_pid) if k != key]
+    C.require_clean_plans(root, [('來源', src_pid), ('目標', dst_pid)])
     return {'key': key, 'mode': mode, 'same': same, 'rid': rid, 'new_item': new_item, 'src_q': src_q, 'dst_q': dst_q, 'src_pid': src_pid, 'dst_pid': dst_pid,
             'src_plan': src_plan, 'dst_plan': dst_plan, 'src_kind': src_kind, 'src_rids': src_rids, 'src_new': src_new, 'dst_new': dst_new,
             'other_src_keys': other_src_keys, 'result_obj': results[key],
@@ -342,30 +344,35 @@ def verify_links(old_text: str, new_text: str, ctx: dict[str, Any], info: dict[s
 # ---------- validation.yaml：混合 item 的 primary_results 移除該鍵 ----------
 
 def strip_key_from_items(text: str, key: str, vids: list[str]) -> tuple[str, list[str]]:
-    """在指定 item 的 primary_results 裡移除該鍵（區塊清單去掉那一行；流式清單重寫該行）。回 (新文字, 實際改到的 item)。"""
+    """在指定 item 的 primary_results 裡移除該鍵（區塊清單去掉那一行；流式清單重寫該行）。回 (新文字, 實際改到的 item)。
+
+    欄位與清單項的縮排都從該 item 本身量，不假設 4／6 空白。
+    """
     lines = text.split('\n')
     done: list[str] = []
     for start, end, vid in reversed(C.validation_item_regions(lines)):
         if vid not in vids:
             continue
-        pi = C.find_line(lines, r'^    primary_results:', start, end)
+        fi = TF.item_field_indent(lines, start, end)
+        pi = TF.item_field(lines, start, end, 'primary_results', fi)
         if pi < 0:
             raise ChainError(f'validation.yaml {vid} 找不到 primary_results')
-        m = re.match(r'^    primary_results:\s*(\[.*\])\s*(#.*)?$', lines[pi])
-        if m:
-            cur = [str(x) for x in (yaml.safe_load(m.group(1)) or [])]
+        _head, val, _cmt = TF.split_field_line(lines[pi])
+        if val.strip().startswith('['):
+            cur = [str(x) for x in (yaml.safe_load(val) or [])]
             if key not in cur:
                 raise ChainError(f'validation.yaml {vid} 的 primary_results 沒有 {key}')
             new = [x for x in cur if x != key]
-            val = json.dumps(new, ensure_ascii=False) if '"' in m.group(1) else '[' + ', '.join(new) + ']'
-            lines[pi] = f'    primary_results: {val}' + (('  ' + m.group(2)) if m.group(2) else '')
+            lines[pi] = TF.replace_value(
+                lines[pi], json.dumps(new, ensure_ascii=False) if '"' in val else '[' + ', '.join(new) + ']')
+        elif val.strip():
+            raise ChainError(f'validation.yaml {vid} 的 primary_results 不是清單：{val.strip()[:40]}')
         else:
-            j = pi + 1
+            p_end = min(TF.key_block_end(lines, pi, fi), end)
             hit = -1
-            while j < end and (not lines[j].strip() or C.indent_of(lines[j]) >= 6):
-                if re.match(rf'^      - ["\']?{re.escape(key)}["\']?\s*(#.*)?$', lines[j]):
+            for j in range(pi + 1, p_end):
+                if TF.is_dash(lines[j]) and TF.dash_value(lines[j]).strip('"\'') == key:
                     hit = j
-                j += 1
             if hit < 0:
                 raise ChainError(f'validation.yaml {vid} 的 primary_results 沒有 {key} 那一行')
             del lines[hit]
@@ -477,21 +484,24 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
         else:
             ch.note('沒有 primary_results 同時含該鍵與別的鍵的 item，略過')
         ch.summary['stripped_items'] = strip
-        ch.step(5, 'validation.yaml 改掛與 fingerprint 重接')
+        carry = ch.policy.carry
+        ch.step(5, f'validation.yaml 改掛與 fingerprint {C.carry_word(carry)}')
         v_text = C.read_text(v_path) if v_path.is_file() else ''
         nth = C.cjk_ordinal(C.validation_update_no(v_text))
         rehung = [v for v, (q, p) in item_map.items() if q]
-        note = (f'第{nth}次重接（{inbox_txt}／{did}：結果鍵 {key} 由 {src_pid} 搬到 {target_desc}，{kind_zh}；{len(key_map)} 鍵 retag、waiver 重登）；本項內容一字未改'
+        note = (f'{C.update_label(nth, carry)}（{inbox_txt}／{did}：結果鍵 {key} 由 {src_pid} 搬到 {target_desc}，{kind_zh}；{len(key_map)} 鍵 retag、{C.waiver_clause(ch.waiver_state)}）；本項內容一字未改'
                 + (f'（{"／".join(strip)} 的 primary_results 另移除 {key}，見檔頭）' if strip else ''))
-        header = [f'# {date} 第{nth}次更新（重接，{inbox_txt}／{did}：結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（{kind_zh}）'
+        header = [f'# {date} 第{nth}次更新（{C.carry_word(carry)}，{inbox_txt}／{did}：結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（{kind_zh}）'
                   f'{"，新版 " + src_new + "／" + dst_new if src_new and not ctx["same"] else "，新版 " + dst_new}）：由 move_result.py {VERSION} 執行，',
-                  f'#   本次只重接 fingerprint，沒有任何數值改變（{len(key_map)} 鍵只改 plan_id 字串）。',
-                  f'#   本次改動：{"／".join(rehung) or "無 item"} 改掛目標；{"／".join(v for v in item_map if v not in rehung) or "無 item"} 改掛各自新版；'
+                  '#   ' + C.only_retag_sentence(carry, f'{len(key_map)} 鍵只改 plan_id 字串') + '。',
+                  '#   本次改動：'
+                  + C.rehang_clause(ch.policy, rehung, '改掛目標', '只改 sq 為目標問題', '無 item') + '；'
+                  + C.rehang_clause(ch.policy, [v for v in item_map if v not in rehung], '改掛各自新版', '不改掛（plan_id 不動）') + '；'
                   + (f'{"／".join(strip)} 的 primary_results 移除 {key}（其餘鍵仍屬來源）；' if strip else '')
-                  + '各 item 加 reaffirmed 標記；其餘欄位一字未改。設計審與四項關卡列為 open item。']
+                  + f'{C.mark_clause(ch.policy, "reaffirmed 標記")}；其餘欄位一字未改。設計審與四項關卡列為 open item。']
         fps, vinfo = C.step_validation(ch, item_map, note, header)
         ch.summary['fingerprint_old'], ch.summary['fingerprint_new'], ch.summary['validation_items'], ch.summary['rehung_items'] = vinfo.get('old') or {}, fps, vinfo['items'], rehung
-        ch.step(6, 'rerun waiver 重登')
+        ch.step(6, C.waiver_step_name(ch.waiver_state))
         waiver_rel = C.step_waiver(ch, ctx['waiver'], f'結果鍵 {key} 由 {src_pid} 搬到 {target_desc}（{inbox_txt}／{did}）：{src_new + "／" if src_new and not ctx["same"] else ""}{dst_new} 封版、'
                                    f'{len(key_map)} 鍵 plan_id retag 使 source／results fingerprint 改變；waiver 範圍（{ctx["waiver"]}）不變，{date} 重登')
         ch.summary['waiver'] = waiver_rel
@@ -519,11 +529,13 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                     f'(3) analysis/results.json：{len(key_map)} 鍵 plan_id retag（{key} → {dst_new}' + (f'；{src_pid} 其餘 {len(ctx["other_src_keys"])} 鍵 → {src_new}' if src_new and ctx['other_src_keys'] else '')
                     + (f'；{dst_pid} 其餘鍵 → {dst_new}' if not ctx['same'] else '') + '）；rows 逐位元不變\n'
                     f'(4) analysis/validation.yaml：' + (f'{"／".join(strip)} 的 primary_results 移除 {key}（其餘鍵仍屬來源）；' if strip else '沒有混合 item；')
-                    + (f'{"／".join(vinfo["items"]) or "無 item"} 改掛新版（同一問題，不改掛）；' if ctx['same'] else f'{"／".join(rehung) or "無 item"} 改掛 {ctx["dst_q"]}／{dst_new}；{"／".join(v for v in vinfo["items"] if v not in rehung) or "無 item"} 改掛各自新版；')
-                    + f'各 item 加 {vinfo.get("reaffirm_key") or "—"}；'
-                    f'fingerprint results {(vinfo.get("old") or {}).get("results", "—")} → {fps["results"]}、source {(vinfo.get("old") or {}).get("source", "—")} → {fps["source"]}\n'
-                    f'(5) rerun waiver：{waiver_rel or "未重登"}{"，仍是 waived、不是 pass" if waiver_rel else ""}\n'
-                    f'(6) check_coverage：goals id 集合不變、0 tamper\n'
+                    + C.absent_or(vinfo, (C.rehang_clause(ch.policy, vinfo['items'], '改掛新版（同一問題，不改掛）', '不改掛（plan_id 不動）') + '；' if ctx['same'] else
+                                          C.rehang_clause(ch.policy, rehung, f'改掛 {ctx["dst_q"]}／{dst_new}', f'只改掛 {ctx["dst_q"]}', '無 item') + '；'
+                                          + C.rehang_clause(ch.policy, [v for v in vinfo['items'] if v not in rehung], '改掛各自新版', '不改掛（plan_id 不動）') + '；')
+                                  + f'{C.mark_clause(ch.policy, vinfo.get("reaffirm_key") or "—")}；'
+                                  + 'fingerprint ' + C.fp_move_text(vinfo.get('old') or {}, fps, carry)) + '\n'
+                    f'(5) rerun waiver：{C.waiver_decision_line(ch.waiver_state, waiver_rel)}\n'
+                    f'(6) check_coverage：{C.coverage_text(ch.summary.get("coverage"), "goals id 集合不變、0 tamper")}\n'
                     f'(7)(8) 本條 append；{"收件匣 " + args.inbox + " 結案" if args.inbox else "無收件匣項目"}；進度圖重畫')
         body_txt = str((ctx['inbox'] or {}).get('body') or '').strip()
         reason_parts = ([f'{inbox_txt.strip()} 原文：「{body_txt}」'] if body_txt else []) + ([args.reason.strip()] if args.reason else [])
@@ -535,7 +547,8 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
                  + ('；新增的 R 只是歸屬容器（' + NEW_ITEM_NOTE + '）' if ctx.get('new_item') else '') + '\n'
                  + (f'(2) {"／".join(strip)} 原以 {key} 為 primary_results 之一，本次移除該鍵；該鍵在 {ctx["dst_q"]} 之下尚無 validation item 覆蓋，validate-results 重判時補\n' if strip else
                     (f'(2) {"／".join(rehung)} 改掛 {ctx["dst_q"]}／{dst_new}，其判定沿用、未重做\n' if rehung else '(2) 沒有 validation item 以該鍵為 primary_results\n'))
-                 + f'(3) validation 重接：results {fps["results"]}／source {fps["source"]}；rerun 仍 waived（{ctx["waiver"] or "—"}），不是 pass\n'
+                 + '(3) ' + C.absent_or(vinfo, C.known_fp_text(carry, vinfo.get('old') or {}, fps), C.VALIDATION_ABSENT_FP)
+                 + '；' + C.waiver_known_line(ch.waiver_state, f'rerun 仍 waived（{ctx["waiver"]}），不是 pass') + '\n'
                  f'(4) open item：' + '；'.join(x.format(plan=dst_new, q=ctx['dst_q']) for x in C.OPEN_ITEMS))
         links = [ctx['dst_q']] + ([ctx['src_q']] if ctx['src_q'] != ctx['dst_q'] else []) + [f'results.{key}', f'analysis/plans/{dst_new}.yaml', f'analysis/plans/{dst_pid}.yaml'] \
             + ([f'analysis/plans/{src_new}.yaml', f'analysis/plans/{src_pid}.yaml'] if src_new and not ctx['same'] else []) + ([waiver_rel] if waiver_rel else []) + [log_rel]
@@ -556,7 +569,6 @@ def run_chain(root: Path, args: argparse.Namespace, ctx: dict[str, Any], did: st
 
 
 def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
-    fo, fn = summary.get('fingerprint_old') or {}, summary.get('fingerprint_new') or {}
     kind_zh = ('B 型、次要結果（新增子分析 ' + summary['to_item'] + '：「' + summary['new_item'] + '」）' if summary.get('new_item') else 'B 型、次要結果') if summary['mode'] == 'B' else 'A 型、主要結果'
     tgt = summary['dst_pid'] + ((' 新增的 ' if summary.get('new_item') else ' ') + summary['to_item'] if summary.get('to_item') else ' outputs')
     rm = summary.get('remove') or {}
@@ -571,7 +583,7 @@ def print_summary(summary: dict[str, Any], dry: bool, token: str) -> None:
              f'project.yaml links 搬 {len(summary.get("moved_links") or [])} 項；results.json retag {len(summary.get("result_keys") or [])} 鍵；'
              f'validation item {"／".join(summary.get("rehung_items") or []) or "無"} 改掛目標、{"／".join(v for v in (summary.get("validation_items") or []) if v not in (summary.get("rehung_items") or [])) or "無"} 改掛新版'
              + (f'；{"／".join(summary["stripped_items"])} 的 primary_results 移除該鍵' if summary.get('stripped_items') else ''),
-             f'fingerprint results {fo.get("results", "—")} → {fn.get("results")}、source {fo.get("source", "—")} → {fn.get("source")}；rerun waiver：{summary.get("waiver") or "未重登"}']
+             'fingerprint ' + C.summary_fp_text(summary) + '；rerun waiver：' + C.waiver_summary_text(summary)]
     C.print_summary_lines(lines, dry, summary['files'], summary['backups'], token)
 
 

@@ -22,7 +22,7 @@ metadata:
 ## 步驟
 
 1. **補足領域脈絡**：只詢問 AI 無法從 artifacts 得知的機制、實務門檻與事前／事後性。探索紀錄已有者不重問；**事後才發現、帳上沒有的探索性分析，須補登追認條目進 `analysis/exploration-log.yaml`，note 註明事後補記**。
-2. **委派 interpreter**：材料包括 goals、sealed plans、results／等價 findings、validation、data-audit、evidence synthesis、exploration log 與必要領域脈絡；不提供稿件故事。
+2. **委派 interpreter**：材料包括 goals、sealed plans、results／等價 findings、validation、data-audit、evidence synthesis、exploration log、`GLOSSARY.md` 與必要領域脈絡；不提供稿件故事。專案還沒有 `GLOSSARY.md` 時先跑 `python3 <plugin>/skills/status/scripts/init_glossary.py <專案根> --apply` 建一份；interpreter 回報的新名稱由本 skill 補進該檔對應的段落，agent 自己不改那份檔。
 3. **產出未確認草案**：`confirmed: false`。每條 claim 至少含：SQ、文字、strength、evidence、validation V#/等價 audit、practical、alternatives、boundary、exploratory/origin、lit_anchors、counterevidence、basis。
 4. **結構檢核**：
 
